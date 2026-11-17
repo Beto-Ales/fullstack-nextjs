@@ -1,0 +1,3 @@
+export const DEFAULT_CLASS_CAPACITY = 12;
+export const SESSION_GENERATION_HORIZON_MONTHS = 3;
+

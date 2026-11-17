@@ -15,6 +15,20 @@
       "when": 1794925881019,
       "tag": "0001_melted_christian_walker",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794927611060,
+      "tag": "0002_soft_toad",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794928980593,
+      "tag": "0003_orange_microbe",
+      "breakpoints": true
     }
   ]
 }

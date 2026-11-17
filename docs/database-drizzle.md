@@ -25,6 +25,12 @@
 - `app_metadata`: metadatos técnicos.
 - `users`: identidad, rol y estado de cuenta.
 - `sessions`: sesiones persistentes con hash de token.
+- `student_profiles`: perfil académico de usuario `STUDENT`.
+- `class_templates`: plantilla semanal recurrente.
+- `class_sessions`: ocurrencias concretas de clase.
+- `student_template_assignments`: horarios habituales por alumno.
+- `class_reservations`: reservas por sesión y alumno.
+- `session_capacity_blocks`: plazas bloqueadas por administración.
 
 ## Flujo de migraciones
 
@@ -47,3 +53,4 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/fullstack_nextjs
 
 - `0000_smiling_hobgoblin.sql`: infraestructura base inicial.
 - `0001_melted_christian_walker.sql`: tablas de identidad y sesiones.
+- `0002_soft_toad.sql`: modelo académico (plantillas, sesiones, perfiles, reservas y capacidad).

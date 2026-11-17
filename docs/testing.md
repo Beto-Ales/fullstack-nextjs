@@ -38,3 +38,11 @@ Se incluyen pruebas de:
 - Generación y hash de tokens de sesión.
 - Expiración de sesión y reglas de autorización por rol.
 - Guards E2E de rutas protegidas y pantalla de login.
+- Conversión local/UTC y casos de DST.
+- Generación recurrente de sesiones (horizonte, vigencia e idempotencia).
+- Cálculo de disponibilidad (capacidad, reservas y plazas bloqueadas).
+
+## Integración con PostgreSQL de test
+
+- Se añadió una suite de integración académica condicionada a `TEST_DATABASE_URL`.
+- Si la variable no está definida, esas pruebas se omiten de forma segura.

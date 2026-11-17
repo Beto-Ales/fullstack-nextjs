@@ -14,11 +14,13 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:studio": "drizzle-kit studio",
-    "admin:create-super-admin": "node scripts/create-super-admin.mjs"
+    "admin:create-super-admin": "node scripts/create-super-admin.mjs",
+    "academic:generate-sessions": "node scripts/generate-class-sessions.mjs"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
     "drizzle-orm": "^0.44.7",
+    "luxon": "^3.7.2",
     "next": "16.3.8",
     "pg": "^8.16.3",
     "react": "19.2.8",
@@ -30,6 +32,7 @@
     "@playwright/test": "^1.56.1",
     "@tailwindcss/postcss": "^4",
     "@types/bcrypt": "^6.0.0",
+    "@types/luxon": "^3.7.1",
     "@types/node": "^20",
     "@types/pg": "^8.15.6",
     "@types/react": "^19",

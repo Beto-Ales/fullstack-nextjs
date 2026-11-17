@@ -11,14 +11,14 @@ Separar responsabilidades desde el inicio para mantener reglas de negocio fuera 
   - Server Components por defecto.
 - `src/domain/`
   - Elementos de dominio puros (sin dependencias de infraestructura).
-  - En esta fase: estrategia de zona horaria + identidad (roles, políticas de sesión y contraseña).
+  - En esta fase: estrategia de zona horaria + identidad + reglas académicas de recurrencia y capacidad.
 - `src/application/`
   - Casos de uso/coordinación de operaciones.
-  - En esta fase: autenticación, login, resolución de redirección y creación inicial de superadmin.
+  - En esta fase: autenticación y servicios académicos (plantillas, sesiones, asignaciones y reservas).
 - `src/infrastructure/`
-  - Implementaciones técnicas: entorno, logging, errores, base de datos, esquemas, hashing y rate limiting.
+  - Implementaciones técnicas: entorno, logging, errores, base de datos, esquemas, hashing, rate limiting y persistencia académica.
 - `src/interfaces/`
-  - Integración con Next.js para sesión/cookies y acciones de auth.
+  - Integración con Next.js para sesión/cookies, auth y acciones académicas de servidor.
 
 ## Principios aplicados
 
@@ -28,6 +28,6 @@ Separar responsabilidades desde el inicio para mantener reglas de negocio fuera 
 4. **Configuración centralizada**: entorno, DB, fechas y logging.
 5. **Preparado para crecer por fases** sin introducir abstracciones vacías.
 
-## Fuera de alcance de esta fase
+## Fuera de alcance actual
 
-- Funcionalidades de alumnos, clases, reservas, asistencia, cancelaciones, créditos y recuperaciones.
+- Reglas funcionales de asistencia, cancelaciones con ventana temporal, créditos y recuperaciones.

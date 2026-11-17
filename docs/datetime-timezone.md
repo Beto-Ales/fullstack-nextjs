@@ -23,3 +23,9 @@ La zona `Europe/Copenhagen` cambia entre CET/CEST automáticamente al formatear 
 
 - Toda consulta de ventanas mensuales y cómputos de límites debe usar explícitamente la zona del centro.
 - Evitar cálculos basados en `new Date()` local de cliente para reglas de negocio.
+
+## Recurrencia semanal y DST (estado actual)
+
+- Las plantillas semanales se calculan en hora local del centro (`Europe/Copenhagen`) y luego se convierten a UTC.
+- En horas locales inexistentes (salto de primavera), el sistema avanza al siguiente minuto local válido.
+- En horas ambiguas (cambio de otoño), se utiliza la resolución determinista de Luxon para la zona local.

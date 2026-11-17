@@ -2,7 +2,7 @@
 
 Base técnica inicial para una aplicación de gestión de clases y alumnos con Next.js App Router, TypeScript estricto y PostgreSQL + Drizzle.
 
-> Estado funcional: incluye identidad y control de acceso base (login, sesiones y guards por rol), pero aún no incluye reservas, asistencia, cancelaciones, créditos ni recuperaciones.
+> Estado funcional: incluye identidad, control de acceso base, reservas, asistencia y cancelaciones (con secuencias y candidatos a recuperación), pero aún no incluye ledger de créditos ni recuperaciones efectivas.
 > La especificación funcional consolidada (`PROJECT_SPEC.md`) sigue pendiente de incorporarse al repositorio.
 
 ## Requisitos
@@ -63,12 +63,14 @@ npm run dev
 - `npm run db:migrate`: aplicar migraciones.
 - `npm run db:studio`: abrir Drizzle Studio.
 - `npm run admin:create-super-admin`: crear el primer `SUPER_ADMIN` (sin registro público).
+- `npm run academic:generate-sessions`: materializar/extender sesiones recurrentes (horizonte 3 meses).
 
 ## Documentación técnica
 
 - [Arquitectura](./docs/architecture.md)
 - [PostgreSQL + Drizzle](./docs/database-drizzle.md)
 - [Autenticación y sesiones](./docs/authentication.md)
+- [Modelo académico](./docs/academic-model.md)
 - [Fechas y zona horaria](./docs/datetime-timezone.md)
 - [Testing](./docs/testing.md)
 
