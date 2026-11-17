@@ -1,36 +1,90 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Fullstack Next.js — Fundaciones técnicas
 
-## Getting Started
+Base técnica inicial para una aplicación de gestión de clases y alumnos con Next.js App Router, TypeScript estricto y PostgreSQL + Drizzle.
 
-First, run the development server:
+> Estado funcional: incluye identidad y control de acceso base (login, sesiones y guards por rol), pero aún no incluye reservas, asistencia, cancelaciones, créditos ni recuperaciones.
+> La especificación funcional consolidada (`PROJECT_SPEC.md`) sigue pendiente de incorporarse al repositorio.
+
+## Requisitos
+
+- Node.js 20.9+ (requisito de Next.js 16)
+- npm 10+
+- PostgreSQL 15+ (recomendado para entorno local)
+
+## Primer arranque
+
+1. Instala dependencias:
+
+```bash
+npm install
+```
+
+2. Crea tu entorno local:
+
+```bash
+cp .env.example .env
+```
+
+En PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+3. Genera migraciones desde el esquema actual:
+
+```bash
+npm run db:generate
+```
+
+4. Aplica migraciones:
+
+```bash
+npm run db:migrate
+```
+
+5. Arranca la app:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Scripts disponibles
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- `npm run dev`: arranque en desarrollo.
+- `npm run build`: build de producción.
+- `npm run start`: ejecutar build de producción.
+- `npm run lint`: lint de todo el proyecto.
+- `npm run typecheck`: comprobación TypeScript sin emitir.
+- `npm run test`: tests unitarios/integración con Vitest.
+- `npm run test:watch`: Vitest en watch mode.
+- `npm run test:e2e`: pruebas E2E con Playwright.
+- `npm run db:generate`: generar migraciones Drizzle desde esquemas.
+- `npm run db:migrate`: aplicar migraciones.
+- `npm run db:studio`: abrir Drizzle Studio.
+- `npm run admin:create-super-admin`: crear el primer `SUPER_ADMIN` (sin registro público).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Documentación técnica
 
-## Learn More
+- [Arquitectura](./docs/architecture.md)
+- [PostgreSQL + Drizzle](./docs/database-drizzle.md)
+- [Autenticación y sesiones](./docs/authentication.md)
+- [Fechas y zona horaria](./docs/datetime-timezone.md)
+- [Testing](./docs/testing.md)
 
-To learn more about Next.js, take a look at the following resources:
+## Notas de seguridad
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- Las credenciales se validan en servidor y no deben exponerse en variables `NEXT_PUBLIC_*`.
+- No subir secretos al repositorio.
+- Usar una base de datos de test separada para automatización.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Variables de entorno
 
-## Deploy on Vercel
+Ver [.env.example](./.env.example):
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `DATABASE_URL`: conexión PostgreSQL.
+- `APP_TIME_ZONE`: zona del centro (`Europe/Copenhagen`).
+- `LOG_LEVEL`: nivel de logs.
+- `AUTH_RATE_LIMIT_MAX_ATTEMPTS`: intentos de login permitidos por ventana.
+- `AUTH_RATE_LIMIT_WINDOW_MINUTES`: duración de la ventana de rate limiting.
+- `SUPER_ADMIN_EMAIL` y `SUPER_ADMIN_PASSWORD`: variables temporales para el comando de creación inicial de superadmin.
