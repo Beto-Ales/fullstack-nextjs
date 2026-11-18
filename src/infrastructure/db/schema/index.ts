@@ -2,6 +2,7 @@ export * from "@/src/infrastructure/db/schema/app-metadata";
 export * from "@/src/infrastructure/db/schema/class-reservations";
 export * from "@/src/infrastructure/db/schema/class-sessions";
 export * from "@/src/infrastructure/db/schema/class-templates";
+export * from "@/src/infrastructure/db/schema/credit-ledger";
 export * from "@/src/infrastructure/db/schema/reservation-attendance-records";
 export * from "@/src/infrastructure/db/schema/reservation-cancellations";
 export * from "@/src/infrastructure/db/schema/session-capacity-blocks";

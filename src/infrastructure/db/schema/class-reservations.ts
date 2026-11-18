@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 
 import { classSessions } from "@/src/infrastructure/db/schema/class-sessions";
 import { studentProfiles } from "@/src/infrastructure/db/schema/student-profiles";
+import { users } from "@/src/infrastructure/db/schema/users";
 
 export const classReservationStatusEnum = pgEnum("class_reservation_status", ["CONFIRMED", "CANCELLED"]);
 export const classReservationOriginEnum = pgEnum("class_reservation_origin", ["ORDINARY", "MAKEUP"]);
@@ -19,6 +20,8 @@ export const classReservations = pgTable(
       .references(() => studentProfiles.id, { onDelete: "cascade" }),
     status: classReservationStatusEnum("status").notNull().default("CONFIRMED"),
     origin: classReservationOriginEnum("origin").notNull().default("ORDINARY"),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelledByUserId: text("cancelled_by_user_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

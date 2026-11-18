@@ -1,4 +1,4 @@
-# Modelo académico (Prompt 04)
+# Modelo académico (Prompt 06)
 
 ## Alcance implementado
 
@@ -13,6 +13,8 @@
 - Cancelaciones versionadas de reservas (`reservation_cancellations`) con clasificación temporal y evaluación de secuencia.
 - Registro/corrección de asistencia (`reservation_attendance_records`) con trazabilidad por supersesión.
 - Detección idempotente de ausencias para sesiones finalizadas.
+- Ledger de créditos (`credit_ledger_movements`) con generación automática, concesión/retiro manual y caducidad.
+- Reservas de recuperación (`origin = MAKEUP`) con consumo FIFO y devoluciones según política de cancelación.
 
 ## Tablas y relaciones
 
@@ -50,6 +52,7 @@
 
 - Reserva de alumno en sesión.
 - Estado (`CONFIRMED`, `CANCELLED`) y origen (`ORDINARY`, `MAKEUP`).
+- Incluye trazabilidad de cancelación (`cancelled_at`, `cancelled_by_user_id`).
 - Índice único parcial para impedir reservas activas duplicadas por alumno+sesión.
 
 ### `session_capacity_blocks`
@@ -71,10 +74,35 @@
 ### `reservation_attendance_records`
 
 - Registro auditable de asistencia por reserva:
-  - `ATTENDED`, `ABSENT`, `EXCUSED`.
+  - `ATTENDED`, `ABSENT`.
 - Soporta corrección administrativa sin borrar historial:
   - el registro anterior queda superseded (`superseded_by` + `superseded_at`),
   - el nuevo registro queda como vigente.
+
+### `credit_ledger_movements`
+
+- Ledger inmutable de movimientos de créditos.
+- Tipos actuales:
+  - `AUTO_CANCELLATION_GRANT`,
+  - `MANUAL_GRANT`,
+  - `MANUAL_WITHDRAWAL`,
+  - `EXPIRATION`.
+- Se reservaron tipos para próximas fases:
+  - `RECOVERY_CONSUMPTION`,
+  - `RECOVERY_REFUND`.
+- Cada movimiento guarda trazabilidad de:
+  - alumno,
+  - cantidad,
+  - motivo,
+  - administrador (si aplica),
+  - referencia de sesión (si aplica),
+  - evento origen (cancelación o movimiento fuente),
+  - clave de idempotencia.
+- Para recuperaciones:
+  - `related_reservation_id` (reserva asociada),
+  - `source_grant_movement_id` (crédito origen consumido),
+  - `source_movement_id` (consumo origen de una devolución),
+  - `refund_restored_credit` (si la devolución restaura saldo o solo deja auditoría).
 
 ## Generación de sesiones recurrentes
 
@@ -138,9 +166,58 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
 
 - Para sesiones finalizadas sin registro vigente de asistencia/corrección, se inserta `ABSENT`.
 - La operación es idempotente por reserva y evita duplicados bajo reintentos.
+- La generación de identificadores de asistencia automática se hace en aplicación (sin dependencia de extensiones PostgreSQL como `pgcrypto`).
+
+## Créditos
+
+- Integración automática:
+  - al cancelar, si la cancelación queda como candidata elegible, se intenta generar crédito automático en la misma transacción.
+- Reglas aplicadas:
+  - máximo 2 créditos automáticos por alumno y mes natural en `Europe/Copenhagen`,
+  - la concesión manual no consume ese límite,
+  - idempotencia por cancelación para evitar duplicados.
+- Caducidad:
+  - cada `AUTO_CANCELLATION_GRANT` caduca individualmente a los 6 meses,
+  - la caducidad se materializa como movimiento `EXPIRATION`,
+  - la disponibilidad se calcula siempre desde ledger, no desde saldo persistido.
+- Gestión manual (`SUPER_ADMIN`):
+  - concesión de créditos (`MANUAL_GRANT`) con motivo obligatorio,
+  - retirada de créditos (`MANUAL_WITHDRAWAL`) con motivo obligatorio,
+  - rechazo de retirada por encima del saldo disponible.
+
+## Recuperaciones (Fase 06)
+
+- Una recuperación es una reserva con `origin = MAKEUP`.
+- Requisitos de reserva:
+  - sesión futura en estado `SCHEDULED`,
+  - capacidad disponible real (reservas + bloqueos),
+  - sin reserva activa duplicada del alumno en la sesión,
+  - máximo 2 recuperaciones confirmadas por mes natural de la sesión (`Europe/Copenhagen`),
+  - crédito FIFO disponible.
+- Consumo:
+  - al confirmar se crea `RECOVERY_CONSUMPTION` en la misma transacción que la reserva.
+  - selección FIFO: menor caducidad, luego menor fecha de generación, luego identificador estable.
+- Cancelación de recuperación:
+  - con al menos 7 días: se crea `RECOVERY_REFUND`.
+    - restaura saldo solo si el crédito origen seguía vigente;
+    - si ya caducó, se registra devolución auditable sin restaurar saldo.
+  - con menos de 7 días: no hay devolución.
+- Cancelación administrativa de sesión:
+  - se cancelan recuperaciones confirmadas y se aplica devolución auditable bajo la misma regla de vigencia.
+  - la operación es transaccional: si falla una devolución, no se confirma la cancelación de sesión.
+  - cada devolución mantiene referencia al consumo origen y al crédito origen (`source_movement_id`, `source_grant_movement_id`).
+  - no se duplican devoluciones ante reintentos.
+- Ausencia:
+  - no devuelve crédito ni genera crédito automático.
+
+## Reprogramación de sesiones y recuperaciones
+
+- Al editar una sesión se recalcula `local_date` desde `starts_at_utc` en `Europe/Copenhagen`.
+- El cómputo mensual de recuperaciones usa siempre el mes de la fecha actual de la sesión (`class_sessions.local_date`).
+- Si una reprogramación mueve una sesión con reservas `MAKEUP` a otro mes y provoca que algún alumno supere el límite mensual (2), la reprogramación se rechaza explícitamente con error de conflicto.
+- No se alteran movimientos históricos del ledger durante reprogramaciones.
 
 ## Limitaciones conocidas de esta fase
 
-- No se implementó el ledger de créditos (solo persistencia de candidatos para fase posterior).
 - No se implementó reserva automática por horario habitual.
 - No se implementó la normativa versionada completa.

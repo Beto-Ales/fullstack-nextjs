@@ -1,0 +1,9 @@
+ALTER TABLE "class_reservations" ADD COLUMN "cancelled_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "class_reservations" ADD COLUMN "cancelled_by_user_id" text;--> statement-breakpoint
+ALTER TABLE "credit_ledger_movements" ADD COLUMN "related_reservation_id" text;--> statement-breakpoint
+ALTER TABLE "credit_ledger_movements" ADD COLUMN "source_grant_movement_id" text;--> statement-breakpoint
+ALTER TABLE "credit_ledger_movements" ADD COLUMN "refund_restored_credit" boolean;--> statement-breakpoint
+ALTER TABLE "class_reservations" ADD CONSTRAINT "class_reservations_cancelled_by_user_id_users_id_fk" FOREIGN KEY ("cancelled_by_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "credit_ledger_movements" ADD CONSTRAINT "credit_ledger_movements_related_reservation_id_class_reservations_id_fk" FOREIGN KEY ("related_reservation_id") REFERENCES "public"."class_reservations"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "credit_ledger_recovery_consumption_per_reservation_unique_idx" ON "credit_ledger_movements" USING btree ("related_reservation_id") WHERE "credit_ledger_movements"."movement_type" = 'RECOVERY_CONSUMPTION' and "credit_ledger_movements"."related_reservation_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "credit_ledger_recovery_refund_per_consumption_unique_idx" ON "credit_ledger_movements" USING btree ("source_movement_id") WHERE "credit_ledger_movements"."movement_type" = 'RECOVERY_REFUND' and "credit_ledger_movements"."source_movement_id" is not null;

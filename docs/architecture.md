@@ -11,12 +11,13 @@ Separar responsabilidades desde el inicio para mantener reglas de negocio fuera 
   - Server Components por defecto.
 - `src/domain/`
   - Elementos de dominio puros (sin dependencias de infraestructura).
-  - En esta fase: estrategia de zona horaria + identidad + reglas académicas de recurrencia y capacidad.
+  - En esta fase: estrategia de zona horaria + identidad + reglas académicas de recurrencia/capacidad + utilidades de ledger de créditos.
 - `src/application/`
   - Casos de uso/coordinación de operaciones.
-  - En esta fase: autenticación y servicios académicos (plantillas, sesiones, asignaciones y reservas).
+  - En esta fase: autenticación, servicios académicos (plantillas, sesiones, asignaciones, reservas/cancelaciones/asistencia), servicios de créditos y servicios de recuperaciones.
 - `src/infrastructure/`
   - Implementaciones técnicas: entorno, logging, errores, base de datos, esquemas, hashing, rate limiting y persistencia académica.
+  - Incluye ledger transaccional de créditos con claves de idempotencia e índices de concurrencia.
 - `src/interfaces/`
   - Integración con Next.js para sesión/cookies, auth y acciones académicas de servidor.
 
@@ -30,4 +31,19 @@ Separar responsabilidades desde el inicio para mantener reglas de negocio fuera 
 
 ## Fuera de alcance actual
 
-- Reglas funcionales de asistencia, cancelaciones con ventana temporal, créditos y recuperaciones.
+- Normativa configurable/versionada para fases posteriores.
+
+## Orden global de bloqueo (concurrencia)
+
+Para operaciones que combinan reservas, sesiones y ledger se sigue este orden para minimizar interbloqueos:
+
+1. `class_sessions` (fila de sesión, `FOR UPDATE`) cuando la operación depende de capacidad/estado de sesión.
+2. `student_profiles` (fila de alumno, `FOR UPDATE`) cuando la operación consume/devuelve/retira créditos.
+3. `class_reservations` (fila de reserva, `FOR UPDATE`) cuando se cancela o muta una reserva concreta.
+4. `credit_ledger_movements` (filas de consumo/refund, `FOR UPDATE`) para idempotencia y trazabilidad de consumo/devolución.
+
+Notas:
+
+- `reserveRecovery` usa sesión→alumno→reserva→consumo.
+- `cancelRecoveryReservation` usa reserva/sesión→alumno→consumo/devolución.
+- `cancelClassSession` usa sesión→reservas→alumno→consumo/devolución.

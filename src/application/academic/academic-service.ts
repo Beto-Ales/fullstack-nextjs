@@ -23,6 +23,8 @@ import {
   setClassTemplateStatusSchema,
   updateClassSessionSchema,
 } from "@/src/application/academic/schemas";
+import { tryGenerateAutoCreditFromCancellation } from "@/src/application/credits/credit-service";
+import { cancelRecoveriesForCancelledSession, cancelRecoveryReservation } from "@/src/application/recovery/recovery-service";
 import { calculateAvailableSpots } from "@/src/domain/academic/availability";
 import { classifyCancellationTiming, evaluateCancellationSequence, type HabitualSequenceEvent } from "@/src/domain/academic/cancellation-rules";
 import { SESSION_GENERATION_HORIZON_MONTHS } from "@/src/domain/academic/constants";
@@ -68,6 +70,28 @@ function nowCenterTime(): DateTime {
 
 type TransactionClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type QueryExecutor = Pick<TransactionClient, "execute">;
+
+const MONTHLY_RECOVERY_LIMIT = 2;
+
+function toCenterLocalDate(utcDate: Date): string {
+  const localDate = DateTime.fromJSDate(utcDate, { zone: "utc" }).setZone(CENTER_TIME_ZONE).toISODate();
+  if (!localDate) {
+    throw new ApplicationError("Invalid UTC date for local conversion.", "invalid_local_date", 500, false);
+  }
+  return localDate;
+}
+
+function toMonthRange(localDate: string): { monthStartLocalDate: string; nextMonthStartLocalDate: string } {
+  const local = DateTime.fromISO(localDate, { zone: CENTER_TIME_ZONE });
+  if (!local.isValid) {
+    throw new ApplicationError("Invalid local date.", "invalid_local_date", 500, false);
+  }
+
+  return {
+    monthStartLocalDate: local.startOf("month").toISODate() ?? localDate,
+    nextMonthStartLocalDate: local.startOf("month").plus({ months: 1 }).toISODate() ?? localDate,
+  };
+}
 
 async function getStudentProfileForUserId(tx: TransactionClient, userId: string): Promise<string> {
   const [profile] = await tx
@@ -138,9 +162,11 @@ async function collectHabitualSequenceEvents(tx: QueryExecutor, studentProfileId
         )
       ) as is_habitual_reservation
     from reservation_attendance_records ar
+    inner join class_reservations r on r.id = ar.reservation_id
     inner join class_sessions cs on cs.id = ar.class_session_id
     where ar.student_profile_id = ${studentProfileId}
       and ar.superseded_at is null
+      and r.origin = 'ORDINARY'
     order by cs.starts_at_utc asc, ar.recorded_at asc
   `);
 
@@ -303,31 +329,159 @@ export async function updateClassSession(actor: Actor, input: unknown) {
   requireSuperAdmin(actor);
   const payload = updateClassSessionSchema.parse(input);
 
-  await db
-    .update(classSessions)
-    .set({
-      startsAtUtc: payload.startsAtUtc,
-      endsAtUtc: payload.endsAtUtc,
-      maxCapacity: payload.maxCapacity,
-      status: payload.status,
-      isManuallyEdited: true,
-      updatedAt: new Date(),
-    })
-    .where(eq(classSessions.id, payload.classSessionId));
+  await db.transaction(async (tx) => {
+    const sessionRows = await tx.execute(sql`
+      select
+        id,
+        local_date,
+        starts_at_utc,
+        ends_at_utc,
+        status,
+        max_capacity
+      from class_sessions
+      where id = ${payload.classSessionId}
+      for update
+    `);
+
+    const session = sessionRows.rows[0] as
+      | {
+          id: string;
+          local_date: string;
+          starts_at_utc: Date;
+          ends_at_utc: Date;
+          status: "SCHEDULED" | "CANCELLED" | "COMPLETED";
+          max_capacity: number;
+        }
+      | undefined;
+
+    if (!session) {
+      throw new ApplicationError("Class session not found.", "session_not_found", 404, true);
+    }
+
+    const nextStartsAtUtc = payload.startsAtUtc ?? new Date(session.starts_at_utc);
+    const nextEndsAtUtc = payload.endsAtUtc ?? new Date(session.ends_at_utc);
+    const nextMaxCapacity = payload.maxCapacity ?? session.max_capacity;
+    const nextStatus = payload.status ?? session.status;
+    const nextLocalDate = toCenterLocalDate(nextStartsAtUtc);
+
+    if (nextEndsAtUtc.getTime() <= nextStartsAtUtc.getTime()) {
+      throw new ApplicationError("Class session end time must be after start time.", "invalid_session_time_range", 400, true);
+    }
+
+    const usageRows = await tx.execute(sql`
+      select
+        (select count(*)::int from class_reservations r where r.class_session_id = ${payload.classSessionId} and r.status = 'CONFIRMED') as confirmed_reservations,
+        (select coalesce(sum(blocked_spots), 0)::int from session_capacity_blocks b where b.class_session_id = ${payload.classSessionId} and b.is_active = true) as blocked_spots
+    `);
+
+    const usage = usageRows.rows[0] as { confirmed_reservations: number; blocked_spots: number };
+    if (usage.confirmed_reservations + usage.blocked_spots > nextMaxCapacity) {
+      throw new ApplicationError(
+        "Reprogramming would exceed session capacity with current reservations and active blocks.",
+        "capacity_conflict",
+        409,
+        true,
+      );
+    }
+
+    const previousMonth = toMonthRange(session.local_date).monthStartLocalDate;
+    const nextMonth = toMonthRange(nextLocalDate).monthStartLocalDate;
+
+    if (previousMonth !== nextMonth) {
+      const range = toMonthRange(nextLocalDate);
+      const conflicts = await tx.execute(sql`
+        with moving_recoveries as (
+          select r.student_profile_id
+          from class_reservations r
+          where r.class_session_id = ${payload.classSessionId}
+            and r.origin = 'MAKEUP'
+            and r.status = 'CONFIRMED'
+        ),
+        target_month_counts as (
+          select
+            r.student_profile_id,
+            count(*)::int as monthly_count
+          from class_reservations r
+          inner join class_sessions s on s.id = r.class_session_id
+          where r.origin = 'MAKEUP'
+            and r.status = 'CONFIRMED'
+            and s.id <> ${payload.classSessionId}
+            and s.local_date >= ${range.monthStartLocalDate}
+            and s.local_date < ${range.nextMonthStartLocalDate}
+            and r.student_profile_id in (select mr.student_profile_id from moving_recoveries mr)
+          group by r.student_profile_id
+        )
+        select student_profile_id
+        from target_month_counts
+        where monthly_count >= ${MONTHLY_RECOVERY_LIMIT}
+      `);
+
+      if (conflicts.rows.length > 0) {
+        throw new ApplicationError(
+          "Reprogramming would exceed the monthly recovery limit for one or more students.",
+          "reprogram_monthly_recovery_limit_conflict",
+          409,
+          true,
+        );
+      }
+    }
+
+    await tx
+      .update(classSessions)
+      .set({
+        localDate: nextLocalDate,
+        startsAtUtc: nextStartsAtUtc,
+        endsAtUtc: nextEndsAtUtc,
+        maxCapacity: nextMaxCapacity,
+        status: nextStatus,
+        isManuallyEdited: true,
+        updatedAt: new Date(),
+      })
+      .where(eq(classSessions.id, payload.classSessionId));
+  });
 }
 
 export async function cancelClassSession(actor: Actor, input: unknown) {
   requireSuperAdmin(actor);
   const payload = cancelClassSessionSchema.parse(input);
 
-  await db
-    .update(classSessions)
-    .set({
-      status: "CANCELLED",
-      updatedAt: new Date(),
-      isManuallyEdited: true,
-    })
-    .where(eq(classSessions.id, payload.classSessionId));
+  return db.transaction(async (tx) => {
+    const now = new Date();
+    await tx
+      .update(classSessions)
+      .set({
+        status: "CANCELLED",
+        updatedAt: now,
+        isManuallyEdited: true,
+      })
+      .where(eq(classSessions.id, payload.classSessionId));
+
+    await tx
+      .update(classReservations)
+      .set({
+        status: "CANCELLED",
+        cancelledAt: now,
+        cancelledByUserId: actor.userId,
+        updatedAt: now,
+      })
+      .where(
+        sql`${classReservations.classSessionId} = ${payload.classSessionId}
+          and ${classReservations.origin} = 'ORDINARY'
+          and ${classReservations.status} = 'CONFIRMED'`,
+      );
+
+    const recoveryResult = await cancelRecoveriesForCancelledSession(tx, {
+      classSessionId: payload.classSessionId,
+      cancelledByUserId: actor.userId,
+      reason: "Session cancelled by administration",
+    });
+
+    return {
+      classSessionId: payload.classSessionId,
+      cancelledRecoveries: recoveryResult.cancelledRecoveries,
+      refundedRecoveries: recoveryResult.refundsCreated,
+    };
+  });
 }
 
 export async function assignStudentToTemplate(actor: Actor, input: unknown) {
@@ -512,6 +666,7 @@ async function createReservationTransaction(classSessionId: string, studentProfi
 type LockedReservation = {
   reservationId: string;
   reservationStatus: "CONFIRMED" | "CANCELLED";
+  reservationOrigin: "ORDINARY" | "MAKEUP";
   studentProfileId: string;
   classSessionId: string;
   classStatus: "SCHEDULED" | "CANCELLED" | "COMPLETED";
@@ -525,6 +680,7 @@ async function lockReservationForMutation(tx: TransactionClient, reservationId: 
     select
       r.id as reservation_id,
       r.status as reservation_status,
+      r.origin as reservation_origin,
       r.student_profile_id,
       r.class_session_id,
       s.status as class_status,
@@ -541,6 +697,7 @@ async function lockReservationForMutation(tx: TransactionClient, reservationId: 
     | {
         reservation_id: string;
         reservation_status: "CONFIRMED" | "CANCELLED";
+        reservation_origin: "ORDINARY" | "MAKEUP";
         student_profile_id: string;
         class_session_id: string;
         class_status: "SCHEDULED" | "CANCELLED" | "COMPLETED";
@@ -557,6 +714,7 @@ async function lockReservationForMutation(tx: TransactionClient, reservationId: 
   return {
     reservationId: row.reservation_id,
     reservationStatus: row.reservation_status,
+    reservationOrigin: row.reservation_origin,
     studentProfileId: row.student_profile_id,
     classSessionId: row.class_session_id,
     classStatus: row.class_status,
@@ -569,47 +727,54 @@ async function lockReservationForMutation(tx: TransactionClient, reservationId: 
 export async function cancelReservation(actor: Actor, input: unknown) {
   const payload = cancelReservationSchema.parse(input);
 
+  const reservation = await db.transaction((tx) => lockReservationForMutation(tx, payload.reservationId));
+  if (reservation.reservationOrigin === "MAKEUP") {
+    return cancelRecoveryReservation(actor, input);
+  }
+
   return db.transaction(async (tx) => {
-    const reservation = await lockReservationForMutation(tx, payload.reservationId);
+    const lockedReservation = await lockReservationForMutation(tx, payload.reservationId);
 
     if (actor.role === "STUDENT") {
       const profileId = await getStudentProfileForUserId(tx, actor.userId);
-      if (profileId !== reservation.studentProfileId) {
+      if (profileId !== lockedReservation.studentProfileId) {
         throw new ApplicationError("Forbidden", "forbidden", 403, true);
       }
     } else {
       requireSuperAdmin(actor);
     }
 
-    if (reservation.reservationStatus !== "CONFIRMED") {
+    if (lockedReservation.reservationStatus !== "CONFIRMED") {
       throw new ApplicationError("Reservation already cancelled.", "reservation_not_confirmed", 409, true);
     }
-    if (reservation.classStatus !== "SCHEDULED") {
+    if (lockedReservation.classStatus !== "SCHEDULED") {
       throw new ApplicationError("Class session does not allow cancellation.", "session_not_cancellable", 409, true);
     }
 
     const cancelledAt = new Date();
-    const timing = classifyCancellationTiming(cancelledAt, reservation.classStartsAtUtc);
+    const timing = classifyCancellationTiming(cancelledAt, lockedReservation.classStartsAtUtc);
     const isHabitual = await isHabitualReservation(tx, {
-      studentProfileId: reservation.studentProfileId,
-      templateId: reservation.templateId,
-      localDate: reservation.classLocalDate,
+      studentProfileId: lockedReservation.studentProfileId,
+      templateId: lockedReservation.templateId,
+      localDate: lockedReservation.classLocalDate,
     });
 
     await tx
       .update(classReservations)
       .set({
         status: "CANCELLED",
+        cancelledAt,
+        cancelledByUserId: actor.userId,
         updatedAt: cancelledAt,
       })
-      .where(eq(classReservations.id, reservation.reservationId));
+      .where(eq(classReservations.id, lockedReservation.reservationId));
 
     const cancellationId = randomUUID();
     await tx.insert(reservationCancellations).values({
       id: cancellationId,
-      reservationId: reservation.reservationId,
-      studentProfileId: reservation.studentProfileId,
-      classSessionId: reservation.classSessionId,
+      reservationId: lockedReservation.reservationId,
+      studentProfileId: lockedReservation.studentProfileId,
+      classSessionId: lockedReservation.classSessionId,
       cancelledByUserId: actor.userId,
       cancelledAt,
       cancellationType: timing.type,
@@ -623,12 +788,15 @@ export async function cancelReservation(actor: Actor, input: unknown) {
       nonEligibilityReason: null,
     });
 
-    await recalculateStudentCancellationSequences(tx, reservation.studentProfileId);
+    await recalculateStudentCancellationSequences(tx, lockedReservation.studentProfileId);
+    const autoCredit = await tryGenerateAutoCreditFromCancellation(tx, cancellationId);
 
     return {
       cancellationId,
       cancellationType: timing.type,
       meetsSevenDayRule: timing.meetsSevenDayRule,
+      autoCreditGenerated: autoCredit.created,
+      autoCreditSkippedReason: autoCredit.reason ?? null,
     };
   });
 }
@@ -756,58 +924,57 @@ export async function detectAbsences(actor: Actor, input: unknown) {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(903000042)`);
 
-    const insertedRows = await tx.execute(sql`
-      with candidates as (
-        select
-          r.id as reservation_id,
-          r.student_profile_id,
-          r.class_session_id
-        from class_reservations r
-        inner join class_sessions s on s.id = r.class_session_id
-        left join reservation_cancellations rc on rc.reservation_id = r.id
-        left join reservation_attendance_records ar on ar.reservation_id = r.id and ar.superseded_at is null
-        where r.status = 'CONFIRMED'
-          and s.status != 'CANCELLED'
-          and s.ends_at_utc < ${referenceTime}
-          and rc.id is null
-          and ar.id is null
-      )
-      insert into reservation_attendance_records (
-        id,
-        reservation_id,
-        student_profile_id,
-        class_session_id,
-        outcome,
-        source,
-        recorded_by_user_id,
-        recorded_at,
-        correction_reason,
-        corrected_from_record_id,
-        superseded_at,
-        created_at,
-        updated_at
-      )
+    const candidateRows = await tx.execute(sql`
       select
-        gen_random_uuid()::text,
-        c.reservation_id,
-        c.student_profile_id,
-        c.class_session_id,
-        'ABSENT',
-        'AUTO',
-        null,
-        ${referenceTime},
-        null,
-        null,
-        null,
-        now(),
-        now()
-      from candidates c
-      on conflict do nothing
-      returning student_profile_id
+        r.id as reservation_id,
+        r.student_profile_id,
+        r.class_session_id
+      from class_reservations r
+      inner join class_sessions s on s.id = r.class_session_id
+      left join reservation_cancellations rc on rc.reservation_id = r.id
+      left join reservation_attendance_records ar on ar.reservation_id = r.id and ar.superseded_at is null
+      where r.status = 'CONFIRMED'
+        and s.status != 'CANCELLED'
+        and s.ends_at_utc < ${referenceTime}
+        and rc.id is null
+        and ar.id is null
     `);
 
+    const candidates = candidateRows.rows as Array<{
+      reservation_id: string;
+      student_profile_id: string;
+      class_session_id: string;
+    }>;
+
+    if (candidates.length === 0) {
+      return {
+        createdAbsences: 0,
+        affectedProfiles: 0,
+      };
+    }
+
+    const insertedRows = await tx
+      .insert(reservationAttendanceRecords)
+      .values(
+        candidates.map((candidate) => ({
+          id: randomUUID(),
+          reservationId: candidate.reservation_id,
+          studentProfileId: candidate.student_profile_id,
+          classSessionId: candidate.class_session_id,
+          outcome: "ABSENT" as const,
+          source: "AUTO" as const,
+          recordedByUserId: null,
+          recordedAt: referenceTime,
+          correctionReason: null,
+          correctedFromRecordId: null,
+          supersededAt: null,
+        })),
+      )
+      .onConflictDoNothing()
+      .returning({ studentProfileId: reservationAttendanceRecords.studentProfileId });
+
     const affectedProfiles = Array.from(
-      new Set((insertedRows.rows as Array<{ student_profile_id: string }>).map((row) => row.student_profile_id)),
+      new Set(insertedRows.map((row) => row.studentProfileId)),
     );
 
     for (const profileId of affectedProfiles) {
@@ -815,7 +982,7 @@ export async function detectAbsences(actor: Actor, input: unknown) {
     }
 
     return {
-      createdAbsences: insertedRows.rows.length,
+      createdAbsences: insertedRows.length,
       affectedProfiles: affectedProfiles.length,
     };
   });
