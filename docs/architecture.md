@@ -50,6 +50,7 @@ Para operaciones que combinan reservas, sesiones y ledger se sigue este orden pa
 
 Notas:
 
-- `reserveRecovery` usa sesión→alumno→reserva→consumo.
-- `cancelRecoveryReservation` usa reserva/sesión→alumno→consumo/devolución.
+- `reserveRecovery` comprueba y bloquea la cuenta activa antes de sesión→perfil del alumno→reserva→consumo.
+- `cancelRecoveryReservation` usa sesión→reserva→perfil del alumno→consumo/devolución.
 - `cancelClassSession` usa sesión→reservas→alumno→consumo/devolución.
+- La baja bloquea la cuenta, las plantillas y las sesiones afectadas en orden estable antes de modificar reservas. Las sesiones se bloquean con `FOR NO KEY UPDATE`, que permite las comprobaciones referenciales de movimientos de crédito concurrentes. La baja usa la misma lógica de cancelación y devolución de una recuperación individual, con el instante y la normativa de la baja.

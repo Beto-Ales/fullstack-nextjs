@@ -55,11 +55,14 @@ export async function reserveHabitualSeats(tx, session, studentProfileIds) {
 /** @param {QueryExecutor} tx @param {{ templateId: string, localDate: string }} session */
 async function readHabitualStudentIds(tx, session) {
   const assignments = await tx.execute(sql`
-    select distinct student_profile_id
-    from student_template_assignments
-    where template_id = ${session.templateId}
-      and effective_from <= ${session.localDate}
-      and (effective_to is null or effective_to >= ${session.localDate})
+    select distinct a.student_profile_id
+    from student_template_assignments a
+    join student_profiles p on p.id = a.student_profile_id
+    join users u on u.id = p.user_id
+    where a.template_id = ${session.templateId}
+      and a.effective_from <= ${session.localDate}
+      and (a.effective_to is null or a.effective_to >= ${session.localDate})
+      and u.status = 'ACTIVE'
   `);
   return /** @type {{ student_profile_id: string }[]} */ (assignments.rows).map((row) => row.student_profile_id);
 }

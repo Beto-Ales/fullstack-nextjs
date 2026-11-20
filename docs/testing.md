@@ -199,17 +199,25 @@ Se incluyen pruebas de:
 
 - La regresión de cancelación de recuperación reproduce la navegación a un error tras cancelar correctamente. Verifica después de la corrección el mensaje de confirmación, la plaza liberada, el saldo restaurado y una única devolución con referencia al consumo, a la concesión y a la versión vigente. La prueba vuelve a consultar el panel para verificar el saldo y la devolución. Con esta regresión pasaron los seis E2E en Chromium contra TEST aislado.
 
-### Alcance del cierre de fase 06
+### Cierre de fase 06
 
-- El informe `postgres-credential-rotation-06-3-2-5.md` registra el cierre operativo DEV/TEST en la sección 06.3.2.13. El E2E de créditos figuraba como validación pendiente en esta matriz y ya se ejecutó. El [README](../README.md) mantiene pendiente incorporar `PROJECT_SPEC.md`. Los documentos disponibles carecen de una lista de cierre funcional de fase 06 que defina esos dos pendientes como criterios obligatorios o los asigne formalmente a una fase posterior.
-- Sigue pendiente en el [modelo académico](academic-model.md#siguiente-tarea-de-generación-de-sesiones) la política de prioridad por sobreaforo y la resolución de las sesiones afectadas.
-- El [modelo de cursos confirmado](academic-model.md#modelo-de-cursos-confirmado) incluye la creación administrativa de clases únicas y cursos semanales de tres meses, la inscripción ordinaria y el límite de 12 inscritos simultáneos. El alta de alumnos y el cambio de contraseña propia están implementados. El cierre funcional sigue abierto por los efectos de la baja sobre inscripciones y plazas y por la resolución de sesiones afectadas por sobreaforo.
+- **Cierre operativo DEV/TEST.** La rotación PostgreSQL quedó cerrada en 06.3.2.13, según el informe operativo local `docs/postgres-credential-rotation-06-3-2-5.md`. Este cierre conserva esa evidencia. La migración `0007_student_withdrawals` se ha aplicado únicamente en bases TEST aisladas. Su aplicación a DEV o producción queda fuera de este cierre.
+- **Cierre funcional.** Quedan validados los cursos y clases únicas, la inscripción ordinaria y el límite de 12 alumnos simultáneos, la generación de sesiones, la normativa versionada, las cuentas y los flujos de créditos, recuperaciones y baja lógica. En TEST aislado pasaron 105 pruebas de Vitest y 13 E2E en Chromium, incluidos los de créditos y de baja. Pasaron TypeScript y `drizzle-kit check`. El lint completo terminó sin errores y con tres avisos preexistentes. [Modelo académico](academic-model.md#modelo-de-cursos-confirmado).
+- **Sobreaforo.** La revisión de solo lectura identificó como única incidencia la fixture del 13 de enero de 2099. Tiene una plaza, una reserva confirmada y un alumno habitual pendiente. Sus datos se conservan. No se identificó una sesión operativa pendiente de resolución en las bases locales revisadas. [Detalle de la revisión](academic-model.md#siguiente-tarea-de-generación-de-sesiones).
+- **Pendientes posteriores.** Quedan por definir el desempate automático, la vista administrativa de incidencias y la resolución de una sesión recurrente concreta desde el panel. También figuran como pendientes la especificación consolidada `PROJECT_SPEC.md` y el cambio de contraseña iniciado por un administrador. Los documentos del repositorio aún no definen un objetivo ni una primera tarea para la fase 7. [Incidencias de generación](academic-model.md#siguiente-tarea-de-generación-de-sesiones) · [Especificación](../README.md) · [Credenciales administrativas](authentication.md#cambio-de-contraseña-administrativo-pendiente).
 
 ## E2E de cuentas de alumno
 
 - `tests/e2e/student-accounts.spec.ts` comprueba que `SUPER_ADMIN` puede crear una cuenta con su perfil académico y que se rechaza el mismo email con otra capitalización. El alumno entra con su contraseña inicial y cambia su propia contraseña. Se rechaza una contraseña actual incorrecta, se invalidan dos sesiones existentes y se comprueba que solo la contraseña nueva permite volver a entrar.
 - La prueba de autorización presenta un formulario de alta abierto por un administrador después de cambiar a la sesión de un alumno. El servidor redirige a `/student` y la cuenta solicitada no existe en la base.
 - Pasaron 12 E2E en Chromium, 103 pruebas de Vitest, TypeScript y lint focalizado. Las pruebas con base de datos usaron PostgreSQL TEST aislado con las migraciones hasta 0006.
+
+## Baja lógica de alumno
+
+- La integración académica cubre una clase pasada, tres reservas ordinarias futuras, una reserva ajena, bloqueos activos y dos recuperaciones futuras. Verifica que ambas recuperaciones liberan su plaza, con una única devolución vinculada al consumo y a la concesión, y que los reintentos conservan el ledger y la auditoría. También comprueba el acceso revocado, la inscripción de un sustituto y una recuperación elegible en plazas liberadas.
+- La integración de recuperaciones verifica que una cancelación a tiempo con el crédito ya caducado registra una devolución sin restaurar saldo y que una clase ya iniciada conserva su reserva.
+- `tests/e2e/student-withdrawal.spec.ts` comprueba la baja desde `/admin`, que el alumno desaparece de la lista de bajas y que la sesión del alumno queda invalidada y su nuevo intento de acceso es rechazado.
+- Pasaron 105 pruebas de Vitest y 13 E2E en Chromium con PostgreSQL TEST aislado y migrado hasta `0007_student_withdrawals`. También pasaron TypeScript y `drizzle-kit check`. El lint completo terminó sin errores y con tres avisos previos en `run-db-migrate.test.ts`.
 
 ## Matriz de pruebas (Fase 06.2)
 

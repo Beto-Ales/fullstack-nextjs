@@ -10,7 +10,15 @@
 
 - El panel de administración permite crear cursos semanales y clases únicas, e inscribir alumnos de forma ordinaria en ambos. La clase única se guarda como sesión independiente con `template_id` vacío. En el curso semanal se crea una asignación a la plantilla y se reservan las sesiones futuras elegibles con plazas libres.
 - La reserva de una sesión aplica el menor de su capacidad y el límite de la normativa vigente bajo bloqueo de fila. La asignación a la plantilla limita a 12 alumnos distintos simultáneos durante la vigencia. La comprobación y el alta comparten el bloqueo por plantilla que usa el generador. Se comprueba también la coincidencia con altas futuras.
-- El alta de alumnos y el cambio de contraseña propia están disponibles en sus paneles. Quedan pendientes los efectos académicos de la baja definitiva y la prioridad para sesiones con aforo insuficiente. [Permisos de fase 06](authentication.md#permisos-confirmados-de-fase-06).
+- El alta, la baja lógica y el cambio de contraseña propia están disponibles en los paneles correspondientes. El límite de 12 alumnos simultáneos se aplica al inscribir en cursos nuevos, también ante altas concurrentes. [Permisos de fase 06](authentication.md#permisos-confirmados-de-fase-06).
+
+### Baja definitiva y plazas
+
+- La baja es lógica y conserva la cuenta, el historial y las relaciones académicas. Desde que se hace efectiva termina la inscripción y se liberan tanto las plazas ordinarias como las de recuperaciones confirmadas de clases que aún no han empezado. Las reservas de los demás alumnos y los bloqueos se conservan.
+- El administrador decide si incorpora un sustituto para las fechas restantes o deja las plazas disponibles para recuperaciones.
+- El flujo de `/admin` termina las inscripciones abiertas y las programadas que aún no han vencido. Conserva la fecha local de baja como límite de las inscripciones. La hora de baja decide qué reservas son futuras, incluidas las de más tarde ese día. Desde la baja el alumno deja de computar para nuevas inscripciones y el generador no le reserva plazas. La liberación conserva los registros de reserva y de créditos. [Baja de alumnos](authentication.md#baja-de-alumnos).
+- `student_withdrawals` registra el administrador, el alumno, la fecha y hora, las inscripciones terminadas, las reservas ordinarias liberadas y cada recuperación cancelada, con el resultado de devolución y restauración de saldo. La baja, las devoluciones y la auditoría comparten transacción. Un reintento conserva el registro original.
+- Para cada recuperación se aplica la antelación de la versión vigente al dar de baja. Si la cancelación es tardía, se libera la plaza y se conserva el consumo. Si se cancela a tiempo, se registra la devolución vinculada al consumo y a la concesión. El saldo solo se restaura si el crédito de origen sigue vigente. [Reglas de recuperación](#recuperaciones-fase-06).
 
 ## Creación de cursos semanales e inscripción
 
@@ -262,6 +270,10 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
 
 ## Siguiente tarea de generación de sesiones
 
-Definir qué prioridad se aplica cuando los alumnos habituales elegibles superan las plazas. Durante la generación y sus reintentos, el servicio devuelve las sesiones afectadas dentro del horizonte en `habitualCapacityConflicts` y el CLI imprime sus identificadores.
+Durante la generación y sus reintentos, el servicio devuelve las sesiones afectadas dentro del horizonte en `habitualCapacityConflicts` y el CLI imprime sus identificadores. La prioridad entre alumnos elegibles sigue pendiente para una futura asignación automática.
 
-Para localizar sesiones concretas fuera de ese informe, consultar `class_sessions` y cruzar plantilla y fecha local con `student_template_assignments`. Contar alumnos distintos sin reserva confirmada y comparar con el aforo efectivo menos las reservas confirmadas y los bloqueos activos. Una vez acordada la prioridad, `createReservationAction` permite a `SUPER_ADMIN` crear una reserva ordinaria para un alumno concreto con comprobación transaccional de aforo. Si se amplía el aforo de una sesión, `updateClassSessionAction` valida el límite vigente y registra la edición. El generador conserva las reservas de las sesiones existentes.
+Para localizar sesiones concretas fuera de ese informe, consultar `class_sessions` y cruzar plantilla y fecha local con las asignaciones vigentes de alumnos activos. Contar alumnos distintos sin reserva confirmada y comparar con el aforo efectivo menos las reservas confirmadas y los bloqueos activos.
+
+La revisión en solo lectura encontró un único conflicto entre las cinco sesiones de TEST. La sesión del 13 de enero de 2099 coincide con la fixture de `habitual-assignment.integration.test.ts` en plantilla, fechas asociadas, aforo y reservas. Hay una reserva confirmada, cero bloqueos y un alumno habitual pendiente para una capacidad de una plaza. Ninguna sesión excede el aforo contando solo reservas confirmadas y bloqueos. DEV local no contiene sesiones.
+
+`SUPER_ADMIN` dispone de las acciones de servidor `createReservationAction` para asignar una plaza ordinaria disponible y `updateClassSessionAction` para ampliar el aforo si procede dentro del máximo vigente. La edición queda registrada. El panel actual permite inscribir en un curso o clase única. Una vista de incidencias y un formulario para resolver manualmente una sesión recurrente concreta requerirían desarrollo, al igual que cualquier desempate automático. El generador conserva las reservas existentes.

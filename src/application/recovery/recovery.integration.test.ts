@@ -408,6 +408,41 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("recovery integration (po
     expect(Number(refundCount?.count ?? 0)).toBe(1);
   });
 
+  it("withdrawal records an expired on-time refund without restoring credit and preserves a started recovery", async () => {
+    const student = await seedStudent();
+    const admin = await seedAdmin();
+    const actor = { userId: student.userId, role: "STUDENT" as const };
+    const { sessionId: startedSession } = await seedSession("2028-01-08", 1);
+    const { sessionId: futureSession } = await seedSession("2028-01-20", 1);
+    const grant = await grantCredits(student.profileId, 2, "2028-01-07T10:00:00Z");
+    vi.setSystemTime(new Date("2028-01-06T10:00:00Z"));
+    const started = await recoveryService.reserveRecovery(actor, { classSessionId: startedSession });
+    const future = await recoveryService.reserveRecovery(actor, { classSessionId: futureSession });
+
+    vi.setSystemTime(new Date("2028-01-08T18:00:00Z"));
+    const { withdrawStudent } = await import("@/src/application/academic/student-withdrawal");
+    await expect(withdrawStudent({ userId: admin.userId, role: "SUPER_ADMIN" }, { studentProfileId: student.profileId }))
+      .resolves.toMatchObject({ cancelledRecoveries: 1 });
+    expect(await academicService.getClassSessionAvailability(startedSession)).toMatchObject({ availableSpots: 0 });
+    expect(await academicService.getClassSessionAvailability(futureSession)).toMatchObject({ availableSpots: 1 });
+    const { rows: bookings } = await client.query("select id,status from class_reservations where student_profile_id=$1", [student.profileId]);
+    expect(bookings).toHaveLength(2);
+    expect(bookings).toContainEqual({ id: started.reservationId, status: "CONFIRMED" });
+    expect(bookings).toContainEqual({ id: future.reservationId, status: "CANCELLED" });
+    const { rows: refunds } = await client.query(
+      `select related_reservation_id,source_movement_id,source_grant_movement_id,refund_restored_credit
+       from credit_ledger_movements where student_profile_id=$1 and movement_type='RECOVERY_REFUND'`, [student.profileId],
+    );
+    expect(refunds).toEqual([{
+      related_reservation_id: future.reservationId, source_movement_id: future.consumedMovementId,
+      source_grant_movement_id: grant, refund_restored_credit: false,
+    }]);
+    const { rows: audit } = await client.query("select cancelled_recoveries from student_withdrawals where student_user_id=$1", [student.userId]);
+    expect(audit).toEqual([{
+      cancelled_recoveries: [{ reservationId: future.reservationId, refunded: true, refundRestoredCredit: false }],
+    }]);
+  });
+
   it("handles administrative cancellation with multiple recoveries and preserves refund linkage semantics", async () => {
     const admin = await seedAdmin();
     const studentA = await seedStudent();

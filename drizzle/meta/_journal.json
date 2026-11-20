@@ -50,6 +50,13 @@
       "when": 1795169355945,
       "tag": "0006_academic_regulations",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795185463006,
+      "tag": "0007_student_withdrawals",
+      "breakpoints": true
     }
   ]
 }

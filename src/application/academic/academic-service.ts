@@ -26,6 +26,7 @@ import {
   updateClassSessionSchema,
 } from "@/src/application/academic/schemas";
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
 import { lockStudentProfile, tryGenerateAutoCreditFromCancellation } from "@/src/application/credits/credit-service";
 import { cancelRecoveriesForCancelledSession, cancelRecoveryReservation, reserveRecovery } from "@/src/application/recovery/recovery-service";
 import { calculateAvailableSpots } from "@/src/domain/academic/availability";
@@ -37,6 +38,7 @@ import { generateRecurringSessionCandidates } from "@/src/domain/academic/recurr
 import { resolveLocalDateTime, toUtcDate } from "@/src/domain/time/local-datetime";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { type UserRole } from "@/src/domain/auth/roles";
+import { lockClassSessionForReservation } from "@/src/infrastructure/db/class-reservation-locks";
 import { db } from "@/src/infrastructure/db/client";
 import {
   findExistingHabitualCapacityConflict, lockTemplateAssignments, readSessionUsage,
@@ -647,9 +649,12 @@ async function assertHabitualEnrollmentCapacity(
       and (
         select count(distinct a.student_profile_id)
         from student_template_assignments a
+        join student_profiles p on p.id = a.student_profile_id
+        join users u on u.id = p.user_id
         where a.template_id = ${input.templateId}
           and a.student_profile_id <> ${input.studentProfileId}
           and a.effective_from <= c.day and (a.effective_to is null or a.effective_to >= c.day)
+          and (u.status = 'ACTIVE' or c.day < (u.deactivated_at at time zone ${CENTER_TIME_ZONE})::date)
       ) >= ${DEFAULT_CLASS_CAPACITY}
     limit 1
   `);
@@ -667,6 +672,7 @@ async function createHabitualAssignment(
   }
 
   return db.transaction(async (tx) => {
+    await requireActiveStudentForBooking(tx, payload.studentProfileId);
     await lockTemplateAssignments(tx, payload.templateId);
     if (onlyOpenCourse) {
       const [template] = await tx.select({
@@ -723,10 +729,14 @@ export async function endStudentTemplateAssignment(actor: Actor, input: unknown)
   const payload = endStudentTemplateAssignmentSchema.parse(input);
 
   await db.transaction(async (tx) => {
-    const [assignment] = await tx.select({ templateId: studentTemplateAssignments.templateId })
+    const [assignment] = await tx.select({
+      templateId: studentTemplateAssignments.templateId,
+      studentProfileId: studentTemplateAssignments.studentProfileId,
+    })
       .from(studentTemplateAssignments)
       .where(eq(studentTemplateAssignments.id, payload.assignmentId));
     if (!assignment) return;
+    await requireActiveStudentForBooking(tx, assignment.studentProfileId);
     await lockTemplateAssignments(tx, assignment.templateId);
     const [current] = await tx.select().from(studentTemplateAssignments)
       .where(eq(studentTemplateAssignments.id, payload.assignmentId));
@@ -843,6 +853,7 @@ export async function createReservationForCurrentStudent(actor: Actor, classSess
 
 async function createReservationTransaction(classSessionId: string, studentProfileId: string, onlyUpcomingOneOff = false) {
   return db.transaction(async (tx) => {
+    await requireActiveStudentForBooking(tx, studentProfileId);
     const lockedSessionRows = await tx.execute(sql`
       select id, max_capacity, status, template_id, starts_at_utc
       from class_sessions
@@ -903,6 +914,7 @@ type LockedReservation = {
 };
 
 async function lockReservationForMutation(tx: TransactionClient, reservationId: string): Promise<LockedReservation> {
+  await lockClassSessionForReservation(tx, reservationId);
   const rows = await tx.execute(sql`
     select
       r.id as reservation_id,
@@ -917,7 +929,7 @@ async function lockReservationForMutation(tx: TransactionClient, reservationId: 
     from class_reservations r
     inner join class_sessions s on s.id = r.class_session_id
     where r.id = ${reservationId}
-    for update
+    for update of r
   `);
 
   const row = rows.rows[0] as

@@ -134,6 +134,10 @@ Comportamiento:
 - No imprime contraseña ni hash.
 - No crea cuentas automáticamente al arrancar la app.
 
+## Baja de alumnos
+
+En **Dar de baja a un alumno**, el servidor exige `SUPER_ADMIN`. La baja cambia la cuenta a `DISABLED`, registra `deactivated_at` y revoca todas sus sesiones en la misma transacción que termina las inscripciones, libera las plazas de clases que aún no han empezado y registra las devoluciones que correspondan. La cuenta deja de aparecer entre los alumnos que pueden inscribirse y sigue disponible para consultar su historial. Una cuenta desactivada tampoco puede iniciar sesión ni recibir nuevas reservas. [Efectos académicos de la baja](academic-model.md#baja-definitiva-y-plazas).
+
 ## Cambio de contraseña administrativo (pendiente)
 
 En una fase posterior, el administrador gestionará credenciales desde interfaz protegida:

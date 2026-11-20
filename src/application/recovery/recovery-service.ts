@@ -2,16 +2,18 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
 import { createRecoveryConsumption, createRecoveryRefund, lockStudentProfile, materializeExpiredCredits, readCreditBalance } from "@/src/application/credits/credit-service";
 import { cancelRecoverySchema, recoveryHistorySchema, reserveRecoverySchema } from "@/src/application/recovery/schemas";
 import { type UserRole } from "@/src/domain/auth/roles";
 import { classifyCancellationTiming } from "@/src/domain/academic/cancellation-rules";
 import { calculateAvailableSpots } from "@/src/domain/academic/availability";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
+import { lockClassSessionForReservation } from "@/src/infrastructure/db/class-reservation-locks";
 import { db } from "@/src/infrastructure/db/client";
 import {
   classReservations,
@@ -68,6 +70,7 @@ async function lockReservationForRecoveryCancellation(
   tx: TransactionClient,
   reservationId: string,
 ): Promise<LockedRecoveryReservation> {
+  await lockClassSessionForReservation(tx, reservationId);
   const rows = await tx.execute(sql`
     select
       r.id as reservation_id,
@@ -81,7 +84,7 @@ async function lockReservationForRecoveryCancellation(
     from class_reservations r
     inner join class_sessions s on s.id = r.class_session_id
     where r.id = ${reservationId}
-    for update
+    for update of r
   `);
 
   const row = rows.rows[0] as
@@ -259,6 +262,8 @@ export async function reserveRecovery(actor: Actor, input: unknown, studentProfi
   const payload = reserveRecoverySchema.parse(input);
 
   return db.transaction(async (tx) => {
+    const studentProfileId = studentProfileIdForAdmin ?? await getStudentProfileIdForActor(tx, actor);
+    await requireActiveStudentForBooking(tx, studentProfileId);
     const sessionRows = await tx.execute(sql`
       select id, status, starts_at_utc, local_date::text as local_date, max_capacity
       from class_sessions
@@ -286,7 +291,6 @@ export async function reserveRecovery(actor: Actor, input: unknown, studentProfi
       throw new ApplicationError("Recovery class must be in the future.", "session_not_future", 409, true);
     }
 
-    const studentProfileId = studentProfileIdForAdmin ?? await getStudentProfileIdForActor(tx, actor);
     await lockStudentProfile(tx, studentProfileId);
     const consumedAt = new Date();
     await materializeExpiredCredits(tx, studentProfileId, consumedAt);
@@ -423,44 +427,72 @@ export async function cancelRecoveryReservation(actor: Actor, input: unknown) {
 
     const cancelledAt = new Date();
     const regulation = await resolveCurrentAcademicRegulation(tx, cancelledAt);
-    const timing = classifyCancellationTiming(cancelledAt, reservation.classStartsAtUtc, regulation.cancellationNoticeDays);
-
-    await tx
-      .update(classReservations)
-      .set({
-        status: "CANCELLED",
-        cancelledAt,
-        cancelledByUserId: actor.userId,
-        cancellationRegulationVersionId: regulation.id,
-        updatedAt: cancelledAt,
-      })
-      .where(eq(classReservations.id, reservation.reservationId));
-
-    if (!timing.meetsSevenDayRule) {
-      return {
-        reservationId: reservation.reservationId,
-        cancelled: true,
-        refunded: false,
-        refundRestoredCredit: false,
-      };
-    }
-
-    await assertRecoveryConsumptionExists(tx, reservation.reservationId);
-
-    const refund = await createRecoveryRefund(tx, {
-      reservationId: reservation.reservationId,
-      refundedAt: cancelledAt,
-      refundReason: "Recovery cancelled on time",
-      regulationVersionId: regulation.id,
-    });
-
     return {
-      reservationId: reservation.reservationId,
       cancelled: true,
-      refunded: refund.created,
-      refundRestoredCredit: refund.restoredCredit,
+      ...await cancelLockedRecovery(tx, reservation, {
+        cancelledAt, cancelledByUserId: actor.userId, regulation, refundReason: "Recovery cancelled on time",
+      }),
     };
   });
+}
+
+type TimedRecoveryCancellation = {
+  cancelledAt: Date;
+  cancelledByUserId: string;
+  regulation: { id: string; cancellationNoticeDays: number };
+};
+
+async function cancelLockedRecovery(
+  tx: TransactionClient,
+  { reservationId, classStartsAtUtc }: { reservationId: string; classStartsAtUtc: Date },
+  { cancelledAt, cancelledByUserId, regulation, refundReason }: TimedRecoveryCancellation & { refundReason: string },
+) {
+  const timing = classifyCancellationTiming(cancelledAt, classStartsAtUtc, regulation.cancellationNoticeDays);
+  await tx.update(classReservations).set({
+    status: "CANCELLED",
+    cancelledAt,
+    cancelledByUserId,
+    cancellationRegulationVersionId: regulation.id,
+    updatedAt: cancelledAt,
+  }).where(eq(classReservations.id, reservationId));
+
+  if (!timing.meetsSevenDayRule) {
+    return { reservationId, refunded: false, refundRestoredCredit: false };
+  }
+
+  await assertRecoveryConsumptionExists(tx, reservationId);
+  const refund = await createRecoveryRefund(tx, {
+    reservationId,
+    refundedAt: cancelledAt,
+    refundReason,
+    regulationVersionId: regulation.id,
+  });
+  return { reservationId, refunded: refund.created, refundRestoredCredit: refund.restoredCredit };
+}
+
+export async function cancelFutureRecoveriesForWithdrawal(
+  tx: TransactionClient,
+  input: TimedRecoveryCancellation & { studentProfileId: string },
+) {
+  // The caller has locked the affected sessions and prevented new bookings for this student.
+  const reservations = await tx.select({
+    reservationId: classReservations.id,
+    classStartsAtUtc: classSessions.startsAtUtc,
+  }).from(classReservations).innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
+    .where(and(
+      eq(classReservations.studentProfileId, input.studentProfileId),
+      eq(classReservations.origin, "MAKEUP"),
+      eq(classReservations.status, "CONFIRMED"),
+      gt(classSessions.startsAtUtc, input.cancelledAt),
+    )).for("update", { of: classReservations });
+  if (!reservations.length) return [];
+
+  await lockStudentProfile(tx, input.studentProfileId);
+  const cancelled = [];
+  for (const reservation of reservations) {
+    cancelled.push(await cancelLockedRecovery(tx, reservation, { ...input, refundReason: "Recovery cancelled on student withdrawal" }));
+  }
+  return cancelled;
 }
 
 export async function cancelRecoveriesForCancelledSession(

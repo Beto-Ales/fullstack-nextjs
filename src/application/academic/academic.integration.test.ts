@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { DateTime } from "luxon";
 
@@ -17,6 +17,8 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (po
   beforeEach(async () => {
     await resetTestDatabase(client);
   });
+
+  afterEach(() => vi.useRealTimers());
 
   afterAll(async () => {
     if (client) {
@@ -63,6 +65,174 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (po
     );
     return students;
   }
+
+  it("withdraws once, frees future ordinary and recovery seats, and refunds only the eligible recovery", async () => {
+    const today = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("day");
+    vi.setSystemTime(today.set({ hour: 12 }).toJSDate());
+    const admin = { userId: randomUUID(), role: "SUPER_ADMIN" as const };
+    const [departing, remaining, substitute, recovering] = await seedStudentProfiles(4);
+    const student = { userId: departing.userId, role: "STUDENT" as const };
+    await client.query("insert into users (id,email,email_normalized,password_hash,role) values ($1,$2,$2,'hash','SUPER_ADMIN')",
+      [admin.userId, `${admin.userId}@example.com`]);
+    const auth = await import("@/src/application/auth/auth-service");
+    const password = randomUUID();
+    const { hashPassword } = await import("@/src/infrastructure/security/password");
+    await client.query("update users set password_hash=$1 where id=$2", [await hashPassword(password), departing.userId]);
+    const credentials = { email: `${departing.userId}@example.com`, password, sourceKey: randomUUID() };
+    const login = await auth.authenticateUser(credentials);
+    expect(await auth.getAuthenticatedUserFromSessionToken(login.sessionToken)).toBeTruthy();
+
+    const past = today.minus({ weeks: 1 });
+    const { templateId } = await academicService.createClassTemplate(admin, {
+      name: "Withdrawal course", isoWeekday: today.weekday, startsAtLocalTime: "18:00", durationMinutes: 60,
+      effectiveFrom: past.toISODate(), effectiveTo: today.plus({ weeks: 2 }).toISODate(),
+    });
+    const { assignmentId } = await academicService.assignStudentToTemplate(admin, {
+      templateId, studentProfileId: departing.profileId, effectiveFrom: past.toISODate(),
+    });
+    const scheduledAssignment = await academicService.assignStudentToTemplate(admin, {
+      templateId, studentProfileId: departing.profileId, effectiveFrom: today.plus({ weeks: 1 }).toISODate(),
+      effectiveTo: today.plus({ weeks: 2 }).toISODate(),
+    });
+    const completedCourse = await academicService.createClassTemplate(admin, {
+      name: "Completed course", isoWeekday: today.weekday, startsAtLocalTime: "18:00", durationMinutes: 60,
+      effectiveFrom: past.toISODate(), effectiveTo: past.toISODate(),
+    });
+    const completedCourseAssignment = await academicService.assignStudentToTemplate(admin, {
+      templateId: completedCourse.templateId, studentProfileId: departing.profileId, effectiveFrom: past.toISODate(),
+    });
+    const otherEnrollees = [remaining, ...await seedStudentProfiles(10)];
+    for (const { profileId } of otherEnrollees) {
+      await academicService.assignStudentToTemplate(admin, {
+        templateId, studentProfileId: profileId, effectiveFrom: today.toISODate(),
+      });
+    }
+    const enrollSubstitute = () => academicService.enrollStudentInAcademicOffering(admin, {
+      targetType: "weekly", targetId: templateId, studentProfileId: substitute.profileId,
+    });
+    await expect(enrollSubstitute()).rejects.toMatchObject({ code: "course_enrollment_full" });
+
+    const dates = [past, today, today.plus({ weeks: 1 }), today.plus({ weeks: 2 })];
+    const sessionIds = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const reservationIds = sessionIds.map(() => randomUUID());
+    for (const [index, day] of dates.entries()) {
+      const start = day.set({ hour: 18 });
+      await client.query(
+        `insert into class_sessions (id,template_id,local_date,starts_at_utc,ends_at_utc,max_capacity)
+         values ($1,$2,$3,$4,$5,$6)`,
+        [sessionIds[index], templateId, day.toISODate(), start.toJSDate(), start.plus({ hours: 1 }).toJSDate(), [1, 3, 2, 1][index]],
+      );
+      await client.query(
+        "insert into class_reservations (id,class_session_id,student_profile_id,regulation_version_id) values ($1,$2,$3,'initial')",
+        [reservationIds[index], sessionIds[index], departing.profileId],
+      );
+    }
+    const otherReservation = await academicService.createReservation(admin, {
+      classSessionId: sessionIds[1], studentProfileId: remaining.profileId,
+    });
+    for (const classSessionId of sessionIds.slice(1, 3)) {
+      await academicService.addSessionCapacityBlock(admin, { classSessionId, blockedSpots: 1 });
+      expect(await academicService.getClassSessionAvailability(classSessionId)).toMatchObject({ availableSpots: 0 });
+    }
+    const credit = await import("@/src/application/credits/credit-service");
+    const recovery = await import("@/src/application/recovery/recovery-service");
+    await credit.grantManualCredits(admin, { studentProfileId: departing.profileId, amount: 2, reason: "Withdrawal fixture" });
+    async function reserveMakeup(daysAhead: number) {
+      const { classSessionId } = await academicService.createOneOffClassSession(admin, {
+        localDate: today.plus({ days: daysAhead }).toISODate(), startsAtLocalTime: "18:00", durationMinutes: 60, maxCapacity: 1,
+      });
+      const booking = await recovery.reserveRecovery(student, { classSessionId });
+      expect(await academicService.getClassSessionAvailability(classSessionId)).toMatchObject({ availableSpots: 0 });
+      return { ...booking, classSessionId };
+    }
+    const onTime = await reserveMakeup(9);
+    const late = await reserveMakeup(3);
+    const readLedger = async () => (await client.query(
+      `select id,movement_type,amount,related_reservation_id,source_movement_id,source_grant_movement_id,refund_restored_credit,
+       regulation_version_id from credit_ledger_movements where student_profile_id=$1 order by id`, [departing.profileId],
+    )).rows;
+    const originalLedger = await readLedger();
+    expect(originalLedger.map(({ movement_type }) => movement_type)).toContain("RECOVERY_CONSUMPTION");
+
+    const { withdrawStudent } = await import("@/src/application/academic/student-withdrawal");
+    await expect(withdrawStudent(student, { studentProfileId: departing.profileId })).rejects.toMatchObject({ code: "forbidden" });
+    const attempts = await Promise.all([
+      withdrawStudent(admin, { studentProfileId: departing.profileId }),
+      withdrawStudent(admin, { studentProfileId: departing.profileId }),
+    ]);
+    expect(attempts).toContainEqual({ withdrawn: true, releasedReservations: 3, cancelledRecoveries: 2 });
+    expect(attempts).toContainEqual({ withdrawn: false, releasedReservations: 0, cancelledRecoveries: 0 });
+    const { rows: [account] } = await client.query("select status,deactivated_at from users where id=$1", [departing.userId]);
+    expect(account).toEqual({ status: "DISABLED", deactivated_at: new Date() });
+    const { rows: activeSessions } = await client.query("select id from sessions where user_id=$1", [departing.userId]);
+    expect(activeSessions).toHaveLength(0);
+    expect(await auth.getAuthenticatedUserFromSessionToken(login.sessionToken)).toBeNull();
+    await expect(auth.authenticateUser(credentials)).rejects.toMatchObject({ code: "invalid_credentials" });
+    const { rows: assignments } = await client.query(
+      "select status,effective_to::text from student_template_assignments where student_profile_id=$1 and template_id=$2",
+      [departing.profileId, templateId],
+    );
+    expect(assignments).toEqual(Array.from({ length: 2 }, () => ({ status: "ENDED", effective_to: today.toISODate() })));
+    const { rows: history } = await client.query(
+      "select status,effective_to from student_template_assignments where id=$1", [completedCourseAssignment.assignmentId],
+    );
+    expect(history).toEqual([{ status: "ACTIVE", effective_to: null }]);
+    const readAudit = async () => (await client.query(
+      "select * from student_withdrawals where student_user_id=$1", [departing.userId],
+    )).rows;
+    const audit = await readAudit();
+    expect(audit).toEqual([{
+      student_user_id: departing.userId, withdrawn_by_user_id: admin.userId, withdrawn_at: account.deactivated_at,
+      ended_assignment_ids: expect.arrayContaining([assignmentId, scheduledAssignment.assignmentId]),
+      released_reservation_ids: expect.arrayContaining(reservationIds.slice(1)),
+      cancelled_recoveries: expect.arrayContaining([
+        { reservationId: onTime.reservationId, refunded: true, refundRestoredCredit: true },
+        { reservationId: late.reservationId, refunded: false, refundRestoredCredit: false },
+      ]),
+    }]);
+    const { rows: bookings } = await client.query(
+      "select id,status,cancelled_at from class_reservations where id=any($1::text[])",
+      [[...reservationIds, onTime.reservationId, late.reservationId, otherReservation.reservationId]],
+    );
+    expect(bookings).toHaveLength(7);
+    for (const id of [reservationIds[0], otherReservation.reservationId]) {
+      expect(bookings).toContainEqual({ id, status: "CONFIRMED", cancelled_at: null });
+    }
+    for (const id of [...reservationIds.slice(1), onTime.reservationId, late.reservationId]) {
+      expect(bookings).toContainEqual({ id, status: "CANCELLED", cancelled_at: account.deactivated_at });
+    }
+    const finalLedger = await readLedger();
+    expect(finalLedger.filter(({ movement_type }) => movement_type !== "RECOVERY_REFUND")).toEqual(originalLedger);
+    expect(finalLedger.filter(({ movement_type }) => movement_type === "RECOVERY_REFUND")).toEqual([{
+      id: expect.any(String), movement_type: "RECOVERY_REFUND", amount: 1, related_reservation_id: onTime.reservationId,
+      source_movement_id: onTime.consumedMovementId, source_grant_movement_id: onTime.consumedFromGrantMovementId,
+      refund_restored_credit: true, regulation_version_id: "initial",
+    }]);
+    for (const classSessionId of [onTime.classSessionId, late.classSessionId]) {
+      expect(await academicService.getClassSessionAvailability(classSessionId)).toMatchObject({ availableSpots: 1 });
+    }
+    await expect(academicService.enrollStudentInAcademicOffering(admin, {
+      targetType: "weekly", targetId: templateId, studentProfileId: departing.profileId,
+    })).rejects.toMatchObject({ code: "student_inactive" });
+
+    await credit.grantManualCredits(admin, { studentProfileId: recovering.profileId, amount: 1, reason: "Replacement recovery" });
+    const filled = await recovery.reserveRecovery({ userId: recovering.userId, role: "STUDENT" }, { classSessionId: sessionIds[1] });
+    expect(filled.consumedMovementId).toBeTruthy();
+    expect(await enrollSubstitute()).toEqual({ reservedSessions: 2 });
+    vi.setSystemTime(today.plus({ days: 1 }).toJSDate());
+    expect(await withdrawStudent(admin, { studentProfileId: departing.profileId }))
+      .toEqual({ withdrawn: false, releasedReservations: 0, cancelledRecoveries: 0 });
+    expect(await readAudit()).toEqual(audit);
+    expect(await readLedger()).toEqual(finalLedger);
+    const { rows: replacementBookings } = await client.query(
+      "select class_session_id from class_reservations where student_profile_id=$1 and status='CONFIRMED'", [substitute.profileId],
+    );
+    expect(replacementBookings.map(({ class_session_id }) => class_session_id).sort()).toEqual(sessionIds.slice(2).sort());
+    expect(await academicService.getClassSessionAvailability(sessionIds[1]))
+      .toMatchObject({ confirmedReservations: 2, blockedSpots: 1, availableSpots: 0 });
+    expect(await academicService.getClassSessionAvailability(sessionIds[2]))
+      .toMatchObject({ confirmedReservations: 1, blockedSpots: 1, availableSpots: 0 });
+  });
 
   it("creates a one-off session through the admin service and rejects the thirteenth seat under concurrency", async () => {
     const admin = { userId: randomUUID(), role: "SUPER_ADMIN" as const };

@@ -4,7 +4,7 @@ import { ZodError } from "zod";
 import { logoutAction } from "@/src/interfaces/auth/actions/logout";
 import { requireRole } from "@/src/interfaces/auth/session";
 import { db } from "@/src/infrastructure/db/client";
-import { classSessions, studentProfiles } from "@/src/infrastructure/db/schema";
+import { classSessions, studentProfiles, users } from "@/src/infrastructure/db/schema";
 import { createOneOffClassSessionAction } from "@/src/interfaces/academic/actions";
 import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import { DEFAULT_CLASS_CAPACITY } from "@/src/domain/academic/constants";
@@ -16,7 +16,7 @@ import { getPublicErrorMessage } from "@/src/infrastructure/errors";
 import { getRecoveryHistory } from "@/src/application/recovery/recovery-service";
 import Link from "next/link";
 import { CourseAdministration } from "./course-administration";
-import { StudentAccountForm } from "./student-account-form";
+import { StudentAccountForm, StudentWithdrawalForm } from "./student-account-form";
 
 type AdminPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -102,9 +102,13 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
       id: studentProfiles.id,
       firstName: studentProfiles.firstName,
       lastName: studentProfiles.lastName,
+      email: users.email,
+      status: users.status,
     })
     .from(studentProfiles)
+    .innerJoin(users, eq(users.id, studentProfiles.userId))
     .orderBy(studentProfiles.lastName, studentProfiles.firstName);
+  const activeStudents = students.filter(({ status }) => status === "ACTIVE");
 
   const creditOverview = selectedStudentProfileId
     ? await getCreditOverview({ userId: user.userId, role: user.role }, { studentProfileId: selectedStudentProfileId })
@@ -150,9 +154,10 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
           <button type="submit">Guardar clase única</button>
         </form>
       </section>
-      <CourseAdministration capacityLimit={capacityLimit} students={students} query={query} />
+      <CourseAdministration capacityLimit={capacityLimit} students={activeStudents} query={query} />
       <StudentAccountForm created={query.studentAccount === "created"}
         error={typeof query.studentAccountError === "string" ? query.studentAccountError : undefined} />
+      <StudentWithdrawalForm students={activeStudents} query={query} />
       <h2>Créditos</h2>
       {errorMessage ? (
         <p role="alert" aria-live="polite">
