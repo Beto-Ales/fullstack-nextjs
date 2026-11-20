@@ -12,20 +12,23 @@ async function login(page: Page, account: { email: string; password: string }) {
   await page.getByRole("button", { name: "Iniciar sesión" }).click();
 }
 
-test("shows the confirmed enrollments for one session and protects the direct URL", async ({ page, browser, baseURL }) => {
+test("shows confirmed enrollments and cancellation history for one session and protects the direct URL", async ({ page, browser, baseURL }) => {
   test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       const week = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("week").plus({ weeks: 1 });
       const selectedStart = week.set({ hour: 18 });
-      const users = Array.from({ length: 3 }, () => randomUUID());
-      const [ordinary, makeup, cancelled, foreign] = Array.from({ length: 4 }, () => randomUUID());
+      const users = Array.from({ length: 4 }, () => randomUUID());
+      const [ordinary, makeup, cancelled, foreign, cancelledMakeup] = Array.from({ length: 5 }, () => randomUUID());
       const selectedName = "Taller de ilustración";
       const emptyName = "Taller sin inscritos";
       const ordinaryName = "Ana Ordinaria";
       const makeupName = "Bea Recuperación";
       const cancelledName = "Carla Cancelada";
       const foreignName = "Diana Otra sesión";
+      const cancelledMakeupName = "Eva Recuperación cancelada";
+      const latestCancellation = selectedStart.minus({ days: 2 }).set({ hour: 0, minute: 30 });
+      const earlierCancellation = latestCancellation.minus({ hours: 2 });
       const capacityNotice = "Los habituales pendientes superan las plazas libres.";
       const studentContext = await browser.newContext({ baseURL });
 
@@ -39,8 +42,9 @@ test("shows the confirmed enrollments for one session and protects the direct UR
         await admin.client.query(
           `insert into student_profiles (id, user_id, first_name, last_name)
            values ($1, $2, 'Ana', 'Ordinaria'), ($3, $4, 'Bea', 'Recuperación'),
-                  ($5, $6, 'Carla', 'Cancelada'), ($7, $8, 'Diana', 'Otra sesión')`,
-          [ordinary, student.userId, makeup, users[0], cancelled, users[1], foreign, users[2]],
+                  ($5, $6, 'Carla', 'Cancelada'), ($7, $8, 'Diana', 'Otra sesión'),
+                  ($9, $10, 'Eva', 'Recuperación cancelada')`,
+          [ordinary, student.userId, makeup, users[0], cancelled, users[1], foreign, users[2], cancelledMakeup, users[3]],
         );
 
         async function seedSession(name: string, start: DateTime, capacity: number) {
@@ -61,16 +65,33 @@ test("shows the confirmed enrollments for one session and protects the direct UR
           return { id, template };
         }
 
-        const selected = await seedSession(selectedName, selectedStart, 3);
+        const selected = await seedSession(selectedName, selectedStart, 2);
         const emptyStart = selectedStart.plus({ days: 1 });
         const empty = await seedSession(emptyName, emptyStart, 1);
         const other = await seedSession("Otro taller", selectedStart.plus({ days: 2 }), 3);
         await admin.client.query(
           `insert into class_reservations (id, class_session_id, student_profile_id, status, origin)
-           values ($1, $5, $6, 'CONFIRMED', 'ORDINARY'), ($2, $5, $7, 'CONFIRMED', 'MAKEUP'),
-                  ($3, $5, $8, 'CANCELLED', 'ORDINARY'), ($4, $9, $10, 'CONFIRMED', 'ORDINARY')`,
-          [randomUUID(), randomUUID(), randomUUID(), randomUUID(), selected.id, ordinary, makeup,
-            cancelled, other.id, foreign],
+           values ($1, $4, $5, 'CONFIRMED', 'ORDINARY'), ($2, $4, $6, 'CONFIRMED', 'MAKEUP'),
+                  ($3, $7, $8, 'CONFIRMED', 'ORDINARY')`,
+          [randomUUID(), randomUUID(), randomUUID(), selected.id, ordinary, makeup, other.id, foreign],
+        );
+        const ordinaryCancellationId = randomUUID();
+        await admin.client.query(
+          `insert into class_reservations
+             (id, class_session_id, student_profile_id, status, origin, cancelled_at, cancelled_by_user_id)
+           values ($1, $4, $5, 'CANCELLED', 'ORDINARY', $9, $11),
+                  ($2, $4, $6, 'CANCELLED', 'MAKEUP', $10, $12),
+                  ($3, $7, $8, 'CANCELLED', 'ORDINARY', $9, $13)`,
+          [ordinaryCancellationId, randomUUID(), randomUUID(), selected.id, cancelled, cancelledMakeup, other.id,
+            foreign, earlierCancellation.toJSDate(), latestCancellation.toJSDate(), users[1], admin.userId, users[2]],
+        );
+        await admin.client.query(
+          `insert into reservation_cancellations
+             (id, reservation_id, student_profile_id, class_session_id, cancelled_by_user_id, cancelled_at,
+              cancellation_type, hours_before_start, meets_seven_day_rule, is_habitual_reservation, non_eligibility_reason)
+           values ($1, $2, $3, $4, $5, $6, 'LATE', $7, false, true, 'TIMING')`,
+          [randomUUID(), ordinaryCancellationId, cancelled, selected.id, users[1], earlierCancellation.toJSDate(),
+            Math.floor(selectedStart.diff(earlierCancellation, "hours").hours)],
         );
         await admin.client.query(
           `insert into student_template_assignments (id, student_profile_id, template_id, effective_from)
@@ -100,6 +121,25 @@ test("shows the confirmed enrollments for one session and protects the direct UR
         await expect(details.getByText(foreignName)).toHaveCount(0);
         await expect(details.getByRole("button")).toHaveCount(0);
 
+        const cancellations = page.getByRole("region", { name: "Cancelaciones", exact: true });
+        const entries = cancellations.getByRole("listitem");
+        await expect(entries).toHaveCount(2);
+        await expect(entries.nth(0)).toContainText(cancelledMakeupName);
+        await expect(entries.nth(0).getByText("Recuperación", { exact: true })).toBeVisible();
+        await expect(entries.nth(0)).toContainText("Por administración");
+        const latestTime = entries.nth(0).locator("time");
+        await expect(latestTime).toHaveAttribute("datetime", latestCancellation.toJSDate().toISOString());
+        await expect(latestTime).toHaveText(new Intl.DateTimeFormat("es-ES", {
+          timeZone: CENTER_TIME_ZONE, dateStyle: "short", timeStyle: "short",
+        }).format(latestCancellation.toJSDate()));
+        await expect(entries.nth(1)).toContainText(cancelledName);
+        await expect(entries.nth(1)).toContainText("Ordinaria");
+        await expect(entries.nth(1)).toContainText("Por el alumno");
+        await expect(entries.nth(1)).toContainText("Cancelación tardía");
+        await expect(entries.nth(1)).toContainText("Antelación insuficiente");
+        await expect(cancellations.getByText(foreignName)).toHaveCount(0);
+        await expect(cancellations.getByRole("button")).toHaveCount(0);
+
         await page.getByRole("link", { name: "Volver al calendario" }).click();
         await expect(page).toHaveURL((url) => url.pathname === "/admin" && url.searchParams.get("week") === week.toISODate());
         await expect(emptyCard).toContainText(capacityNotice);
@@ -107,6 +147,7 @@ test("shows the confirmed enrollments for one session and protects the direct UR
         await expect(page.getByRole("heading", { name: `Inscritos en ${emptyName}` })).toBeVisible();
         await expect(details.getByText("Total de inscritos: 0")).toBeVisible();
         await expect(details.getByText("No hay inscritos en esta sesión.")).toBeVisible();
+        await expect(cancellations.getByText("No hay cancelaciones en esta sesión.")).toBeVisible();
 
         const studentPage = await studentContext.newPage();
         await login(studentPage, student);
@@ -114,7 +155,9 @@ test("shows the confirmed enrollments for one session and protects the direct UR
         await studentPage.goto(`/admin/sesiones/${selected.id}`);
         await expect(studentPage).toHaveURL(/\/student$/);
         await expect(studentPage.getByRole("region", { name: "Reservas confirmadas" })).toHaveCount(0);
+        await expect(studentPage.getByRole("region", { name: "Cancelaciones", exact: true })).toHaveCount(0);
         await expect(studentPage.getByText(makeupName)).toHaveCount(0);
+        await expect(studentPage.getByText(cancelledName)).toHaveCount(0);
       } finally {
         await studentContext.close();
         await admin.client.query("delete from users where id=any($1::text[])", [users]);

@@ -277,7 +277,13 @@ Se incluyen pruebas de:
 - «Ver inscritos» abre un detalle de solo lectura protegido por `SUPER_ADMIN`, también al abrir la URL directamente. Muestra el nombre de cada alumno con reserva confirmada y distingue plazas ordinarias y de recuperación. El enlace de vuelta conserva la semana elegida.
 - El E2E `tests/e2e/admin-session-enrollments.spec.ts` compara el total con el calendario, comprueba ambos tipos de plaza, excluye reservas canceladas y de otras sesiones, valida el estado vacío y comprueba el rechazo de acceso a un alumno. Al volver, sigue visible el indicador de habituales pendientes.
 - En PostgreSQL TEST aislado pasaron tres E2E de Chromium, el detalle de inscritos y los calendarios del administrador y del alumno. TypeScript y el lint focalizado pasaron.
-- El siguiente pendiente del [apartado 11](../planificacion_general.md#11-panel-administrativo) es consultar las cancelaciones por sesión. Los desempates, las discrepancias sobre la racha y la revisión visual transversal siguen pendientes por separado.
+
+### Cancelaciones por sesión
+
+- El detalle de sesión incluye un historial de solo lectura ordenado por fecha de cancelación, de la más reciente a la más antigua. Muestra la hora de Copenhague, el tipo de reserva y, cuando constan, el rol de quien canceló, la clasificación temporal y el motivo de no elegibilidad para crédito. Las cancelaciones siguen visibles cuando se vuelve a ocupar la plaza.
+- El E2E de inscritos cubre también la coexistencia con reservas confirmadas, los dos tipos de cancelación, la hora local, el orden, el estado vacío, la exclusión de otras sesiones y la protección de la URL directa.
+- Pasaron los dos E2E focalizados en Chromium con PostgreSQL TEST aislado, el detalle de inscritos y cancelaciones y el calendario administrativo. TypeScript y el lint focalizado pasaron. La fixture de 2099 se verificó en solo lectura.
+- El siguiente pendiente del [apartado 11](../planificacion_general.md#11-panel-administrativo) es incorporar la asistencia al detalle de sesión. Los desempates, las discrepancias sobre la racha y la revisión visual transversal siguen pendientes por separado.
 
 ## Matriz de pruebas (Fase 06.2)
 

@@ -43,7 +43,7 @@ Fase 9 — Panel administrativo
 
 Calendario global, perfiles, estadísticas, bloqueos de plazas y gestión de créditos.
 
-El calendario global muestra las incidencias de aforo y permite consultar los inscritos de cada sesión. El siguiente incremento del apartado 11 es consultar las cancelaciones por sesión. [Avance y pruebas](docs/testing.md#fase-09--calendario-semanal-global).
+El calendario global muestra las incidencias de aforo y permite consultar los inscritos y las cancelaciones de cada sesión. El siguiente incremento del apartado 11 es incorporar la asistencia al detalle de sesión. [Avance y pruebas](docs/testing.md#fase-09--calendario-semanal-global).
 
 Fase 10 — Seguridad y pruebas
 
