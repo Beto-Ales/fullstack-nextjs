@@ -203,7 +203,13 @@ Se incluyen pruebas de:
 
 - El informe `postgres-credential-rotation-06-3-2-5.md` registra el cierre operativo DEV/TEST en la sección 06.3.2.13. El E2E de créditos figuraba como validación pendiente en esta matriz y ya se ejecutó. El [README](../README.md) mantiene pendiente incorporar `PROJECT_SPEC.md`. Los documentos disponibles carecen de una lista de cierre funcional de fase 06 que defina esos dos pendientes como criterios obligatorios o los asigne formalmente a una fase posterior.
 - Sigue pendiente en el [modelo académico](academic-model.md#siguiente-tarea-de-generación-de-sesiones) la política de prioridad por sobreaforo y la resolución de las sesiones afectadas.
-- El [modelo de cursos confirmado](academic-model.md#modelo-de-cursos-confirmado) incluye la creación administrativa de clases únicas y cursos semanales de tres meses, la inscripción ordinaria y el límite de 12 inscritos simultáneos. El cierre funcional sigue abierto por la gestión de cuentas, el cambio de contraseña del alumno, la política de bajas y la resolución de sesiones afectadas por sobreaforo.
+- El [modelo de cursos confirmado](academic-model.md#modelo-de-cursos-confirmado) incluye la creación administrativa de clases únicas y cursos semanales de tres meses, la inscripción ordinaria y el límite de 12 inscritos simultáneos. El alta de alumnos y el cambio de contraseña propia están implementados. El cierre funcional sigue abierto por los efectos de la baja sobre inscripciones y plazas y por la resolución de sesiones afectadas por sobreaforo.
+
+## E2E de cuentas de alumno
+
+- `tests/e2e/student-accounts.spec.ts` comprueba que `SUPER_ADMIN` puede crear una cuenta con su perfil académico y que se rechaza el mismo email con otra capitalización. El alumno entra con su contraseña inicial y cambia su propia contraseña. Se rechaza una contraseña actual incorrecta, se invalidan dos sesiones existentes y se comprueba que solo la contraseña nueva permite volver a entrar.
+- La prueba de autorización presenta un formulario de alta abierto por un administrador después de cambiar a la sesión de un alumno. El servidor redirige a `/student` y la cuenta solicitada no existe en la base.
+- Pasaron 12 E2E en Chromium, 103 pruebas de Vitest, TypeScript y lint focalizado. Las pruebas con base de datos usaron PostgreSQL TEST aislado con las migraciones hasta 0006.
 
 ## Matriz de pruebas (Fase 06.2)
 

@@ -16,6 +16,7 @@ import { getPublicErrorMessage } from "@/src/infrastructure/errors";
 import { getRecoveryHistory } from "@/src/application/recovery/recovery-service";
 import Link from "next/link";
 import { CourseAdministration } from "./course-administration";
+import { StudentAccountForm } from "./student-account-form";
 
 type AdminPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -150,6 +151,8 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
         </form>
       </section>
       <CourseAdministration capacityLimit={capacityLimit} students={students} query={query} />
+      <StudentAccountForm created={query.studentAccount === "created"}
+        error={typeof query.studentAccountError === "string" ? query.studentAccountError : undefined} />
       <h2>Créditos</h2>
       {errorMessage ? (
         <p role="alert" aria-live="polite">

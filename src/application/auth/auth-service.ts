@@ -1,11 +1,11 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { AuthServiceError, INVALID_CREDENTIALS_MESSAGE, TOO_MANY_ATTEMPTS_MESSAGE } from "@/src/application/auth/errors";
 import { resolvePostLoginPath } from "@/src/application/auth/redirects";
-import { createSuperAdminInputSchema, loginInputSchema } from "@/src/application/auth/schemas";
+import { changeStudentPasswordSchema, createStudentAccountSchema, createSuperAdminInputSchema, loginInputSchema } from "@/src/application/auth/schemas";
 import { SESSION_DURATION_MS } from "@/src/domain/auth/session-policy";
 import type { UserRole } from "@/src/domain/auth/roles";
 import {
@@ -15,7 +15,8 @@ import {
   findValidSessionByTokenHash,
 } from "@/src/infrastructure/auth/auth-repository";
 import { db } from "@/src/infrastructure/db/client";
-import { users } from "@/src/infrastructure/db/schema";
+import { sessions, studentProfiles, users } from "@/src/infrastructure/db/schema";
+import { ApplicationError } from "@/src/infrastructure/errors";
 import { hashPassword, verifyPassword } from "@/src/infrastructure/security/password";
 import {
   buildRateLimitKey,
@@ -68,19 +69,22 @@ export async function authenticateUser(input: AuthenticateInput): Promise<{
     throw new AuthServiceError("invalid_credentials", INVALID_CREDENTIALS_MESSAGE);
   }
 
-  clearLoginFailures(rateLimitKey);
-
   const sessionToken = createSessionToken();
   const tokenHash = hashSessionToken(sessionToken);
   const sessionExpiresAt = new Date(Date.now() + SESSION_DURATION_MS);
 
-  await createSession({
+  const created = await createSession({
     id: randomUUID(),
     userId: user.id,
     tokenHash,
     expiresAt: sessionExpiresAt,
     userAgent: input.userAgent,
-  });
+  }, user.passwordHash);
+  if (!created) {
+    registerLoginFailure(rateLimitKey);
+    throw new AuthServiceError("invalid_credentials", INVALID_CREDENTIALS_MESSAGE);
+  }
+  clearLoginFailures(rateLimitKey);
 
   return {
     userId: user.id,
@@ -114,6 +118,47 @@ export async function getAuthenticatedUserFromSessionToken(sessionToken: string)
 export async function revokeSession(sessionToken: string): Promise<void> {
   const tokenHash = hashSessionToken(sessionToken);
   await deleteSessionByTokenHash(tokenHash);
+}
+
+export async function createStudentAccount(actor: { role: UserRole }, input: unknown) {
+  if (actor.role !== "SUPER_ADMIN") {
+    throw new ApplicationError("Solo la administración puede dar de alta a alumnos.", "forbidden", 403, true);
+  }
+  const { email, password, firstName, lastName } = createStudentAccountSchema.parse(input);
+  const passwordHash = await hashPassword(password);
+  return db.transaction(async (tx) => {
+    const [user] = await tx.insert(users).values({
+      id: randomUUID(), email, emailNormalized: email, passwordHash, role: "STUDENT",
+    }).onConflictDoNothing({ target: users.emailNormalized }).returning({ id: users.id });
+    if (!user) {
+      throw new ApplicationError("Ya existe una cuenta con ese email.", "email_exists", 409, true);
+    }
+    await tx.insert(studentProfiles).values({ id: randomUUID(), userId: user.id, firstName, lastName });
+  });
+}
+
+export async function changeStudentPassword(actor: { userId: string; role: UserRole }, input: unknown) {
+  if (actor.role !== "STUDENT") {
+    throw new ApplicationError("Solo el alumno puede cambiar su propia contraseña desde el panel.", "forbidden", 403, true);
+  }
+  const { currentPassword, newPassword } = changeStudentPasswordSchema.parse(input);
+  const activeStudent = and(eq(users.id, actor.userId), eq(users.role, "STUDENT"), eq(users.status, "ACTIVE"));
+  const [user] = await db.select({ passwordHash: users.passwordHash }).from(users).where(activeStudent);
+  const invalidPassword = () => new ApplicationError("La contraseña actual no es correcta.", "invalid_current_password", 403, true);
+  if (!user || !await verifyPassword(currentPassword, user.passwordHash)) {
+    throw invalidPassword();
+  }
+  if (await verifyPassword(newPassword, user.passwordHash)) {
+    throw new ApplicationError("Elige una contraseña distinta de la actual.", "unchanged_password", 400, true);
+  }
+
+  const passwordHash = await hashPassword(newPassword);
+  await db.transaction(async (tx) => {
+    const [updated] = await tx.update(users).set({ passwordHash, updatedAt: new Date() })
+      .where(and(activeStudent, eq(users.passwordHash, user.passwordHash))).returning({ id: users.id });
+    if (!updated) throw invalidPassword();
+    await tx.delete(sessions).where(eq(sessions.userId, updated.id));
+  });
 }
 
 export async function createInitialSuperAdmin(input: { email: string; password: string }): Promise<{

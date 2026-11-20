@@ -13,6 +13,7 @@ import Link from "next/link";
 import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import { listUpcomingOrdinaryReservations } from "@/src/application/academic/academic-service";
 import { cancelReservationAction } from "@/src/interfaces/academic/actions";
+import { ChangePasswordForm } from "./change-password-form";
 
 type StudentHomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -75,6 +76,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
       <h1>Área de alumno</h1>
       <p>Sesión iniciada como: {user.email}</p>
       <p><Link href="/normativa">Consultar la normativa</Link></p>
+      <ChangePasswordForm error={typeof query.passwordError === "string" ? query.passwordError : undefined} />
       {actionError ? (
         <p role="alert" aria-live="polite">
           {actionError}

@@ -10,7 +10,7 @@
 
 - El panel de administración permite crear cursos semanales y clases únicas, e inscribir alumnos de forma ordinaria en ambos. La clase única se guarda como sesión independiente con `template_id` vacío. En el curso semanal se crea una asignación a la plantilla y se reservan las sesiones futuras elegibles con plazas libres.
 - La reserva de una sesión aplica el menor de su capacidad y el límite de la normativa vigente bajo bloqueo de fila. La asignación a la plantilla limita a 12 alumnos distintos simultáneos durante la vigencia. La comprobación y el alta comparten el bloqueo por plantilla que usa el generador. Se comprueba también la coincidencia con altas futuras.
-- La gestión de cuentas y el cambio de contraseña siguen pendientes en la [documentación de autenticación](authentication.md#permisos-confirmados-de-fase-06). También quedan pendientes la sustitución por baja definitiva y la prioridad para sesiones con aforo insuficiente.
+- El alta de alumnos y el cambio de contraseña propia están disponibles en sus paneles. Quedan pendientes los efectos académicos de la baja definitiva y la prioridad para sesiones con aforo insuficiente. [Permisos de fase 06](authentication.md#permisos-confirmados-de-fase-06).
 
 ## Creación de cursos semanales e inscripción
 

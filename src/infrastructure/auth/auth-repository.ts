@@ -50,13 +50,16 @@ export async function createSession(input: {
   tokenHash: string;
   expiresAt: Date;
   userAgent?: string;
-}) {
-  await db.insert(sessions).values({
-    id: input.id,
-    userId: input.userId,
-    tokenHash: input.tokenHash,
-    expiresAt: input.expiresAt,
-    userAgent: input.userAgent,
+}, verifiedPasswordHash: string): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    // Serialize login with password changes so stale credentials cannot create a new session.
+    const [user] = await tx.select({ id: users.id }).from(users).where(and(
+      eq(users.id, input.userId), eq(users.status, "ACTIVE"), eq(users.passwordHash, verifiedPasswordHash),
+    )).for("update");
+    if (!user) return false;
+
+    await tx.insert(sessions).values(input);
+    return true;
   });
 }
 

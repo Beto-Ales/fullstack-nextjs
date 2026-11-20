@@ -9,6 +9,8 @@
 - Guards de servidor por rol (`STUDENT`, `SUPER_ADMIN`).
 - Logout con invalidación de sesión.
 - Comando de creación inicial de `SUPER_ADMIN`.
+- Alta de cuentas de alumno con perfil académico desde `/admin`.
+- Cambio de contraseña propia desde `/student` con comprobación de la contraseña actual.
 - Sin registro público.
 
 ## Modelo de identidad
@@ -40,6 +42,7 @@
 - Algoritmo: `bcrypt`.
 - Coste: constante centralizada en `src/domain/auth/password-policy.ts`.
 - Política actual: mínimo 12 y máximo 128 caracteres.
+- El alta de alumnos y el cambio de contraseña propia limitan la contraseña nueva a 72 bytes en UTF-8, el máximo que procesa bcrypt. La comprobación de contraseñas existentes conserva el formato admitido al iniciar sesión.
 - No se recorta ni transforma silenciosamente la contraseña.
 - No se registra contraseña ni hash en logs.
 
@@ -48,6 +51,7 @@
 - Token generado criptográficamente (`crypto.randomBytes`).
 - Solo se guarda hash SHA-256 del token en BD.
 - Duración fija: 7 días (sin sliding expiration en esta fase).
+- Un cambio de contraseña propia actualiza el hash y revoca todas las sesiones del alumno en la misma transacción. El navegador que solicita el cambio borra su cookie y vuelve a `/login`. Un inicio de sesión que verificó la contraseña anterior debe comprobar que el hash sigue vigente antes de crear la sesión.
 - Cookie:
   - `httpOnly: true`
   - `sameSite: "lax"`
@@ -69,6 +73,13 @@ Protecciones:
 - `/admin` requiere `SUPER_ADMIN`.
 - `/login` redirige al área correspondiente si ya hay sesión válida.
 
+## Permisos confirmados de fase 06
+
+- `SUPER_ADMIN` crea cuentas con email y contraseña inicial, crea clases e inscribe alumnos de forma ordinaria.
+- `STUDENT` consulta su calendario, cancela y reserva recuperaciones según la normativa y puede cambiar su propia contraseña.
+- **Dar de alta a un alumno** crea la cuenta `STUDENT` y su perfil académico en una sola transacción. Usa el email normalizado para detectar duplicados y el perfil queda disponible para inscripciones.
+- **Cambiar contraseña** usa la identidad de la sesión del alumno y requiere la contraseña actual.
+
 ## Rate limiting de login
 
 Se implementa en memoria por clave `email_normalized + source`:
@@ -83,21 +94,42 @@ Limitación conocida:
 
 ## Creación inicial del superadministrador
 
-Comando:
-
-```bash
-SUPER_ADMIN_EMAIL=admin@example.com SUPER_ADMIN_PASSWORD='StrongPassword123!' npm run admin:create-super-admin
-```
-
-En PowerShell:
+Desde la raíz del repositorio, confirma primero el destino efectivo. El siguiente comando usa la misma carga de configuración que el script de alta y valida `DATABASE_URL` con el selector DEV del repositorio. Solo muestra host, puerto y nombre de la base. Para el entorno local predeterminado debe mostrar `localhost:5432/fullstack_nextjs`.
 
 ```powershell
-$env:SUPER_ADMIN_EMAIL="admin@example.com"; $env:SUPER_ADMIN_PASSWORD="StrongPassword123!"; npm run admin:create-super-admin
+@'
+import nextEnv from '@next/env';
+import { getDatabaseIdentity, selectTargetUrl } from './scripts/run-db-migrate.mjs';
+try {
+  nextEnv.loadEnvConfig(process.cwd());
+  const { host, port, databaseName } = getDatabaseIdentity(new URL(selectTargetUrl('dev')));
+  console.log(host + ':' + port + '/' + databaseName);
+} catch {
+  console.error('No se pudo confirmar el destino DEV.');
+  process.exitCode = 1;
+}
+'@ | node --input-type=module -
+```
+
+Si el resultado coincide con tu DEV local y el esquema ya está migrado, ejecuta el alta en la misma consola. El prompt oculta la contraseña y el bloque elimina las variables del comando al terminar. Usa al menos 12 caracteres y un máximo de 72 bytes en UTF-8. El script recibe la contraseña temporalmente en su entorno de proceso.
+
+```powershell
+$env:SUPER_ADMIN_EMAIL = Read-Host 'Email del primer SUPER_ADMIN'
+$adminSecret = Read-Host 'Contraseña inicial' -AsSecureString
+$adminSecretPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($adminSecret)
+try {
+  $env:SUPER_ADMIN_PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($adminSecretPointer)
+  npm.cmd run admin:create-super-admin
+} finally {
+  Remove-Item Env:SUPER_ADMIN_PASSWORD, Env:SUPER_ADMIN_EMAIL -ErrorAction SilentlyContinue
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($adminSecretPointer)
+  $adminSecret.Dispose()
+}
 ```
 
 Comportamiento:
 
-- Solo permite creación si no existe ningún `SUPER_ADMIN`.
+- Solo permite creación si no existe ningún `SUPER_ADMIN`. Si hay uno, incluso desactivado, revierte la transacción y sale con código 1. La cuenta existente conserva su contraseña.
 - Rechaza si el email ya existe.
 - No imprime contraseña ni hash.
 - No crea cuentas automáticamente al arrancar la app.
