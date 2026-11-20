@@ -14,6 +14,7 @@ import { getCurrentAcademicRegulation } from "@/src/application/academic/regulat
 import { listUpcomingOrdinaryReservations } from "@/src/application/academic/academic-service";
 import { cancelReservationAction } from "@/src/interfaces/academic/actions";
 import { ChangePasswordForm } from "./change-password-form";
+import { RecoveryOptions } from "./recovery-options";
 
 type StudentHomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -117,26 +118,12 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
       <h2>Reservas de recuperación</h2>
       <section aria-labelledby="available-recoveries">
         <h3 id="available-recoveries">Clases futuras disponibles</h3>
-        <ul>
-          {recoveryOptions.sessions.map((session) => (
-            <li key={session.id}>
-              {session.localDate} · {session.startsAtUtc.toISOString()} · plazas: {session.availableSpots} · cupo mensual:{" "}
-              {session.monthlyRecoveryRemaining}
-              {nextUsableCredit.nextUsableGrantMovementId ? (
-                <p>
-                  Crédito FIFO estimado: {nextUsableCredit.nextUsableGrantMovementId}
-                  {nextUsableCredit.nextUsableExpiresAt ? ` (caduca ${nextUsableCredit.nextUsableExpiresAt.toISOString()})` : ""}
-                </p>
-              ) : (
-                <p>Sin créditos utilizables.</p>
-              )}
-              <form action={reserveRecoveryFormAction}>
-                <input type="hidden" name="classSessionId" value={session.id} />
-                <button type="submit">Reservar recuperación (consume 1 crédito)</button>
-              </form>
-            </li>
-          ))}
-        </ul>
+        <RecoveryOptions
+          initialPage={recoveryOptions}
+          nextGrantId={nextUsableCredit.nextUsableGrantMovementId}
+          nextGrantExpiresAt={nextUsableCredit.nextUsableExpiresAt}
+          reserveAction={reserveRecoveryFormAction}
+        />
       </section>
 
       <section aria-labelledby="my-recoveries">

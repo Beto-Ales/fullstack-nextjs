@@ -13,3 +13,8 @@ export const recoveryHistorySchema = z.object({
   studentProfileId: z.string().uuid("Invalid student profile id.").optional(),
 });
 
+export const recoveryOptionsCursorSchema = z.object({
+  startsAtUtc: z.iso.datetime(),
+  sessionId: z.string().min(1),
+});
+

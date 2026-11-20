@@ -8,7 +8,7 @@ import { DateTime } from "luxon";
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
 import { createRecoveryConsumption, createRecoveryRefund, lockStudentProfile, materializeExpiredCredits, readCreditBalance } from "@/src/application/credits/credit-service";
-import { cancelRecoverySchema, recoveryHistorySchema, reserveRecoverySchema } from "@/src/application/recovery/schemas";
+import { cancelRecoverySchema, recoveryHistorySchema, recoveryOptionsCursorSchema, reserveRecoverySchema } from "@/src/application/recovery/schemas";
 import { type UserRole } from "@/src/domain/auth/roles";
 import { classifyCancellationTiming } from "@/src/domain/academic/cancellation-rules";
 import { calculateAvailableSpots } from "@/src/domain/academic/availability";
@@ -29,6 +29,8 @@ type Actor = {
 };
 
 type TransactionClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+const RECOVERY_OPTIONS_PAGE_SIZE = 100;
 
 type LockedRecoveryReservation = {
   reservationId: string;
@@ -157,10 +159,11 @@ async function assertRecoveryConsumptionExists(tx: TransactionClient, reservatio
   }
 }
 
-export async function listFutureRecoveryOptions(actor: Actor) {
+export async function listFutureRecoveryOptions(actor: Actor, cursorInput?: unknown) {
   if (actor.role !== "STUDENT") {
     throw new ApplicationError("Forbidden", "forbidden", 403, true);
   }
+  const cursor = recoveryOptionsCursorSchema.optional().parse(cursorInput);
 
   return db.transaction(async (tx) => {
     const studentProfileId = await getStudentProfileIdForActor(tx, actor);
@@ -169,10 +172,11 @@ export async function listFutureRecoveryOptions(actor: Actor) {
     const regulation = await resolveCurrentAcademicRegulation(tx, now);
     await materializeExpiredCredits(tx, studentProfileId, now);
 
-    const { rows: sessions } = await tx.execute<{
+    const { rows } = await tx.execute<{
       id: string;
       local_date: string;
       starts_at_utc: Date;
+      cursor_starts_at_utc: string;
       ends_at_utc: Date;
       max_capacity: number;
       available_spots: number;
@@ -197,6 +201,7 @@ export async function listFutureRecoveryOptions(actor: Actor) {
         from class_sessions s
         where s.status = 'SCHEDULED'
           and s.starts_at_utc > ${now}
+          ${cursor ? sql`and (s.starts_at_utc, s.id) > (${cursor.startsAtUtc}::timestamptz, ${cursor.sessionId})` : sql``}
           and not exists (
             select 1
             from class_reservations existing
@@ -206,13 +211,16 @@ export async function listFutureRecoveryOptions(actor: Actor) {
           )
       )
       select id, local_date, starts_at_utc, ends_at_utc, max_capacity,
+        to_char(starts_at_utc at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as cursor_starts_at_utc,
         max_capacity - confirmed_reservations - blocked_spots as available_spots
       from session_usage
       where confirmed_reservations + blocked_spots < max_capacity
       order by starts_at_utc asc, id asc
-      limit 100
+      limit ${RECOVERY_OPTIONS_PAGE_SIZE + 1}
     `);
 
+    const sessions = rows.slice(0, RECOVERY_OPTIONS_PAGE_SIZE);
+    const last = sessions.at(-1);
     const monthlyUsage = new Map<string, number>();
     for (const row of sessions) {
       const range = toMonthRange(row.local_date);
@@ -223,6 +231,9 @@ export async function listFutureRecoveryOptions(actor: Actor) {
     }
 
     return {
+      nextCursor: rows.length > RECOVERY_OPTIONS_PAGE_SIZE && last
+        ? { startsAtUtc: last.cursor_starts_at_utc, sessionId: last.id }
+        : null,
       sessions: sessions.map((row) => {
         const monthStart = toMonthRange(row.local_date).monthStartLocalDate;
         const used = monthlyUsage.get(monthStart) ?? 0;

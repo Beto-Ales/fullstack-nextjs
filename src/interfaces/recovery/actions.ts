@@ -9,9 +9,9 @@ import {
 } from "@/src/application/recovery/recovery-service";
 import { requireRole, requireUser } from "@/src/interfaces/auth/session";
 
-export async function listFutureRecoveryOptionsAction() {
+export async function listFutureRecoveryOptionsAction(cursor?: unknown) {
   const actor = await requireRole("STUDENT");
-  return listFutureRecoveryOptions({ userId: actor.userId, role: actor.role });
+  return listFutureRecoveryOptions({ userId: actor.userId, role: actor.role }, cursor);
 }
 
 export async function reserveRecoveryAction(input: unknown) {

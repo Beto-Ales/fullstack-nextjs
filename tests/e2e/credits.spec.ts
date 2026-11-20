@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Request } from "@playwright/test";
-import { seedHabitualCreditScenario, seedRecoveryCapacityScenario, withCreditsAccount } from "./credits-fixtures";
+import { seedHabitualCreditScenario, seedRecoveryCapacityScenario, seedRecoveryPaginationSessions, withCreditsAccount } from "./credits-fixtures";
 
 async function login(page: Page, email: string, password: string) {
   await page.goto("/login");
@@ -184,6 +184,48 @@ test.describe("credits flows", () => {
           } finally {
             await otherContext.close();
           }
+        });
+      });
+    });
+  });
+
+  test("shows the 101st available recovery across a shared start time without duplicates", async ({ page }) => {
+    await withCreditsAccount("STUDENT", async (student) => {
+      await withCreditsAccount("STUDENT", async (other) => {
+        await withCreditsAccount("STUDENT", async (occupant) => {
+          const scenario = await seedRecoveryCapacityScenario(student, [student.userId, other.userId], occupant.userId);
+          const later = await seedRecoveryPaginationSessions(student, scenario.contested);
+          const expected = [scenario.contested.id, ...later.ids];
+          const last = expected.at(-1)!;
+
+          await login(page, student.email, student.password);
+          const options = page.getByRole("region", { name: "Clases futuras disponibles" });
+          const items = options.getByRole("listitem");
+          const getIds = () => options.locator('input[name="classSessionId"]')
+            .evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value));
+          const more = options.getByRole("button", { name: "Ver más clases" });
+          await expect(items).toHaveCount(100);
+          expect(await getIds()).toEqual(expected.slice(0, 100));
+          await expect(items.last()).toContainText(later.sharedTimestamp);
+          await expect(more).toBeVisible();
+          await more.click();
+
+          await expect(items).toHaveCount(101);
+          expect(await getIds()).toEqual(expected);
+          await expect(items.nth(99)).toContainText(later.sharedTimestamp);
+          await expect(items.nth(100)).toContainText(later.sharedTimestamp);
+          await expect(more).toHaveCount(0);
+
+          await items.last().getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" }).click();
+          await expect(page.getByRole("status")).toHaveText("Recuperación reservada.");
+          await expect(items).toHaveCount(100);
+          expect(await getIds()).toEqual(expected.slice(0, 100));
+          await expect(more).toHaveCount(0);
+          const { rows } = await student.client.query(
+            "select status from class_reservations where class_session_id = $1 and student_profile_id = $2",
+            [last, scenario.profiles[0]],
+          );
+          expect(rows).toEqual([{ status: "CONFIRMED" }]);
         });
       });
     });

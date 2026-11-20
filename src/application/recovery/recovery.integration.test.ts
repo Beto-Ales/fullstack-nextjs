@@ -201,10 +201,15 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("recovery integration (po
     const actor = { userId: student.userId, role: "STUDENT" as const };
     const initial = await recoveryService.listFutureRecoveryOptions(actor);
     expect(initial.sessions).toMatchObject([{ id: last, maxCapacity: 1, availableSpots: 1 }]);
+    expect(initial.nextCursor).toBeNull();
 
     const later = await seedDailySessions(100, sessions.length);
     const capped = await recoveryService.listFutureRecoveryOptions(actor);
     expect(capped.sessions.map(({ id }) => id)).toEqual([last, ...later.slice(0, 99)]);
+    expect(capped.nextCursor).toMatchObject({ sessionId: later[98] });
+    const remaining = await recoveryService.listFutureRecoveryOptions(actor, capped.nextCursor);
+    expect(remaining.sessions.map(({ id }) => id)).toEqual([later[99]]);
+    expect(remaining.nextCursor).toBeNull();
   });
 
   it("reserves recovery and consumes one credit atomically", async () => {

@@ -169,3 +169,23 @@ export async function seedRecoveryCapacityScenario(
   );
   return { profiles, grantIds, full, blocked, contested };
 }
+
+export async function seedRecoveryPaginationSessions(
+  fixture: { client: Client; sessionIds: string[] },
+  previousSession: { timestamp: string },
+) {
+  const start = DateTime.fromISO(previousSession.timestamp, { zone: CENTER_TIME_ZONE }).plus({ hours: 1 });
+  const ids = Array.from({ length: 100 }, () => randomUUID()).sort();
+  fixture.sessionIds.push(...ids);
+  await fixture.client.query(
+    `insert into class_sessions (id, local_date, starts_at_utc, ends_at_utc, max_capacity)
+     select id, $2, starts_at, starts_at + interval '1 hour', 1
+     from (
+       select id, $3::timestamptz + least(position, 99) * interval '1 minute'
+         + interval '456 microseconds' as starts_at
+       from unnest($1::text[]) with ordinality as sessions(id, position)
+     ) as dated_sessions`,
+    [ids, start.toISODate(), start.toJSDate()],
+  );
+  return { ids, sharedTimestamp: start.plus({ minutes: 99 }).toJSDate().toISOString() };
+}
