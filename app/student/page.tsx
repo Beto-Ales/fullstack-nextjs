@@ -1,6 +1,6 @@
 import { logoutAction } from "@/src/interfaces/auth/actions/logout";
 import { requireRole } from "@/src/interfaces/auth/session";
-import { getCreditOverview, getNextUsableCreditForActor } from "@/src/application/credits/credit-service";
+import { getCreditOverview } from "@/src/application/credits/credit-service";
 import {
   cancelRecoveryReservationAction,
   listFutureRecoveryOptionsAction,
@@ -19,6 +19,7 @@ import { cancelReservationAction } from "@/src/interfaces/academic/actions";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { ChangePasswordForm } from "./change-password-form";
 import { ClassHistory } from "./class-history";
+import { CreditExpirations } from "./credit-expirations";
 import { HabitualSchedules } from "./habitual-schedules";
 import { RecoveryOptions } from "./recovery-options";
 import { WeeklyCalendar } from "./weekly-calendar";
@@ -93,7 +94,6 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
       : query.recovery === "cancelled" ? "Recuperación cancelada." : undefined;
   const regulation = await getCurrentAcademicRegulation(user);
   const creditOverview = await getCreditOverview({ userId: user.userId, role: user.role });
-  const nextUsableCredit = await getNextUsableCreditForActor({ userId: user.userId, role: user.role });
   const recoveryOptions = await listFutureRecoveryOptionsAction();
   const [upcomingClasses, calendarReservations, habitualSchedules, { history, pendingRecoveries }] = await Promise.all([
     listUpcomingOrdinaryReservations(user),
@@ -134,6 +134,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
       <h2>Créditos</h2>
       <p>Disponibles: {creditOverview.availableCredits}</p>
       <p>Caducados: {creditOverview.expiredCredits}</p>
+      <CreditExpirations expirations={creditOverview.availableExpirations} />
       <h3>Historial de movimientos</h3>
       <ul>
         {creditOverview.history.map((movement) => (
@@ -150,8 +151,8 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
         <h3 id="available-recoveries">Clases futuras disponibles</h3>
         <RecoveryOptions
           initialPage={recoveryOptions}
-          nextGrantId={nextUsableCredit.nextUsableGrantMovementId}
-          nextGrantExpiresAt={nextUsableCredit.nextUsableExpiresAt}
+          nextGrantId={creditOverview.nextUsableGrantMovementId}
+          nextGrantExpiresAt={creditOverview.nextUsableExpiresAt}
           reserveAction={reserveRecovery}
         />
       </section>

@@ -5,8 +5,8 @@ export type FifoBucket = {
   availableUnits: number;
 };
 
-export function pickNextFifoBucket(buckets: FifoBucket[], referenceTime: Date): FifoBucket | null {
-  const ordered = buckets
+export function listAvailableFifoBuckets(buckets: FifoBucket[], referenceTime: Date): FifoBucket[] {
+  return buckets
     .filter((bucket) => bucket.availableUnits > 0)
     .filter((bucket) => !bucket.expiresAt || bucket.expiresAt > referenceTime)
     .sort((a, b) => {
@@ -21,7 +21,9 @@ export function pickNextFifoBucket(buckets: FifoBucket[], referenceTime: Date): 
       }
       return a.grantMovementId.localeCompare(b.grantMovementId);
     });
+}
 
-  return ordered[0] ?? null;
+export function pickNextFifoBucket(buckets: FifoBucket[], referenceTime: Date): FifoBucket | null {
+  return listAvailableFifoBuckets(buckets, referenceTime)[0] ?? null;
 }
 

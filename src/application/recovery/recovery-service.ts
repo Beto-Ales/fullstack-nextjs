@@ -665,7 +665,7 @@ export async function getRecoveryAvailabilityForSession(actor: Actor, classSessi
       .limit(1);
 
     const monthlyRecoveries = await countMonthlyRecoveries(tx, studentProfileId, session.localDate);
-    const { availableCredits } = await readCreditBalance(tx, studentProfileId);
+    const { availableCredits } = await readCreditBalance(tx, studentProfileId, now);
 
     return {
       classSessionId: session.id,

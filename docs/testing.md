@@ -239,7 +239,7 @@ Se incluyen pruebas de:
 - El E2E `tests/e2e/student-calendar.spec.ts` cubre una clase habitual y una recuperación confirmada en la semana actual, navegación en ambos sentidos, estado vacío y un domingo y un lunes locales que comparten fecha UTC. Verifica que quedan fuera las reservas de otro alumno y las canceladas. En una ventana de 360 px comprueba que el calendario cabe sin desplazamiento horizontal.
 - Tras cancelar una recuperación desde el calendario, el panel conserva la semana elegida y actualiza su contenido. Las acciones de cancelación, el flujo de créditos y la búsqueda paginada de recuperaciones se conservan.
 - Pasaron 106 pruebas de Vitest y 16 E2E de Chromium en PostgreSQL TEST aislado, incluidos el calendario y las regresiones de cancelación, créditos y recuperaciones. TypeScript pasó y lint terminó sin errores, con tres avisos preexistentes.
-- Según el [plan del panel del estudiante](../planificacion_general.md#10-panel-del-estudiante), el siguiente incremento para cerrar la fase 8 es la vista de créditos próximos a caducar. Las diferencias sobre la racha quedan en el [modelo académico](academic-model.md#cancelaciones-y-secuencias) y la vista administrativa de incidencias sigue en fase 9.
+- Las diferencias sobre la racha quedan en el [modelo académico](academic-model.md#cancelaciones-y-secuencias) y la vista administrativa de incidencias sigue en fase 9.
 
 ### Horarios habituales del alumno
 
@@ -254,6 +254,14 @@ Se incluyen pruebas de:
 - La vista usa la asistencia vigente tras una corrección. Distingue «Falta registrada» de «Sin asistencia registrada» y muestra el tipo de cancelación cuando quedó registrado.
 - El E2E `tests/e2e/student-history.spec.ts` comprueba los resultados registrados, la exclusión de datos ajenos, el orden, el estado vacío y la vista a 360 px. La regresión de créditos confirma que una recuperación cancelada pasa al historial y deja de aparecer entre las recuperaciones pendientes.
 - Pasaron 106 pruebas de Vitest y 18 E2E de Chromium en PostgreSQL TEST aislado. La repetición focalizada de historial, calendario y créditos pasó los 7 casos. TypeScript pasó y lint terminó sin errores, con tres avisos preexistentes.
+
+### Vencimientos de créditos del alumno
+
+- El panel usa el remanente por concesión del ledger para calcular el saldo disponible, el crédito FIFO estimado y los vencimientos. Solo muestra créditos propios disponibles. Agrupa las cantidades con el mismo vencimiento, usa hora de Copenhague y deja al final los créditos sin vencimiento. El plan carece de un plazo para «próximos a caducar», por lo que la vista incluye todo el saldo utilizable.
+- El E2E `tests/e2e/student-credit-expirations.spec.ts` comprueba el estado vacío, el orden, el remanente parcial y la exclusión de créditos ajenos, agotados y caducados. Al reservar una recuperación, el saldo baja y desaparece el vencimiento agotado. Al cancelar a tiempo, el crédito vigente vuelve a su fecha original. Una devolución auditada por crédito caducado conserva el saldo y el listado.
+- Pasaron 106 pruebas de Vitest y 19 E2E de Chromium en PostgreSQL TEST aislado. La repetición focalizada de vencimientos y flujos de crédito pasó los 6 casos. TypeScript pasó y lint terminó sin errores, con tres avisos preexistentes.
+- **Validación de cierre.** Se revisó el diff desde `cb2b29d` y se confirmó que el saldo y los vencimientos usan los mismos remanentes. El consumo FIFO sigue el orden por vencimiento, fecha de concesión e identificador. La devolución conserva el vencimiento original y solo restaura saldo si sigue vigente. En esta revisión pasaron 6 E2E de Chromium y 30 pruebas de Vitest de FIFO, créditos y recuperaciones. Las pruebas con base de datos usaron PostgreSQL TEST aislado. También pasaron TypeScript y lint, con tres avisos preexistentes. Estas ejecuciones se añaden a las suites completas del incremento anterior.
+- **Cierre de fase 08.** Queda validado el [alcance del panel del estudiante](../planificacion_general.md#10-panel-del-estudiante) con próximas clases, calendario, horarios, cancelaciones, saldo, vencimientos, historiales, búsqueda de recuperaciones y normativa. La decisión sobre la racha y la propuesta de revisión visual transversal siguen pendientes por separado.
 
 ## Matriz de pruebas (Fase 06.2)
 

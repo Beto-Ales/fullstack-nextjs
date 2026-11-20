@@ -7,7 +7,7 @@ import { and, eq, gte, inArray, isNotNull, lt, lte, sql } from "drizzle-orm";
 import { creditStudentQuerySchema, manualCreditGrantSchema, manualCreditWithdrawSchema } from "@/src/application/credits/schemas";
 import { INITIAL_REGULATION } from "@/src/domain/academic/regulation";
 import { type UserRole } from "@/src/domain/auth/roles";
-import { pickNextFifoBucket, type FifoBucket } from "@/src/domain/credits/fifo";
+import { listAvailableFifoBuckets, pickNextFifoBucket, type FifoBucket } from "@/src/domain/credits/fifo";
 import { calculateAutoCreditExpiration, getCenterMonthUtcWindow } from "@/src/domain/credits/ledger";
 import { db } from "@/src/infrastructure/db/client";
 import { creditLedgerMovements, studentProfiles } from "@/src/infrastructure/db/schema";
@@ -275,13 +275,8 @@ export async function selectNextFifoCreditForConsumption(
   return { grantMovementId: winner.grantMovementId, expiresAt: winner.expiresAt };
 }
 
-export async function readCreditBalance(tx: TransactionClient, studentProfileId: string): Promise<{
-  availableCredits: number;
-  expiredCredits: number;
-  totalCreditsGranted: number;
-}> {
-  const movements = await readLedgerRows(tx, studentProfileId);
-  const availableCredits = buildCreditBuckets(movements).reduce((sum, bucket) => sum + bucket.availableUnits, 0);
+function summarizeCreditBalance(movements: LedgerRow[], availableBuckets: FifoBucket[]) {
+  const availableCredits = availableBuckets.reduce((sum, bucket) => sum + bucket.availableUnits, 0);
   const expiredCredits = movements
     .filter((item) => item.movementType === "EXPIRATION")
     .reduce((acc, item) => acc + item.amount, 0);
@@ -294,6 +289,12 @@ export async function readCreditBalance(tx: TransactionClient, studentProfileId:
     expiredCredits,
     totalCreditsGranted,
   };
+}
+
+export async function readCreditBalance(tx: TransactionClient, studentProfileId: string, referenceTime = new Date()) {
+  const movements = await readLedgerRows(tx, studentProfileId);
+  const availableBuckets = listAvailableFifoBuckets(buildCreditBuckets(movements), referenceTime);
+  return summarizeCreditBalance(movements, availableBuckets);
 }
 
 export async function createRecoveryConsumption(
@@ -515,8 +516,8 @@ export async function getCreditOverview(actor: Actor, input?: unknown) {
 
   return db.transaction(async (tx) => {
     await lockStudentProfile(tx, studentProfileId);
-    await materializeExpiredCredits(tx, studentProfileId, new Date());
-    const balance = await readCreditBalance(tx, studentProfileId);
+    const now = new Date();
+    await materializeExpiredCredits(tx, studentProfileId, now);
 
     const history = await tx
       .select({
@@ -539,26 +540,23 @@ export async function getCreditOverview(actor: Actor, input?: unknown) {
       .where(eq(creditLedgerMovements.studentProfileId, studentProfileId))
       .orderBy(creditLedgerMovements.createdAt, creditLedgerMovements.id);
 
+    const availableBuckets = listAvailableFifoBuckets(buildCreditBuckets(history), now);
+    const byExpiration = new Map<number | null, { amount: number; expiresAt: Date | null }>();
+    for (const { availableUnits, expiresAt } of availableBuckets) {
+      const key = expiresAt?.getTime() ?? null;
+      const existing = byExpiration.get(key);
+      if (existing) existing.amount += availableUnits;
+      else byExpiration.set(key, { amount: availableUnits, expiresAt });
+    }
+    const next = availableBuckets[0];
+
     return {
       studentProfileId,
-      ...balance,
-      history,
-    };
-  });
-}
-
-export async function getNextUsableCreditForActor(actor: Actor, input?: unknown) {
-  const payload = creditStudentQuerySchema.parse(input ?? {});
-  const studentProfileId = await resolveStudentProfileIdForActor(actor, payload.studentProfileId);
-
-  return db.transaction(async (tx) => {
-    await lockStudentProfile(tx, studentProfileId);
-    await materializeExpiredCredits(tx, studentProfileId, new Date());
-    const next = await selectNextFifoCreditForConsumption(tx, studentProfileId, new Date());
-    return {
-      studentProfileId,
+      ...summarizeCreditBalance(history, availableBuckets),
+      availableExpirations: [...byExpiration.values()],
       nextUsableGrantMovementId: next?.grantMovementId ?? null,
       nextUsableExpiresAt: next?.expiresAt ?? null,
+      history,
     };
   });
 }
@@ -663,28 +661,16 @@ export async function withdrawManualCredits(actor: Actor, input: unknown) {
 
   return db.transaction(async (tx) => {
     await lockStudentProfile(tx, payload.studentProfileId);
-    await materializeExpiredCredits(tx, payload.studentProfileId, new Date());
+    const now = new Date();
+    await materializeExpiredCredits(tx, payload.studentProfileId, now);
 
-    const balance = await readCreditBalance(tx, payload.studentProfileId);
-    if (payload.amount > balance.availableCredits) {
+    const rows = await readLedgerRows(tx, payload.studentProfileId);
+    const buckets = listAvailableFifoBuckets(buildCreditBuckets(rows), now);
+    if (payload.amount > buckets.reduce((sum, bucket) => sum + bucket.availableUnits, 0)) {
       throw new ApplicationError("Cannot withdraw more credits than available.", "insufficient_credits", 409, true);
     }
 
     let remaining = payload.amount;
-    const rows = await readLedgerRows(tx, payload.studentProfileId);
-    const buckets = buildCreditBuckets(rows).sort((a, b) => {
-      const aExpiry = a.expiresAt ? a.expiresAt.getTime() : Number.MAX_SAFE_INTEGER;
-      const bExpiry = b.expiresAt ? b.expiresAt.getTime() : Number.MAX_SAFE_INTEGER;
-      if (aExpiry !== bExpiry) {
-        return aExpiry - bExpiry;
-      }
-      const byCreated = a.createdAt.getTime() - b.createdAt.getTime();
-      if (byCreated !== 0) {
-        return byCreated;
-      }
-      return a.grantMovementId.localeCompare(b.grantMovementId);
-    });
-
     const movementIds: string[] = [];
     for (const bucket of buckets) {
       if (remaining <= 0) {
