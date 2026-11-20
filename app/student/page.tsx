@@ -48,10 +48,10 @@ async function cancelRecoveryFormAction(formData: FormData) {
   const reservationId = String(formData.get("reservationId") ?? "");
   try {
     await cancelRecoveryReservationAction({ reservationId });
-    redirect("/student?recovery=cancelled");
   } catch (error) {
     redirect(`/student?error=${encodeURIComponent(getPublicErrorMessage(error))}`);
   }
+  redirect("/student?recovery=cancelled");
 }
 
 export default async function StudentHomePage({ searchParams }: StudentHomePageProps) {
@@ -60,7 +60,9 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
   const actionError = typeof query.error === "string" ? query.error : undefined;
   const confirmation = query.class === "cancelled"
     ? "Clase cancelada."
-    : query.recovery === "reserved" ? "Recuperación reservada." : undefined;
+    : query.recovery === "reserved"
+      ? "Recuperación reservada."
+      : query.recovery === "cancelled" ? "Recuperación cancelada." : undefined;
   const regulation = await getCurrentAcademicRegulation(user);
   const creditOverview = await getCreditOverview({ userId: user.userId, role: user.role });
   const nextUsableCredit = await getNextUsableCreditForActor({ userId: user.userId, role: user.role });

@@ -65,6 +65,55 @@ test.describe("credits flows", () => {
     });
   });
 
+  test("student sees confirmation and a single refund after cancelling a recovery on time", async ({ page }) => {
+    await withCreditsAccount("STUDENT", async (fixture) => {
+      const { habitualDate, recoveryDate, recoverySessionId, profileId, regulationVersionId } = await seedHabitualCreditScenario(fixture);
+      await login(page, fixture.email, fixture.password);
+      const upcoming = page.getByRole("region", { name: "Mis próximas clases" });
+      await upcoming.getByRole("listitem").filter({ hasText: habitualDate })
+        .getByRole("button", { name: "Cancelar clase" }).click();
+      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+      const options = page.getByRole("region", { name: "Clases futuras disponibles" });
+      await options.getByRole("listitem").filter({ hasText: recoveryDate })
+        .getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" }).click();
+      await expect(page.getByRole("status")).toHaveText("Recuperación reservada.");
+
+      const recovery = page.getByRole("region", { name: "Mis recuperaciones" })
+        .getByRole("listitem").filter({ hasText: recoveryDate });
+      await recovery.getByRole("button", { name: "Cancelar recuperación" }).click();
+      await expect(page).toHaveURL(/\/student\?recovery=cancelled$/);
+      await expect(page.getByRole("status")).toHaveText("Recuperación cancelada.");
+      await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
+      await expect(recovery).toContainText("estado: CANCELLED");
+      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+      await expect(options.getByRole("listitem").filter({ hasText: recoveryDate })).toContainText("plazas: 1");
+
+      const { rows: records } = await fixture.client.query(
+        `select r.status, r.cancelled_by_user_id, r.cancellation_regulation_version_id,
+                consumption.id as consumption_id, consumption.source_grant_movement_id,
+                refund.amount, refund.refund_restored_credit, refund.source_movement_id,
+                refund.source_grant_movement_id as refunded_grant_id, refund.regulation_version_id
+         from class_reservations r
+         join credit_ledger_movements consumption on consumption.related_reservation_id = r.id
+           and consumption.movement_type = 'RECOVERY_CONSUMPTION'
+         join credit_ledger_movements refund on refund.related_reservation_id = r.id
+           and refund.movement_type = 'RECOVERY_REFUND'
+         where r.class_session_id = $1 and r.student_profile_id = $2 and r.origin = 'MAKEUP'`,
+        [recoverySessionId, profileId],
+      );
+      expect(records).toHaveLength(1);
+      const [record] = records;
+      expect(record).toMatchObject({
+        status: "CANCELLED", cancelled_by_user_id: fixture.userId, cancellation_regulation_version_id: regulationVersionId,
+        amount: 1, refund_restored_credit: true, source_movement_id: record.consumption_id,
+        refunded_grant_id: record.source_grant_movement_id, regulation_version_id: regulationVersionId,
+      });
+      await page.reload();
+      await expect(page.getByText(/RECOVERY_REFUND/)).toHaveCount(1);
+      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+    });
+  });
+
   test("admin can access credit management section", async ({ page }) => {
     await withCreditsAccount("SUPER_ADMIN", async ({ email, password }) => {
       await login(page, email, password);

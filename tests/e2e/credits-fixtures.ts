@@ -110,6 +110,6 @@ export async function seedHabitualCreditScenario(
   }
 
   const recoverySessionId = await createSession(recoveryDate, null);
-  return { profileId, habitualSessionId, habitualReservationId, recoverySessionId,
+  return { profileId, habitualSessionId, habitualReservationId, recoverySessionId, regulationVersionId: regulation.id,
     habitualDate: habitualDates[2].toISODate()!, recoveryDate: recoveryDate.toISODate()! };
 }

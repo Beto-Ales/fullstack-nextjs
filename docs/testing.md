@@ -184,6 +184,8 @@ Se incluyen pruebas de:
 - El caso del alumno prepara dos cancelaciones habituales previas y calcula las fechas a partir de la antelación publicada en Copenhague. Desde el panel, el alumno cancela la tercera clase a tiempo y comprueba la plaza liberada y el crédito concedido. Luego reserva una recuperación con una plaza libre, vuelve al panel y verifica la confirmación, el saldo actualizado y un único consumo vinculado a la concesión.
 - En Chromium pasaron los cinco E2E, incluidos el flujo del alumno y el acceso del administrador a créditos. Las comprobaciones en PostgreSQL se hicieron con datos sintéticos. Se corrigieron las redirecciones de éxito del inicio de sesión y de la reserva de recuperación que se trataban como errores.
 
+- La regresión de cancelación de recuperación reproduce la navegación a un error tras cancelar correctamente. Verifica después de la corrección el mensaje de confirmación, la plaza liberada, el saldo restaurado y una única devolución con referencia al consumo, a la concesión y a la versión vigente. La prueba vuelve a consultar el panel para verificar el saldo y la devolución. Con esta regresión pasaron los seis E2E en Chromium contra TEST aislado.
+
 ### Alcance del cierre de fase 06
 
 - El informe `postgres-credential-rotation-06-3-2-5.md` registra el cierre operativo DEV/TEST en la sección 06.3.2.13. El E2E de créditos figuraba como validación pendiente en esta matriz y ya se ejecutó. El [README](../README.md) mantiene pendiente incorporar `PROJECT_SPEC.md`. Los documentos disponibles carecen de una lista de cierre funcional de fase 06 que defina esos dos pendientes como criterios obligatorios o los asigne formalmente a una fase posterior.
