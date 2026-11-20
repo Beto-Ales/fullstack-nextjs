@@ -178,6 +178,13 @@ Se incluyen pruebas de:
 - El CLI y el servicio vuelven a informar del mismo identificador tras un reintento con aforo insuficiente, también cuando las plazas están bloqueadas. Se conserva una sola sesión y el reintento no inserta reservas.
 - Pasaron 13 pruebas focalizadas de generación, asignación habitual y recurrencia. La suite completa pasó 98 pruebas en 25 archivos usando una base TEST aislada con las migraciones hasta 0006.
 
+## Creación de clases únicas en administración
+
+- `tests/e2e/one-off-class.spec.ts` comprueba en Chromium con PostgreSQL TEST aislado que `SUPER_ADMIN` crea una sola sesión y que el panel muestra la fecha y el intervalo elegidos en Copenhague tras guardar y recargar. La prueba compara también la fecha local y los instantes UTC guardados.
+- El E2E omite la validación nativa del formulario para comprobar que el servidor rechaza un aforo de 13. También envía un formulario administrativo abierto tras cambiar a una sesión de alumno y verifica la redirección al panel de alumno y que la base queda sin una sesión nueva.
+- La integración de normativa verifica el rechazo de un aforo de 3 cuando el límite vigente es 2 y la aceptación de una sola sesión con capacidad de 2. Se reutilizan las pruebas académicas del límite de 12 reservas por sesión.
+- Pasaron los 8 E2E en Chromium y 13 pruebas focalizadas de integración académica y normativa en PostgreSQL TEST aislado. También pasaron TypeScript y el lint de los archivos del cambio.
+
 ## E2E de créditos
 
 - `tests/e2e/credits.spec.ts` usa cuentas sintéticas de alumno y administrador creadas por la fixture. Ejecutar contra una base PostgreSQL TEST local y aislada con las migraciones hasta 0006. Pasar su URL en `TEST_DATABASE_URL` antes de ejecutar `npm run test:e2e`. Playwright dirige Next.js a esa base y puede usar un puerto libre indicado con `E2E_PORT`. Si falta `TEST_DATABASE_URL`, se omiten los casos de créditos.

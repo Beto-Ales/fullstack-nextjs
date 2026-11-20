@@ -33,8 +33,8 @@ export const setClassTemplateStatusSchema = z.object({
 
 export const createOneOffSessionSchema = z.object({
   name: z.string().min(1).max(150).optional(),
-  localDate: isoDateSchema,
-  startsAtLocalTime: localTimeSchema,
+  localDate: z.iso.date(),
+  startsAtLocalTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/),
   durationMinutes: z.number().int().min(15).max(360),
   maxCapacity: z.number().int().min(1).max(DEFAULT_CLASS_CAPACITY).optional(),
 });

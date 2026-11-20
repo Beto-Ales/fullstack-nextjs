@@ -1,5 +1,9 @@
 # Modelo académico (Prompt 06)
 
+## Creación de clases únicas desde administración
+
+En `/admin`, el formulario **Crear clase única** solicita fecha, hora de inicio, duración y aforo. La acción de servidor comprueba el rol y el menor límite entre la normativa vigente y 12 plazas. Tras guardar, el panel muestra la fecha y las horas de la sesión guardada en la zona de Copenhague. La confirmación puede volver a consultarse al recargar la página.
+
 ## Alcance implementado
 
 - Perfiles de alumno (`student_profiles`) vinculados a usuarios `STUDENT`.

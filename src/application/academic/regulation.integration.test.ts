@@ -125,6 +125,18 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic regulation (pos
     }
   });
 
+  it("rejects a one-off capacity above the effective regulation even below 12", async () => {
+    const version = await regulationService.publishAcademicRegulation(admin, nextRules);
+    vi.setSystemTime(new Date("2030-04-02T10:00:00Z"));
+    const payload = { localDate: "2030-04-10", startsAtLocalTime: "18:25", durationMinutes: 60 };
+    await expect(academicService.createOneOffClassSession(admin, { ...payload, maxCapacity: 3 }))
+      .rejects.toMatchObject({ code: "regulation_capacity_exceeded" });
+
+    const { classSessionId } = await academicService.createOneOffClassSession(admin, { ...payload, maxCapacity: 2 });
+    const { rows } = await client.query("select id, max_capacity, regulation_version_id from class_sessions");
+    expect(rows).toEqual([{ id: classSessionId, max_capacity: 2, regulation_version_id: version.id }]);
+  });
+
   it("keeps prior booking and cancellation decisions while applying the new limit, capacity and notice", async () => {
     const oldSessionId = await createSession("2030-04-10");
     const otherSessionId = await createSession("2030-04-11");

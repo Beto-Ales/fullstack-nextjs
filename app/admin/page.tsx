@@ -1,7 +1,14 @@
+import { and, eq, isNull } from "drizzle-orm";
+import { DateTime } from "luxon";
+import { ZodError } from "zod";
 import { logoutAction } from "@/src/interfaces/auth/actions/logout";
 import { requireRole } from "@/src/interfaces/auth/session";
 import { db } from "@/src/infrastructure/db/client";
-import { studentProfiles } from "@/src/infrastructure/db/schema";
+import { classSessions, studentProfiles } from "@/src/infrastructure/db/schema";
+import { createOneOffClassSessionAction } from "@/src/interfaces/academic/actions";
+import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { DEFAULT_CLASS_CAPACITY } from "@/src/domain/academic/constants";
+import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { getCreditOverview } from "@/src/application/credits/credit-service";
 import { grantManualCreditsAction, withdrawManualCreditsAction } from "@/src/interfaces/credits/actions";
 import { redirect } from "next/navigation";
@@ -12,6 +19,29 @@ import Link from "next/link";
 type AdminPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
+
+async function createOneOffClassFormAction(formData: FormData) {
+  "use server";
+
+  await requireRole("SUPER_ADMIN");
+  let classSessionId: string;
+  try {
+    ({ classSessionId } = await createOneOffClassSessionAction({
+      localDate: formData.get("localDate"),
+      startsAtLocalTime: formData.get("startsAtLocalTime"),
+      durationMinutes: Number(formData.get("durationMinutes")),
+      maxCapacity: Number(formData.get("maxCapacity")),
+    }));
+  } catch (error) {
+    const message = error instanceof ZodError
+      ? error.issues.some(({ path }) => path[0] === "maxCapacity")
+        ? `El aforo debe ser un número entero entre 1 y ${DEFAULT_CLASS_CAPACITY}.`
+        : "Revisa la fecha, la hora y la duración de la clase."
+      : getPublicErrorMessage(error);
+    redirect(`/admin?classCreationError=${encodeURIComponent(message)}`);
+  }
+  redirect(`/admin?createdClassSession=${encodeURIComponent(classSessionId)}`);
+}
 
 async function grantCreditsFormAction(formData: FormData) {
   "use server";
@@ -50,6 +80,20 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
   const query = (await searchParams) ?? {};
   const selectedStudentProfileId = typeof query.studentProfileId === "string" ? query.studentProfileId : undefined;
   const errorMessage = typeof query.error === "string" ? query.error : undefined;
+  const classCreationError = typeof query.classCreationError === "string" ? query.classCreationError : undefined;
+  const createdClassSessionId = typeof query.createdClassSession === "string" ? query.createdClassSession : undefined;
+  const regulation = await getCurrentAcademicRegulation(user);
+  const capacityLimit = Math.min(regulation.maxClassCapacity, DEFAULT_CLASS_CAPACITY);
+  const [createdClass] = createdClassSessionId
+    ? await db.select({
+      localDate: classSessions.localDate,
+      startsAtUtc: classSessions.startsAtUtc,
+      endsAtUtc: classSessions.endsAtUtc,
+      maxCapacity: classSessions.maxCapacity,
+    }).from(classSessions)
+      .where(and(eq(classSessions.id, createdClassSessionId), isNull(classSessions.templateId)))
+      .limit(1)
+    : [];
 
   const students = await db
     .select({
@@ -72,6 +116,38 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
       <h1>Área de administración</h1>
       <p>Sesión iniciada como: {user.email}</p>
       <p><Link href="/normativa">Consultar y gestionar la normativa</Link></p>
+      <section aria-labelledby="one-off-class">
+        <h2 id="one-off-class">Crear clase única</h2>
+        <p>La fecha y la hora se interpretan en la zona de Copenhague.</p>
+        {classCreationError && <p role="alert">{classCreationError}</p>}
+        {createdClass && (
+          <p role="status">
+            Clase única creada para el {createdClass.localDate} de{" "}
+            {DateTime.fromJSDate(createdClass.startsAtUtc, { zone: CENTER_TIME_ZONE }).toFormat("HH:mm")} a{" "}
+            {DateTime.fromJSDate(createdClass.endsAtUtc, { zone: CENTER_TIME_ZONE }).toFormat("HH:mm")}.
+            {" "}Aforo de {createdClass.maxCapacity} plazas.
+          </p>
+        )}
+        <form action={createOneOffClassFormAction}>
+          <div>
+            <label htmlFor="class-local-date">Fecha de la clase</label>{" "}
+            <input id="class-local-date" name="localDate" type="date" required />
+          </div>
+          <div>
+            <label htmlFor="class-local-time">Hora de inicio</label>{" "}
+            <input id="class-local-time" name="startsAtLocalTime" type="time" required />
+          </div>
+          <div>
+            <label htmlFor="class-duration">Duración (minutos)</label>{" "}
+            <input id="class-duration" name="durationMinutes" type="number" min={15} max={360} defaultValue={60} required />
+          </div>
+          <div>
+            <label htmlFor="class-capacity">Aforo</label>{" "}
+            <input id="class-capacity" name="maxCapacity" type="number" min={1} max={capacityLimit} defaultValue={capacityLimit} required />
+          </div>
+          <button type="submit">Guardar clase única</button>
+        </form>
+      </section>
       <h2>Créditos</h2>
       {errorMessage ? (
         <p role="alert" aria-live="polite">
