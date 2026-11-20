@@ -113,3 +113,59 @@ export async function seedHabitualCreditScenario(
   return { profileId, habitualSessionId, habitualReservationId, recoverySessionId, regulationVersionId: regulation.id,
     habitualDate: habitualDates[2].toISODate()!, recoveryDate: recoveryDate.toISODate()! };
 }
+
+export async function seedRecoveryCapacityScenario(
+  fixture: { client: Client; sessionIds: string[] },
+  studentUserIds: [string, string],
+  occupiedUserId: string,
+) {
+  const { client, sessionIds } = fixture;
+  const now = DateTime.now().setZone(CENTER_TIME_ZONE);
+  const { rows: [regulation] } = await client.query<{ id: string }>(
+    "select id from academic_regulations where effective_from <= $1 order by effective_from desc limit 1",
+    [now.toISODate()],
+  );
+  if (!regulation) throw new Error("The TEST database requires the academic regulation migration.");
+
+  const profiles = [randomUUID(), randomUUID()];
+  const occupiedProfile = randomUUID();
+  await client.query(
+    `insert into student_profiles (id, user_id, first_name, last_name)
+     select profile_id, user_id, 'E2E', 'Recovery'
+     from unnest($1::text[], $2::text[]) as student(profile_id, user_id)`,
+    [[...profiles, occupiedProfile], [...studentUserIds, occupiedUserId]],
+  );
+  const grantIds = [randomUUID(), randomUUID()];
+  await client.query(
+    `insert into credit_ledger_movements
+       (id, student_profile_id, movement_type, amount, expires_at, source_grant_movement_id, idempotency_key, regulation_version_id)
+     select grant_id, profile_id, 'MANUAL_GRANT', 1, $3, grant_id, 'e2e-grant:' || grant_id, $4
+     from unnest($1::text[], $2::text[]) as credit(grant_id, profile_id)`,
+    [grantIds, profiles, now.plus({ months: 2 }).toJSDate(), regulation.id],
+  );
+
+  async function createSession(daysAhead: number) {
+    const start = now.plus({ days: daysAhead }).startOf("day").set({ hour: 14, minute: 25 });
+    const id = randomUUID();
+    sessionIds.push(id);
+    await client.query(
+      `insert into class_sessions (id, local_date, starts_at_utc, ends_at_utc, max_capacity, regulation_version_id)
+       values ($1, $2, $3, $4, 1, $5)`,
+      [id, start.toISODate(), start.toJSDate(), start.plus({ hours: 1 }).toJSDate(), regulation.id],
+    );
+    return { id, timestamp: start.toJSDate().toISOString() };
+  }
+
+  const full = await createSession(20);
+  const blocked = await createSession(21);
+  const contested = await createSession(22);
+  await client.query(
+    "insert into class_reservations (id, class_session_id, student_profile_id, regulation_version_id) values ($1, $2, $3, $4)",
+    [randomUUID(), full.id, occupiedProfile, regulation.id],
+  );
+  await client.query(
+    "insert into session_capacity_blocks (id, class_session_id, blocked_spots, regulation_version_id) values ($1, $2, 1, $3)",
+    [randomUUID(), blocked.id, regulation.id],
+  );
+  return { profiles, grantIds, full, blocked, contested };
+}

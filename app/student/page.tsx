@@ -7,7 +7,7 @@ import {
   listFutureRecoveryOptionsAction,
   reserveRecoveryAction,
 } from "@/src/interfaces/recovery/actions";
-import { getPublicErrorMessage } from "@/src/infrastructure/errors";
+import { getPublicErrorMessage, isApplicationError } from "@/src/infrastructure/errors";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
@@ -38,7 +38,10 @@ async function reserveRecoveryFormAction(formData: FormData) {
   try {
     await reserveRecoveryAction({ classSessionId });
   } catch (error) {
-    redirect(`/student?error=${encodeURIComponent(getPublicErrorMessage(error))}`);
+    const message = isApplicationError(error) && error.code === "no_spots_available"
+      ? "La plaza ya no está disponible."
+      : getPublicErrorMessage(error);
+    redirect(`/student?error=${encodeURIComponent(message)}`);
   }
   redirect("/student?recovery=reserved");
 }

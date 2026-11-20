@@ -200,6 +200,13 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
 - Cada evaluación se registra en la transacción de cancelación con la versión aplicada. Las correcciones de asistencia se tienen en cuenta para las decisiones siguientes.
 - El código y la documentación anteriores contaban 168 horas y reiniciaban la racha con `ABSENT`. Los resultados de esas operaciones se conservan como se registraron.
 
+La [especificación general](../planificacion_general.md#cancelaciones-consecutivas) difiere en dos puntos que quedan por conciliar.
+
+- La especificación permite que las tres primeras cancelaciones consecutivas generen crédito. El código vigente solo evalúa como candidata la tercera, antes de aplicar los demás límites.
+- La especificación indica que una ausencia rompe la racha. El código vigente mantiene la racha ante `ABSENT` y la reinicia con una asistencia efectiva.
+
+Ambos casos se evalúan en [`evaluateCancellationSequence`](../src/domain/academic/cancellation-rules.ts). La fase 7 usa créditos ya concedidos para verificar las recuperaciones y conserva las reglas de concesión y los movimientos históricos.
+
 ## Detección de ausencias
 
 - Para sesiones finalizadas sin registro vigente de asistencia/corrección, se inserta `ABSENT`.
@@ -276,4 +283,4 @@ Para localizar sesiones concretas fuera de ese informe, consultar `class_session
 
 La revisión en solo lectura encontró un único conflicto entre las cinco sesiones de TEST. La sesión del 13 de enero de 2099 coincide con la fixture de `habitual-assignment.integration.test.ts` en plantilla, fechas asociadas, aforo y reservas. Hay una reserva confirmada, cero bloqueos y un alumno habitual pendiente para una capacidad de una plaza. Ninguna sesión excede el aforo contando solo reservas confirmadas y bloqueos. DEV local no contiene sesiones.
 
-`SUPER_ADMIN` dispone de las acciones de servidor `createReservationAction` para asignar una plaza ordinaria disponible y `updateClassSessionAction` para ampliar el aforo si procede dentro del máximo vigente. La edición queda registrada. El panel actual permite inscribir en un curso o clase única. Una vista de incidencias y un formulario para resolver manualmente una sesión recurrente concreta requerirían desarrollo, al igual que cualquier desempate automático. El generador conserva las reservas existentes.
+`SUPER_ADMIN` dispone de las acciones de servidor `createReservationAction` para asignar una plaza ordinaria disponible y `updateClassSessionAction` para ampliar el aforo si procede dentro del máximo vigente. La edición queda registrada. El panel actual permite inscribir en un curso o clase única. La vista de incidencias y la resolución manual de sesiones recurrentes desde el panel quedan para la fase 9 del [plan general](../planificacion_general.md). El desempate automático requiere una decisión propia. El generador conserva las reservas existentes.

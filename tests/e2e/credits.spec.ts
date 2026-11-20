@@ -1,5 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
-import { seedHabitualCreditScenario, withCreditsAccount } from "./credits-fixtures";
+import { expect, test, type Page, type Request } from "@playwright/test";
+import { seedHabitualCreditScenario, seedRecoveryCapacityScenario, withCreditsAccount } from "./credits-fixtures";
 
 async function login(page: Page, email: string, password: string) {
   await page.goto("/login");
@@ -111,6 +111,81 @@ test.describe("credits flows", () => {
       await page.reload();
       await expect(page.getByText(/RECOVERY_REFUND/)).toHaveCount(1);
       await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+    });
+  });
+
+  test("hides unavailable classes and confirms only one recovery when two students request the last seat", async ({ page, browser, baseURL }) => {
+    await withCreditsAccount("STUDENT", async (first) => {
+      await withCreditsAccount("STUDENT", async (second) => {
+        await withCreditsAccount("STUDENT", async (occupant) => {
+          const scenario = await seedRecoveryCapacityScenario(first, [first.userId, second.userId], occupant.userId);
+          const otherContext = await browser.newContext({ baseURL });
+          try {
+            const otherPage = await otherContext.newPage();
+            const pages = [page, otherPage];
+            await Promise.all([login(page, first.email, first.password), login(otherPage, second.email, second.password)]);
+
+            const options = pages.map((tab) => tab.getByRole("region", { name: "Clases futuras disponibles" }));
+            const lastSeat = options.map((list) => list.getByRole("listitem").filter({ hasText: scenario.contested.timestamp }));
+            for (const [index, list] of options.entries()) {
+              await expect(pages[index].getByText("Disponibles: 1", { exact: true })).toBeVisible();
+              await expect(list.getByRole("listitem").filter({ hasText: scenario.full.timestamp })).toHaveCount(0);
+              await expect(list.getByRole("listitem").filter({ hasText: scenario.blocked.timestamp })).toHaveCount(0);
+              await expect(lastSeat[index]).toContainText("plazas: 1");
+            }
+
+            // Hold both real form submissions until both browsers have sent their requests.
+            let releaseRequests!: () => void;
+            const gate = new Promise<void>((resolve) => { releaseRequests = resolve; });
+            const studentPath = (url: URL) => url.pathname === "/student";
+            const isRecoveryPost = (request: Request) =>
+              request.method() === "POST" && studentPath(new URL(request.url()));
+            await Promise.all(pages.map((tab) => tab.route(studentPath, async (route) => {
+              if (isRecoveryPost(route.request())) await gate;
+              await route.continue();
+            })));
+            const posts = pages.map((tab) => tab.waitForRequest(isRecoveryPost, { timeout: 10_000 }));
+            await Promise.all([
+              Promise.all(posts).finally(releaseRequests),
+              ...lastSeat.map((item) => item.getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" }).click()),
+            ]);
+
+            // Both panels must settle before reading the database.
+            await Promise.all(pages.map((tab) => expect(tab.getByRole("main").getByRole("status")
+              .or(tab.getByRole("main").getByRole("alert"))).toBeVisible()));
+            const { rows: reservations } = await first.client.query(
+              "select id, student_profile_id, origin, status from class_reservations where class_session_id = $1",
+              [scenario.contested.id],
+            );
+            expect(reservations).toHaveLength(1);
+            const [reservation] = reservations;
+            expect(reservation).toMatchObject({ status: "CONFIRMED", origin: "MAKEUP" });
+            expect(scenario.profiles).toContain(reservation.student_profile_id);
+            const winner = scenario.profiles.indexOf(reservation.student_profile_id);
+            const loser = 1 - winner;
+            const { rows: debits } = await first.client.query(
+              `select student_profile_id, amount, related_reservation_id, source_grant_movement_id
+               from credit_ledger_movements where student_profile_id = any($1::text[]) and movement_type = 'RECOVERY_CONSUMPTION'`,
+              [scenario.profiles],
+            );
+            expect(debits).toEqual([{
+              student_profile_id: scenario.profiles[winner], amount: 1,
+              related_reservation_id: reservation.id, source_grant_movement_id: scenario.grantIds[winner],
+            }]);
+            await expect(pages[winner].getByRole("status")).toHaveText("Recuperación reservada.");
+            await expect(pages[winner].getByText("Disponibles: 0", { exact: true })).toBeVisible();
+            await expect(pages[winner].getByRole("region", { name: "Mis recuperaciones" })
+              .getByRole("listitem").filter({ hasText: scenario.contested.timestamp })).toContainText("estado: CONFIRMED");
+            await expect(pages[loser].getByRole("main").getByRole("alert")).toHaveText("La plaza ya no está disponible.");
+            await expect(pages[loser].getByText("Disponibles: 1", { exact: true })).toBeVisible();
+            await expect(pages[loser].getByRole("region", { name: "Mis recuperaciones" })
+              .getByRole("listitem").filter({ hasText: scenario.contested.timestamp })).toHaveCount(0);
+            await Promise.all(lastSeat.map((item) => expect(item).toHaveCount(0)));
+          } finally {
+            await otherContext.close();
+          }
+        });
+      });
     });
   });
 
