@@ -263,6 +263,15 @@ Se incluyen pruebas de:
 - **Validación de cierre.** Se revisó el diff desde `cb2b29d` y se confirmó que el saldo y los vencimientos usan los mismos remanentes. El consumo FIFO sigue el orden por vencimiento, fecha de concesión e identificador. La devolución conserva el vencimiento original y solo restaura saldo si sigue vigente. En esta revisión pasaron 6 E2E de Chromium y 30 pruebas de Vitest de FIFO, créditos y recuperaciones. Las pruebas con base de datos usaron PostgreSQL TEST aislado. También pasaron TypeScript y lint, con tres avisos preexistentes. Estas ejecuciones se añaden a las suites completas del incremento anterior.
 - **Cierre de fase 08.** Queda validado el [alcance del panel del estudiante](../planificacion_general.md#10-panel-del-estudiante) con próximas clases, calendario, horarios, cancelaciones, saldo, vencimientos, historiales, búsqueda de recuperaciones y normativa. La decisión sobre la racha y la propuesta de revisión visual transversal siguen pendientes por separado.
 
+## Fase 09 — Calendario semanal global
+
+- `/admin` requiere `SUPER_ADMIN`. El calendario de solo lectura comparte con el panel del alumno la semana de lunes a domingo en `Europe/Copenhagen`, la navegación y el formato horario. Incluye las sesiones de cursos y las clases únicas de la semana elegida.
+- Por sesión se muestran el aforo efectivo según la normativa vigente, las reservas confirmadas, los bloqueos activos y las plazas libres. Para sesiones recurrentes futuras de cursos activos se cuentan los alumnos con asignación vigente que siguen sin reserva. La indicación de incidencia aparece si superan las plazas libres.
+- Un alumno que canceló voluntariamente su reserva ordinaria para esa fecha conserva su inscripción habitual. El calendario excluye ese caso del recuento de pendientes y muestra la plaza liberada.
+- El E2E `tests/e2e/admin-calendar.spec.ts` comprueba navegación y estado vacío, el límite local entre domingo y lunes, las plazas libres, los bloqueos activos, la incidencia de aforo, el efecto de una cancelación voluntaria y el rechazo de acceso a un alumno.
+- Pasaron 106 pruebas de Vitest y 20 E2E de Chromium en PostgreSQL TEST aislado. También pasaron las dos pruebas focalizadas de calendarios, con un caso de aforo almacenado superior al límite vigente. TypeScript pasó y el lint terminó sin errores, con tres avisos preexistentes. La fixture de 2099 se verificó en solo lectura y conserva su reserva confirmada.
+- El siguiente pendiente del [apartado 11](../planificacion_general.md#11-panel-administrativo) es mostrar los alumnos inscritos por sesión. Los desempates, las discrepancias sobre la racha y la revisión visual transversal siguen pendientes por separado.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

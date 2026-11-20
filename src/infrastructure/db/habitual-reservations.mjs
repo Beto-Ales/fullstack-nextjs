@@ -9,13 +9,22 @@ export async function lockTemplateAssignments(tx, templateId) {
   await tx.execute(sql`select pg_advisory_xact_lock(903000044, hashtext(${templateId}))`);
 }
 
+/** @param {string | import("drizzle-orm").SQLWrapper} classSessionId */
+export function sessionUsageCounts(classSessionId) {
+  return {
+    confirmedReservations: /** @type {import("drizzle-orm").SQL<number>} */ (sql`(
+      select count(*)::int from class_reservations where class_session_id = ${classSessionId} and status = 'CONFIRMED'
+    )`),
+    blockedSpots: /** @type {import("drizzle-orm").SQL<number>} */ (sql`(
+      select coalesce(sum(blocked_spots), 0)::int from session_capacity_blocks where class_session_id = ${classSessionId} and is_active
+    )`),
+  };
+}
+
 /** @param {QueryExecutor} tx @param {string} classSessionId */
 export async function readSessionUsage(tx, classSessionId) {
-  const result = await tx.execute(sql`
-    select
-      (select count(*)::int from class_reservations where class_session_id = ${classSessionId} and status = 'CONFIRMED') as "confirmedReservations",
-      (select coalesce(sum(blocked_spots), 0)::int from session_capacity_blocks where class_session_id = ${classSessionId} and is_active) as "blockedSpots"
-  `);
+  const { confirmedReservations, blockedSpots } = sessionUsageCounts(classSessionId);
+  const result = await tx.execute(sql`select ${confirmedReservations} as "confirmedReservations", ${blockedSpots} as "blockedSpots"`);
   return /** @type {{ confirmedReservations: number, blockedSpots: number }} */ (result.rows[0]);
 }
 
@@ -52,10 +61,10 @@ export async function reserveHabitualSeats(tx, session, studentProfileIds) {
   return { reserved: pending.length, capacityConflict: false };
 }
 
-/** @param {QueryExecutor} tx @param {{ templateId: string, localDate: string }} session */
-async function readHabitualStudentIds(tx, session) {
-  const assignments = await tx.execute(sql`
-    select distinct a.student_profile_id
+/** @param {{ templateId: string | import("drizzle-orm").SQLWrapper, localDate: string | import("drizzle-orm").SQLWrapper }} session */
+export function activeHabitualStudents(session) {
+  return sql`
+    select distinct a.student_profile_id, p.user_id
     from student_template_assignments a
     join student_profiles p on p.id = a.student_profile_id
     join users u on u.id = p.user_id
@@ -63,7 +72,12 @@ async function readHabitualStudentIds(tx, session) {
       and a.effective_from <= ${session.localDate}
       and (a.effective_to is null or a.effective_to >= ${session.localDate})
       and u.status = 'ACTIVE'
-  `);
+  `;
+}
+
+/** @param {QueryExecutor} tx @param {{ templateId: string, localDate: string }} session */
+async function readHabitualStudentIds(tx, session) {
+  const assignments = await tx.execute(activeHabitualStudents(session));
   return /** @type {{ student_profile_id: string }[]} */ (assignments.rows).map((row) => row.student_profile_id);
 }
 

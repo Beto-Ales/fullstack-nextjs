@@ -10,12 +10,12 @@ import { getPublicErrorMessage, isApplicationError } from "@/src/infrastructure/
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { DateTime } from "luxon";
-import { z } from "zod";
 import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import {
   listStudentCalendarReservations, listStudentClassHistory, listStudentHabitualSchedules, listUpcomingOrdinaryReservations,
 } from "@/src/application/academic/academic-service";
 import { cancelReservationAction } from "@/src/interfaces/academic/actions";
+import { resolveCenterWeek } from "@/src/domain/time/center-week";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { ChangePasswordForm } from "./change-password-form";
 import { ClassHistory } from "./class-history";
@@ -76,12 +76,8 @@ async function cancelRecoveryFormAction(week: string | null, formData: FormData)
 export default async function StudentHomePage({ searchParams }: StudentHomePageProps) {
   const user = await requireRole("STUDENT");
   const query = (await searchParams) ?? {};
-  const requestedWeek = z.iso.date().safeParse(query.week);
   const now = DateTime.now().setZone(CENTER_TIME_ZONE);
-  const currentWeek = now.startOf("week");
-  const week = requestedWeek.success
-    ? DateTime.fromISO(requestedWeek.data, { zone: CENTER_TIME_ZONE }).startOf("week")
-    : currentWeek;
+  const { currentWeek, week } = resolveCenterWeek(query.week, now);
   const weekParam = week.equals(currentWeek) ? null : week.toISODate();
   const cancelClass = cancelClassFormAction.bind(null, weekParam);
   const reserveRecovery = reserveRecoveryFormAction.bind(null, weekParam);
