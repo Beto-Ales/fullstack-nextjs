@@ -1,4 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
+import { parseAndValidateTestDatabaseUrl } from "./src/test-support/postgres-test-db";
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+if (testDatabaseUrl) parseAndValidateTestDatabaseUrl(testDatabaseUrl);
+const host = testDatabaseUrl ? "127.0.0.1" : "localhost";
+const port = Number(process.env.E2E_PORT ?? 3000);
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid E2E_PORT.");
+const baseURL = `http://${host}:${port}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -7,7 +15,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: "list",
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL,
     trace: "on-first-retry",
   },
   projects: [
@@ -17,12 +25,12 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run dev",
-    url: "http://localhost:3000",
-    reuseExistingServer: !process.env.CI,
+    command: testDatabaseUrl ? `npm run dev -- --webpack --hostname ${host} --port ${port}` : `npm run dev -- --port ${port}`,
+    url: baseURL,
+    reuseExistingServer: !testDatabaseUrl && !process.env.CI,
     timeout: 120_000,
     env: {
-      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/fullstack_nextjs",
+      DATABASE_URL: testDatabaseUrl ?? "postgresql://postgres:postgres@localhost:5432/fullstack_nextjs",
     },
   },
 });

@@ -35,6 +35,7 @@ export async function loginAction(_prevState: LoginActionState, formData: FormDa
   const userAgent = headerStore.get("user-agent");
   const forwardedFor = headerStore.get("x-forwarded-for");
 
+  let redirectTo: string;
   try {
     const { authenticateUser } = await import("@/src/application/auth/auth-service");
     const authResult = await authenticateUser({
@@ -46,7 +47,7 @@ export async function loginAction(_prevState: LoginActionState, formData: FormDa
     });
 
     await setSessionCookie(authResult.sessionToken, authResult.sessionExpiresAt);
-    redirect(authResult.redirectTo);
+    redirectTo = authResult.redirectTo;
   } catch (error) {
     await clearSessionCookie();
     if (error instanceof AuthServiceError) {
@@ -61,4 +62,6 @@ export async function loginAction(_prevState: LoginActionState, formData: FormDa
     });
     return { error: AUTH_SERVICE_UNAVAILABLE_MESSAGE };
   }
+
+  redirect(redirectTo);
 }

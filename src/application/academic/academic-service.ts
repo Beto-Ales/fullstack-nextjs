@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, ne, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 
 import {
@@ -1112,6 +1112,28 @@ export async function detectAbsences(actor: Actor, input: unknown) {
       affectedProfiles: affectedProfiles.length,
     };
   });
+}
+
+export async function listUpcomingOrdinaryReservations(actor: Actor) {
+  if (actor.role !== "STUDENT") {
+    throw new ApplicationError("Forbidden", "forbidden", 403, true);
+  }
+
+  return db.select({
+    reservationId: classReservations.id,
+    localDate: classSessions.localDate,
+    startsAtUtc: classSessions.startsAtUtc,
+  }).from(classReservations)
+    .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
+    .innerJoin(studentProfiles, eq(studentProfiles.id, classReservations.studentProfileId))
+    .where(and(
+      eq(studentProfiles.userId, actor.userId),
+      eq(classReservations.origin, "ORDINARY"),
+      eq(classReservations.status, "CONFIRMED"),
+      eq(classSessions.status, "SCHEDULED"),
+      gt(classSessions.startsAtUtc, new Date()),
+    ))
+    .orderBy(classSessions.startsAtUtc, classReservations.id);
 }
 
 export async function getStudentActivityHistory(actor: Actor, input?: unknown) {

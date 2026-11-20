@@ -11,10 +11,24 @@ import { getPublicErrorMessage } from "@/src/infrastructure/errors";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { listUpcomingOrdinaryReservations } from "@/src/application/academic/academic-service";
+import { cancelReservationAction } from "@/src/interfaces/academic/actions";
 
 type StudentHomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
+
+async function cancelClassFormAction(formData: FormData) {
+  "use server";
+
+  const reservationId = String(formData.get("reservationId") ?? "");
+  try {
+    await cancelReservationAction({ reservationId });
+  } catch (error) {
+    redirect(`/student?error=${encodeURIComponent(getPublicErrorMessage(error))}`);
+  }
+  redirect("/student?class=cancelled");
+}
 
 async function reserveRecoveryFormAction(formData: FormData) {
   "use server";
@@ -22,10 +36,10 @@ async function reserveRecoveryFormAction(formData: FormData) {
   const classSessionId = String(formData.get("classSessionId") ?? "");
   try {
     await reserveRecoveryAction({ classSessionId });
-    redirect("/student?recovery=reserved");
   } catch (error) {
     redirect(`/student?error=${encodeURIComponent(getPublicErrorMessage(error))}`);
   }
+  redirect("/student?recovery=reserved");
 }
 
 async function cancelRecoveryFormAction(formData: FormData) {
@@ -44,11 +58,15 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
   const user = await requireRole("STUDENT");
   const query = (await searchParams) ?? {};
   const actionError = typeof query.error === "string" ? query.error : undefined;
+  const confirmation = query.class === "cancelled"
+    ? "Clase cancelada."
+    : query.recovery === "reserved" ? "Recuperación reservada." : undefined;
   const regulation = await getCurrentAcademicRegulation(user);
   const creditOverview = await getCreditOverview({ userId: user.userId, role: user.role });
   const nextUsableCredit = await getNextUsableCreditForActor({ userId: user.userId, role: user.role });
   const recoveryOptions = await listFutureRecoveryOptionsAction();
   const recoveryHistory = await getRecoveryHistoryAction();
+  const upcomingClasses = await listUpcomingOrdinaryReservations(user);
 
   return (
     <main>
@@ -60,6 +78,21 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
           {actionError}
         </p>
       ) : null}
+      {confirmation && <p role="status">{confirmation}</p>}
+      <section aria-labelledby="upcoming-classes">
+        <h2 id="upcoming-classes">Mis próximas clases</h2>
+        <ul>
+          {upcomingClasses.map((reservation) => (
+            <li key={reservation.reservationId}>
+              {reservation.localDate} · {reservation.startsAtUtc.toISOString()}
+              <form action={cancelClassFormAction}>
+                <input type="hidden" name="reservationId" value={reservation.reservationId} />
+                <button type="submit">Cancelar clase</button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      </section>
       <h2>Créditos</h2>
       <p>Disponibles: {creditOverview.availableCredits}</p>
       <p>Caducados: {creditOverview.expiredCredits}</p>
@@ -75,43 +108,47 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
       </ul>
 
       <h2>Reservas de recuperación</h2>
-      <h3>Clases futuras disponibles</h3>
-      <ul>
-        {recoveryOptions.sessions.map((session) => (
-          <li key={session.id}>
-            {session.localDate} · {session.startsAtUtc.toISOString()} · plazas: {session.availableSpots} · cupo mensual:{" "}
-            {session.monthlyRecoveryRemaining}
-            {nextUsableCredit.nextUsableGrantMovementId ? (
-              <p>
-                Crédito FIFO estimado: {nextUsableCredit.nextUsableGrantMovementId}
-                {nextUsableCredit.nextUsableExpiresAt ? ` (caduca ${nextUsableCredit.nextUsableExpiresAt.toISOString()})` : ""}
-              </p>
-            ) : (
-              <p>Sin créditos utilizables.</p>
-            )}
-            <form action={reserveRecoveryFormAction}>
-              <input type="hidden" name="classSessionId" value={session.id} />
-              <button type="submit">Reservar recuperación (consume 1 crédito)</button>
-            </form>
-          </li>
-        ))}
-      </ul>
-
-      <h3>Mis recuperaciones</h3>
-      <ul>
-        {recoveryHistory.reservations.map((reservation) => (
-          <li key={reservation.reservationId}>
-            {reservation.classLocalDate} · {reservation.classStartsAtUtc.toISOString()} · estado: {reservation.status}
-            {reservation.status === "CONFIRMED" ? (
-              <form action={cancelRecoveryFormAction}>
-                <input type="hidden" name="reservationId" value={reservation.reservationId} />
-                <p>El crédito se devuelve si sigue vigente y cancelas con al menos {regulation.cancellationNoticeDays} días naturales de antelación.</p>
-                <button type="submit">Cancelar recuperación</button>
+      <section aria-labelledby="available-recoveries">
+        <h3 id="available-recoveries">Clases futuras disponibles</h3>
+        <ul>
+          {recoveryOptions.sessions.map((session) => (
+            <li key={session.id}>
+              {session.localDate} · {session.startsAtUtc.toISOString()} · plazas: {session.availableSpots} · cupo mensual:{" "}
+              {session.monthlyRecoveryRemaining}
+              {nextUsableCredit.nextUsableGrantMovementId ? (
+                <p>
+                  Crédito FIFO estimado: {nextUsableCredit.nextUsableGrantMovementId}
+                  {nextUsableCredit.nextUsableExpiresAt ? ` (caduca ${nextUsableCredit.nextUsableExpiresAt.toISOString()})` : ""}
+                </p>
+              ) : (
+                <p>Sin créditos utilizables.</p>
+              )}
+              <form action={reserveRecoveryFormAction}>
+                <input type="hidden" name="classSessionId" value={session.id} />
+                <button type="submit">Reservar recuperación (consume 1 crédito)</button>
               </form>
-            ) : null}
-          </li>
-        ))}
-      </ul>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section aria-labelledby="my-recoveries">
+        <h3 id="my-recoveries">Mis recuperaciones</h3>
+        <ul>
+          {recoveryHistory.reservations.map((reservation) => (
+            <li key={reservation.reservationId}>
+              {reservation.classLocalDate} · {reservation.classStartsAtUtc.toISOString()} · estado: {reservation.status}
+              {reservation.status === "CONFIRMED" ? (
+                <form action={cancelRecoveryFormAction}>
+                  <input type="hidden" name="reservationId" value={reservation.reservationId} />
+                  <p>El crédito se devuelve si sigue vigente y cancelas con al menos {regulation.cancellationNoticeDays} días naturales de antelación.</p>
+                  <button type="submit">Cancelar recuperación</button>
+                </form>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      </section>
 
       <form action={logoutAction}>
         <button type="submit">Cerrar sesión</button>

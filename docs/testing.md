@@ -180,12 +180,14 @@ Se incluyen pruebas de:
 
 ## E2E de créditos
 
-- Se añadió `tests/e2e/credits.spec.ts`.
-- Requiere usuarios de prueba explícitos:
-  - `E2E_STUDENT_EMAIL` / `E2E_STUDENT_PASSWORD`
-  - `E2E_ADMIN_EMAIL` / `E2E_ADMIN_PASSWORD`
-- Si faltan variables, los tests se marcan como omitidos.
-- El spec también valida presencia de la sección de recuperaciones en área de alumno.
+- `tests/e2e/credits.spec.ts` usa cuentas sintéticas de alumno y administrador creadas por la fixture. Ejecutar contra una base PostgreSQL TEST local y aislada con las migraciones hasta 0006. Pasar su URL en `TEST_DATABASE_URL` antes de ejecutar `npm run test:e2e`. Playwright dirige Next.js a esa base y puede usar un puerto libre indicado con `E2E_PORT`. Si falta `TEST_DATABASE_URL`, se omiten los casos de créditos.
+- El caso del alumno prepara dos cancelaciones habituales previas y calcula las fechas a partir de la antelación publicada en Copenhague. Desde el panel, el alumno cancela la tercera clase a tiempo y comprueba la plaza liberada y el crédito concedido. Luego reserva una recuperación con una plaza libre, vuelve al panel y verifica la confirmación, el saldo actualizado y un único consumo vinculado a la concesión.
+- En Chromium pasaron los cinco E2E, incluidos el flujo del alumno y el acceso del administrador a créditos. Las comprobaciones en PostgreSQL se hicieron con datos sintéticos. Se corrigieron las redirecciones de éxito del inicio de sesión y de la reserva de recuperación que se trataban como errores.
+
+### Alcance del cierre de fase 06
+
+- El informe `postgres-credential-rotation-06-3-2-5.md` registra el cierre operativo DEV/TEST en la sección 06.3.2.13. El E2E de créditos figuraba como validación pendiente en esta matriz y ya se ejecutó. El [README](../README.md) mantiene pendiente incorporar `PROJECT_SPEC.md`. Los documentos disponibles carecen de una lista de cierre funcional de fase 06 que defina esos dos pendientes como criterios obligatorios o los asigne formalmente a una fase posterior.
+- Sigue pendiente en el [modelo académico](academic-model.md#siguiente-tarea-de-generación-de-sesiones) la política de prioridad por sobreaforo y la resolución de las sesiones afectadas.
 
 ## Matriz de pruebas (Fase 06.2)
 
@@ -220,4 +222,4 @@ Estado:
 | LOCK-CROSS-001 | Cruce reserva de recuperación vs cancelación administrativa sin estado imposible | Integración | `src/application/recovery/recovery.integration.test.ts` | Pendiente de infraestructura | `npm run test -- src/application/recovery/recovery.integration.test.ts` |
 | E2E-AUTH-001 | Guardas de autenticación y rutas protegidas | E2E | `tests/e2e/auth-guards.spec.ts` | Ejecutada correctamente | `npm run test:e2e` |
 | E2E-BASE-001 | Carga página inicial | E2E | `tests/e2e/home.spec.ts` | Ejecutada correctamente | `npm run test:e2e` |
-| E2E-CRED-001 | Flujos E2E de créditos/recuperaciones UI | E2E | `tests/e2e/credits.spec.ts` | Pendiente de infraestructura (credenciales E2E no definidas) | `E2E_STUDENT_EMAIL=... E2E_STUDENT_PASSWORD=... E2E_ADMIN_EMAIL=... E2E_ADMIN_PASSWORD=... npm run test:e2e` |
+| E2E-CRED-001 | Cancelación habitual, crédito, reserva de recuperación y saldo actualizado desde el panel | E2E | `tests/e2e/credits.spec.ts` | Ejecutada correctamente en Chromium con PostgreSQL TEST aislado | `npm run test:e2e -- tests/e2e/credits.spec.ts` con `TEST_DATABASE_URL` |
