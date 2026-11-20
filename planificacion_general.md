@@ -37,7 +37,7 @@ Fase 8 — Panel del estudiante
 
 Calendario semanal, próximas clases, historial, créditos y recuperación.
 
-Fase iniciada con el calendario semanal en `/student`. El alcance validado y lo que sigue pendiente se registran en [Calendario semanal del alumno](docs/testing.md#fase-08--calendario-semanal-del-alumno).
+El calendario semanal y los horarios habituales están disponibles en `/student`. Quedan pendientes el historial de clases con asistencias y cancelaciones y la vista de créditos próximos a caducar. [Avance y pruebas](docs/testing.md#fase-08--calendario-semanal-del-alumno).
 
 Fase 9 — Panel administrativo
 
@@ -457,5 +457,7 @@ No crear documentación duplicada innecesariamente.
 - Diseño responsive.
 - Interfaz accesible.
 - Documentación actualizada.
+
+**Propuesta pendiente de planificación.** Realizar una revisión visual transversal de los paneles y páginas compartidas. Comprobar la consistencia de navegación y estados, el diseño en móvil y escritorio y el uso con teclado. Quedan por acordar su alcance y el momento de ejecución.
 
 Este documento define los requisitos funcionales de referencia. Las decisiones técnicas definitivas deberán respetar el estado real del repositorio y quedar documentadas antes de implementar cambios importantes.

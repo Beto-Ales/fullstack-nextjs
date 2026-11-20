@@ -13,10 +13,11 @@ import Link from "next/link";
 import { DateTime } from "luxon";
 import { z } from "zod";
 import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
-import { listStudentCalendarReservations, listUpcomingOrdinaryReservations } from "@/src/application/academic/academic-service";
+import { listStudentCalendarReservations, listStudentHabitualSchedules, listUpcomingOrdinaryReservations } from "@/src/application/academic/academic-service";
 import { cancelReservationAction } from "@/src/interfaces/academic/actions";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { ChangePasswordForm } from "./change-password-form";
+import { HabitualSchedules } from "./habitual-schedules";
 import { RecoveryOptions } from "./recovery-options";
 import { WeeklyCalendar } from "./weekly-calendar";
 
@@ -93,9 +94,10 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
   const nextUsableCredit = await getNextUsableCreditForActor({ userId: user.userId, role: user.role });
   const recoveryOptions = await listFutureRecoveryOptionsAction();
   const recoveryHistory = await getRecoveryHistoryAction();
-  const [upcomingClasses, calendarReservations] = await Promise.all([
+  const [upcomingClasses, calendarReservations, habitualSchedules] = await Promise.all([
     listUpcomingOrdinaryReservations(user),
     listStudentCalendarReservations(user, week.toJSDate(), week.plus({ weeks: 1 }).toJSDate()),
+    listStudentHabitualSchedules(user, now.toISODate()!),
   ]);
 
   return (
@@ -112,6 +114,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
       {confirmation && <p role="status">{confirmation}</p>}
       <WeeklyCalendar week={week} now={now.toMillis()} reservations={calendarReservations}
         cancelClass={cancelClass} cancelRecovery={cancelRecovery} />
+      <HabitualSchedules schedules={habitualSchedules} />
       <section aria-labelledby="upcoming-classes">
         <h2 id="upcoming-classes">Mis próximas clases</h2>
         <ul>

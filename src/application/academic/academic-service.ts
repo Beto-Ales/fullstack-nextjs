@@ -1288,6 +1288,34 @@ export async function listStudentCalendarReservations(actor: Actor, start: Date,
     .orderBy(classSessions.startsAtUtc, classReservations.id);
 }
 
+export async function listStudentHabitualSchedules(actor: Actor, localDate: string) {
+  if (actor.role !== "STUDENT") {
+    throw new ApplicationError("Forbidden", "forbidden", 403, true);
+  }
+  const effectiveFrom = sql`greatest(${studentTemplateAssignments.effectiveFrom}, ${classTemplates.effectiveFrom})`;
+  const effectiveTo = sql`least(${studentTemplateAssignments.effectiveTo}, ${classTemplates.effectiveTo})`;
+
+  return db.select({
+    assignmentId: studentTemplateAssignments.id,
+    courseName: classTemplates.name,
+    isoWeekday: classTemplates.isoWeekday,
+    startsAtLocalTime: classTemplates.startsAtLocalTime,
+    durationMinutes: classTemplates.durationMinutes,
+    effectiveFrom: sql<string>`${effectiveFrom}::text`,
+    effectiveTo: sql<string | null>`${effectiveTo}::text`,
+    upcoming: sql<boolean>`${effectiveFrom} > ${localDate}::date`,
+  }).from(studentTemplateAssignments)
+    .innerJoin(studentProfiles, eq(studentProfiles.id, studentTemplateAssignments.studentProfileId))
+    .innerJoin(classTemplates, eq(classTemplates.id, studentTemplateAssignments.templateId))
+    .where(and(
+      eq(studentProfiles.userId, actor.userId),
+      eq(classTemplates.status, "ACTIVE"),
+      // A bounded assignment can be marked ENDED before its last valid day.
+      sql`(${effectiveTo} is null or ${effectiveTo} >= greatest(${effectiveFrom}, ${localDate}::date))`,
+    ))
+    .orderBy(classTemplates.isoWeekday, classTemplates.startsAtLocalTime, classTemplates.name, effectiveFrom, studentTemplateAssignments.id);
+}
+
 export async function getStudentActivityHistory(actor: Actor, input?: unknown) {
   const payload = cancellationHistorySchema.parse(input ?? {});
   let studentProfileId = payload.studentProfileId;

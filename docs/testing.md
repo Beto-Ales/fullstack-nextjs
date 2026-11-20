@@ -239,7 +239,14 @@ Se incluyen pruebas de:
 - El E2E `tests/e2e/student-calendar.spec.ts` cubre una clase habitual y una recuperación confirmada en la semana actual, navegación en ambos sentidos, estado vacío y un domingo y un lunes locales que comparten fecha UTC. Verifica que quedan fuera las reservas de otro alumno y las canceladas. En una ventana de 360 px comprueba que el calendario cabe sin desplazamiento horizontal.
 - Tras cancelar una recuperación desde el calendario, el panel conserva la semana elegida y actualiza su contenido. Las acciones de cancelación, el flujo de créditos y la búsqueda paginada de recuperaciones se conservan.
 - Pasaron 106 pruebas de Vitest y 16 E2E de Chromium en PostgreSQL TEST aislado, incluidos el calendario y las regresiones de cancelación, créditos y recuperaciones. TypeScript pasó y lint terminó sin errores, con tres avisos preexistentes.
-- Según el [plan del panel del estudiante](../planificacion_general.md#10-panel-del-estudiante), quedan pendientes la vista de horarios habituales, el historial de clases con asistencias y cancelaciones y la vista de créditos próximos a caducar. La fase 8 continúa abierta. Las diferencias sobre la racha quedan en el [modelo académico](academic-model.md#cancelaciones-y-secuencias) y la vista administrativa de incidencias sigue en fase 9.
+- Según el [plan del panel del estudiante](../planificacion_general.md#10-panel-del-estudiante), quedan pendientes el historial de clases con asistencias y cancelaciones y la vista de créditos próximos a caducar. La fase 8 continúa abierta. Las diferencias sobre la racha quedan en el [modelo académico](academic-model.md#cancelaciones-y-secuencias) y la vista administrativa de incidencias sigue en fase 9.
+
+### Horarios habituales del alumno
+
+- `/student` consulta solo las asignaciones del usuario autenticado. La vigencia se calcula con el intervalo común de la inscripción y del curso, en la fecha local de Copenhague. El panel distingue «Vigente» de «Próximo» y oculta las inscripciones vencidas. Muestra curso, día e intervalo de hora local.
+- El E2E `tests/e2e/student-schedules.spec.ts` cancela una clase desde el calendario. La sesión desaparece, el horario habitual permanece y PostgreSQL conserva las fechas de la inscripción. También comprueba la exclusión de asignaciones ajenas y vencidas, la identificación de un curso futuro y el estado vacío.
+- Pasaron 106 pruebas de Vitest y 17 E2E en Chromium con PostgreSQL TEST aislado. TypeScript pasó y lint terminó sin errores, con tres avisos preexistentes.
+- El [plan](../planificacion_general.md#19-criterios-generales-de-calidad) exige diseño responsive e interfaz accesible. Una revisión visual transversal queda como propuesta pendiente de planificación.
 
 ## Matriz de pruebas (Fase 06.2)
 
