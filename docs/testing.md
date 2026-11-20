@@ -185,6 +185,12 @@ Se incluyen pruebas de:
 - La integración de normativa verifica el rechazo de un aforo de 3 cuando el límite vigente es 2 y la aceptación de una sola sesión con capacidad de 2. Se reutilizan las pruebas académicas del límite de 12 reservas por sesión.
 - Pasaron los 8 E2E en Chromium y 13 pruebas focalizadas de integración académica y normativa en PostgreSQL TEST aislado. También pasaron TypeScript y el lint de los archivos del cambio.
 
+## Cursos semanales e inscripciones
+
+- `tests/e2e/course-enrollment.spec.ts` crea desde `/admin` un curso semanal que empieza más allá del horizonte móvil por defecto. Comprueba todas las fechas locales y horas UTC del periodo fijo, además de la inscripción ordinaria en el curso y en una clase única. Un alumno que presenta los formularios administrativos abiertos recibe una redirección a su panel y las operaciones quedan rechazadas.
+- La integración académica comprueba que un horizonte de generación ampliado conserva la fecha final, que una 13.ª alta concurrente se rechaza y que se detecta un solapamiento que comienza después de la fecha de alta. También comprueba que un alumno elegible ocupa mediante una recuperación una plaza liberada para una fecha y que las inscripciones al curso se conservan.
+- Pasaron los 10 E2E en Chromium y las 103 pruebas de Vitest con PostgreSQL TEST aislado y migrado hasta 0006. También pasaron TypeScript y el lint focalizado.
+
 ## E2E de créditos
 
 - `tests/e2e/credits.spec.ts` usa cuentas sintéticas de alumno y administrador creadas por la fixture. Ejecutar contra una base PostgreSQL TEST local y aislada con las migraciones hasta 0006. Pasar su URL en `TEST_DATABASE_URL` antes de ejecutar `npm run test:e2e`. Playwright dirige Next.js a esa base y puede usar un puerto libre indicado con `E2E_PORT`. Si falta `TEST_DATABASE_URL`, se omiten los casos de créditos.
@@ -197,6 +203,7 @@ Se incluyen pruebas de:
 
 - El informe `postgres-credential-rotation-06-3-2-5.md` registra el cierre operativo DEV/TEST en la sección 06.3.2.13. El E2E de créditos figuraba como validación pendiente en esta matriz y ya se ejecutó. El [README](../README.md) mantiene pendiente incorporar `PROJECT_SPEC.md`. Los documentos disponibles carecen de una lista de cierre funcional de fase 06 que defina esos dos pendientes como criterios obligatorios o los asigne formalmente a una fase posterior.
 - Sigue pendiente en el [modelo académico](academic-model.md#siguiente-tarea-de-generación-de-sesiones) la política de prioridad por sobreaforo y la resolución de las sesiones afectadas.
+- El [modelo de cursos confirmado](academic-model.md#modelo-de-cursos-confirmado) incluye la creación administrativa de clases únicas y cursos semanales de tres meses, la inscripción ordinaria y el límite de 12 inscritos simultáneos. El cierre funcional sigue abierto por la gestión de cuentas, el cambio de contraseña del alumno, la política de bajas y la resolución de sesiones afectadas por sobreaforo.
 
 ## Matriz de pruebas (Fase 06.2)
 

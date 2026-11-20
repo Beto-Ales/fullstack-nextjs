@@ -15,9 +15,11 @@ import {
   createClassTemplateSchema,
   createOneOffSessionSchema,
   createStudentProfileSchema,
+  createWeeklyCourseSchema,
   detectAbsencesSchema,
   endStudentTemplateAssignmentSchema,
   generateSessionsSchema,
+  ordinaryEnrollmentSchema,
   recordAttendanceSchema,
   reserveSeatSchema,
   setClassTemplateStatusSchema,
@@ -28,7 +30,9 @@ import { lockStudentProfile, tryGenerateAutoCreditFromCancellation } from "@/src
 import { cancelRecoveriesForCancelledSession, cancelRecoveryReservation, reserveRecovery } from "@/src/application/recovery/recovery-service";
 import { calculateAvailableSpots } from "@/src/domain/academic/availability";
 import { classifyCancellationTiming, evaluateCancellationSequence, type HabitualSequenceEvent } from "@/src/domain/academic/cancellation-rules";
-import { SESSION_GENERATION_HORIZON_MONTHS } from "@/src/domain/academic/constants";
+import {
+  DEFAULT_CLASS_CAPACITY, SESSION_GENERATION_HORIZON_MONTHS, WEEKLY_COURSE_DURATION_MONTHS,
+} from "@/src/domain/academic/constants";
 import { generateRecurringSessionCandidates } from "@/src/domain/academic/recurrence";
 import { resolveLocalDateTime, toUtcDate } from "@/src/domain/time/local-datetime";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
@@ -77,6 +81,7 @@ function nowCenterTime(): DateTime {
 
 type TransactionClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type QueryExecutor = Pick<TransactionClient, "execute">;
+type AcademicRegulation = Awaited<ReturnType<typeof resolveCurrentAcademicRegulation>>;
 
 function resolveConfiguredCapacity(requested: number | undefined, maximum: number): number {
   if (requested !== undefined && requested > maximum) {
@@ -327,23 +332,48 @@ export async function createClassTemplate(actor: Actor, input: unknown) {
     throw new ApplicationError("effectiveTo must be greater than or equal to effectiveFrom.", "invalid_date_range", 400, true);
   }
 
-  const templateId = randomUUID();
   const regulation = await resolveCurrentAcademicRegulation(db);
-  await db.insert(classTemplates).values({
-    id: templateId,
-    name: payload.name,
-    isoWeekday: payload.isoWeekday,
-    startsAtLocalTime: payload.startsAtLocalTime,
-    durationMinutes: payload.durationMinutes,
-    effectiveFrom: payload.effectiveFrom,
-    effectiveTo: payload.effectiveTo ?? null,
-    category: payload.category,
+  const template = await insertClassTemplate(db, payload, regulation);
+  return { templateId: template.id };
+}
+
+async function insertClassTemplate(
+  writer: Pick<TransactionClient, "insert">,
+  payload: ReturnType<typeof createClassTemplateSchema.parse>,
+  regulation: AcademicRegulation,
+) {
+  const [template] = await writer.insert(classTemplates).values({
+    ...payload,
+    id: randomUUID(),
     maxCapacity: resolveConfiguredCapacity(payload.maxCapacity, regulation.maxClassCapacity),
     regulationVersionId: regulation.id,
     status: "ACTIVE",
-  });
+  }).returning();
+  return template;
+}
 
-  return { templateId };
+export async function createWeeklyCourse(actor: Actor, input: unknown) {
+  requireSuperAdmin(actor);
+  const payload = createWeeklyCourseSchema.parse(input);
+  const now = nowCenterTime();
+  const firstDay = DateTime.fromISO(payload.firstClassDate, { zone: CENTER_TIME_ZONE });
+  // The three-month anniversary is exclusive. Templates store the last valid day inclusive.
+  const lastDay = firstDay.plus({ months: WEEKLY_COURSE_DURATION_MONTHS }).minus({ days: 1 }).endOf("day");
+
+  return db.transaction(async (tx) => {
+    const regulation = await resolveCurrentAcademicRegulation(tx, now.toJSDate());
+    const template = await insertClassTemplate(tx, {
+      name: payload.name,
+      startsAtLocalTime: payload.startsAtLocalTime,
+      durationMinutes: payload.durationMinutes,
+      maxCapacity: payload.maxCapacity,
+      isoWeekday: firstDay.weekday,
+      effectiveFrom: payload.firstClassDate,
+      effectiveTo: lastDay.toISODate()!,
+    }, regulation);
+    const sessions = await materializeTemplateSessions(tx, template, regulation, { now, horizonEnd: lastDay });
+    return { templateId: template.id, insertedSessions: sessions.inserted };
+  });
 }
 
 export async function setClassTemplateStatus(actor: Actor, input: unknown) {
@@ -593,14 +623,63 @@ export async function cancelClassSession(actor: Actor, input: unknown) {
 
 export async function assignStudentToTemplate(actor: Actor, input: unknown) {
   requireSuperAdmin(actor);
-  const payload = assignStudentTemplateSchema.parse(input);
+  return createHabitualAssignment(assignStudentTemplateSchema.parse(input));
+}
 
+// Start dates are the only dates on which the number of simultaneous enrollments can increase.
+async function assertHabitualEnrollmentCapacity(
+  tx: TransactionClient,
+  input: { templateId: string; studentProfileId: string; effectiveFrom: string; effectiveTo?: string | null },
+) {
+  const conflict = await tx.execute(sql`
+    with course_window as (
+      select greatest(effective_from, ${input.effectiveFrom}::date) as first_day,
+        least(effective_to, ${input.effectiveTo ?? null}::date) as last_day
+      from class_templates where id = ${input.templateId}
+    ), checkpoints as (
+      select first_day as day from course_window
+      union
+      select a.effective_from from student_template_assignments a cross join course_window w
+      where a.template_id = ${input.templateId} and a.effective_from > w.first_day
+    )
+    select 1 from checkpoints c cross join course_window w
+    where (w.last_day is null or c.day <= w.last_day)
+      and (
+        select count(distinct a.student_profile_id)
+        from student_template_assignments a
+        where a.template_id = ${input.templateId}
+          and a.student_profile_id <> ${input.studentProfileId}
+          and a.effective_from <= c.day and (a.effective_to is null or a.effective_to >= c.day)
+      ) >= ${DEFAULT_CLASS_CAPACITY}
+    limit 1
+  `);
+  if (conflict.rows.length) {
+    throw new ApplicationError("El curso ya tiene 12 alumnos inscritos en el periodo solicitado.", "course_enrollment_full", 409, true);
+  }
+}
+
+async function createHabitualAssignment(
+  payload: ReturnType<typeof assignStudentTemplateSchema.parse>,
+  onlyOpenCourse = false,
+) {
   if (payload.effectiveTo && payload.effectiveTo < payload.effectiveFrom) {
     throw new ApplicationError("effectiveTo must be greater than or equal to effectiveFrom.", "invalid_date_range", 400, true);
   }
 
   return db.transaction(async (tx) => {
     await lockTemplateAssignments(tx, payload.templateId);
+    if (onlyOpenCourse) {
+      const [template] = await tx.select({
+        status: classTemplates.status, effectiveFrom: classTemplates.effectiveFrom, effectiveTo: classTemplates.effectiveTo,
+      }).from(classTemplates).where(eq(classTemplates.id, payload.templateId));
+      if (!template || template.status !== "ACTIVE" || (template.effectiveTo && template.effectiveTo < payload.effectiveFrom)) {
+        throw new ApplicationError("El curso no está abierto a inscripciones.", "course_not_open", 409, true);
+      }
+      if (payload.effectiveFrom < template.effectiveFrom) {
+        payload = { ...payload, effectiveFrom: template.effectiveFrom };
+      }
+    }
+    await assertHabitualEnrollmentCapacity(tx, payload);
     const regulation = await resolveCurrentAcademicRegulation(tx);
     const assignmentId = randomUUID();
     await tx.insert(studentTemplateAssignments).values({
@@ -623,6 +702,22 @@ export async function assignStudentToTemplate(actor: Actor, input: unknown) {
   });
 }
 
+export async function enrollStudentInAcademicOffering(actor: Actor, input: unknown) {
+  requireSuperAdmin(actor);
+  const payload = ordinaryEnrollmentSchema.parse(input);
+  if (payload.targetType === "weekly") {
+    const result = await createHabitualAssignment({
+      studentProfileId: payload.studentProfileId,
+      templateId: payload.targetId,
+      effectiveFrom: nowCenterTime().toISODate()!,
+    }, true);
+    return { reservedSessions: result.autoReservedReservationCount };
+  }
+
+  await createReservationTransaction(payload.targetId, payload.studentProfileId, true);
+  return { reservedSessions: 1 };
+}
+
 export async function endStudentTemplateAssignment(actor: Actor, input: unknown) {
   requireSuperAdmin(actor);
   const payload = endStudentTemplateAssignmentSchema.parse(input);
@@ -633,9 +728,21 @@ export async function endStudentTemplateAssignment(actor: Actor, input: unknown)
       .where(eq(studentTemplateAssignments.id, payload.assignmentId));
     if (!assignment) return;
     await lockTemplateAssignments(tx, assignment.templateId);
+    const [current] = await tx.select().from(studentTemplateAssignments)
+      .where(eq(studentTemplateAssignments.id, payload.assignmentId));
+    if (!current) return;
+    const effectiveTo = payload.effectiveTo ?? nowCenterTime().toISODate()!;
+    if (current.effectiveTo && current.effectiveTo < effectiveTo) {
+      const nextDay = DateTime.fromISO(current.effectiveTo, { zone: CENTER_TIME_ZONE }).plus({ days: 1 }).toISODate()!;
+      await assertHabitualEnrollmentCapacity(tx, {
+        ...current,
+        effectiveFrom: nextDay < current.effectiveFrom ? current.effectiveFrom : nextDay,
+        effectiveTo,
+      });
+    }
     await tx.update(studentTemplateAssignments)
       .set({
-        effectiveTo: payload.effectiveTo ?? nowCenterTime().toISODate(),
+        effectiveTo,
         status: "ENDED",
         updatedAt: new Date(),
       })
@@ -734,10 +841,10 @@ export async function createReservationForCurrentStudent(actor: Actor, classSess
   return createReservationTransaction(classSessionId, profile.id);
 }
 
-async function createReservationTransaction(classSessionId: string, studentProfileId: string) {
+async function createReservationTransaction(classSessionId: string, studentProfileId: string, onlyUpcomingOneOff = false) {
   return db.transaction(async (tx) => {
     const lockedSessionRows = await tx.execute(sql`
-      select id, max_capacity, status
+      select id, max_capacity, status, template_id, starts_at_utc
       from class_sessions
       where id = ${classSessionId}
       for update
@@ -747,11 +854,16 @@ async function createReservationTransaction(classSessionId: string, studentProfi
           id: string;
           max_capacity: number;
           status: "SCHEDULED" | "CANCELLED" | "COMPLETED";
+          template_id: string | null;
+          starts_at_utc: Date;
         }
       | undefined;
 
     if (!lockedSession) {
       throw new ApplicationError("Class session not found.", "session_not_found", 404, true);
+    }
+    if (onlyUpcomingOneOff && (lockedSession.template_id !== null || new Date(lockedSession.starts_at_utc).getTime() <= Date.now())) {
+      throw new ApplicationError("Selecciona una clase única futura.", "invalid_one_off_enrollment", 409, true);
     }
 
     if (lockedSession.status !== "SCHEDULED") {
@@ -1232,56 +1344,72 @@ export async function materializeDefaultClassSessionsWindow() {
   return materializeClassSessions({ now, horizonEnd: now.plus({ months: SESSION_GENERATION_HORIZON_MONTHS }).endOf("day") });
 }
 
+async function materializeTemplateSessions(
+  tx: TransactionClient,
+  template: typeof classTemplates.$inferSelect,
+  regulation: AcademicRegulation,
+  input: { now: DateTime; horizonEnd: DateTime },
+) {
+  let inserted = 0;
+  let skipped = 0;
+  let habitualReservations = 0;
+  const habitualCapacityConflicts: string[] = [];
+  const referenceTime = input.now.toJSDate();
+
+  for (const candidate of generateRecurringSessionCandidates(template, input)) {
+    const classSessionId = randomUUID();
+    const capacity = Math.min(candidate.maxCapacity, regulation.maxClassCapacity);
+    const result = await tx.insert(classSessions).values({
+      ...candidate,
+      id: classSessionId,
+      status: "SCHEDULED",
+      maxCapacity: capacity,
+      regulationVersionId: regulation.id,
+      isManuallyEdited: false,
+    }).onConflictDoNothing();
+    if (!result.rowCount) {
+      skipped += 1;
+      const conflict = await findExistingHabitualCapacityConflict(tx, {
+        templateId: template.id, localDate: candidate.localDate, now: referenceTime,
+        maxClassCapacity: regulation.maxClassCapacity,
+      });
+      if (conflict) habitualCapacityConflicts.push(conflict);
+      continue;
+    }
+
+    inserted += 1;
+    if (candidate.startsAtUtc < referenceTime) continue;
+    const seats = await reserveGeneratedSessionHabitualSeats(tx, {
+      classSessionId, templateId: template.id, localDate: candidate.localDate,
+      capacity, regulationVersionId: regulation.id,
+    });
+    habitualReservations += seats.reserved;
+    if (seats.capacityConflict) habitualCapacityConflicts.push(classSessionId);
+  }
+  return { inserted, skipped, habitualReservations, habitualCapacityConflicts };
+}
+
 async function materializeClassSessions(input: { now: DateTime; horizonEnd: DateTime }) {
   const regulation = await resolveCurrentAcademicRegulation(db, input.now.toJSDate());
-  const templates = await db
-    .select({ id: classTemplates.id })
-    .from(classTemplates)
-    .where(eq(classTemplates.status, "ACTIVE"));
-
+  const templates = await db.select({ id: classTemplates.id })
+    .from(classTemplates).where(eq(classTemplates.status, "ACTIVE"));
   let inserted = 0;
   let skipped = 0;
   let habitualReservations = 0;
   const habitualCapacityConflicts: string[] = [];
 
   for (const { id } of templates) {
-    await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       await lockTemplateAssignments(tx, id);
       const [template] = await tx.select().from(classTemplates)
         .where(and(eq(classTemplates.id, id), eq(classTemplates.status, "ACTIVE")));
-      if (!template) return;
-
-      for (const candidate of generateRecurringSessionCandidates(template, input)) {
-        const classSessionId = randomUUID();
-        const capacity = Math.min(candidate.maxCapacity, regulation.maxClassCapacity);
-        const result = await tx.insert(classSessions).values({
-          ...candidate,
-          id: classSessionId,
-          status: "SCHEDULED",
-          maxCapacity: capacity,
-          regulationVersionId: regulation.id,
-          isManuallyEdited: false,
-        }).onConflictDoNothing();
-        if (!result.rowCount) {
-          skipped += 1;
-          const conflict = await findExistingHabitualCapacityConflict(tx, {
-            templateId: id, localDate: candidate.localDate, now: input.now.toJSDate(),
-            maxClassCapacity: regulation.maxClassCapacity,
-          });
-          if (conflict) habitualCapacityConflicts.push(conflict);
-          continue;
-        }
-
-        inserted += 1;
-        if (candidate.startsAtUtc < input.now.toJSDate()) continue;
-        const seats = await reserveGeneratedSessionHabitualSeats(tx, {
-          classSessionId, templateId: id, localDate: candidate.localDate,
-          capacity, regulationVersionId: regulation.id,
-        });
-        habitualReservations += seats.reserved;
-        if (seats.capacityConflict) habitualCapacityConflicts.push(classSessionId);
-      }
+      if (template) return materializeTemplateSessions(tx, template, regulation, input);
     });
+    if (!result) continue;
+    inserted += result.inserted;
+    skipped += result.skipped;
+    habitualReservations += result.habitualReservations;
+    habitualCapacityConflicts.push(...result.habitualCapacityConflicts);
   }
 
   return {

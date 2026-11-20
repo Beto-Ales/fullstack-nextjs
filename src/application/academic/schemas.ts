@@ -5,6 +5,7 @@ import { ISO_WEEK_DAYS } from "@/src/domain/academic/types";
 
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must use YYYY-MM-DD format.");
 const localTimeSchema = z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, "Time must use HH:mm or HH:mm:ss format.");
+const calendarTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/);
 
 export const createStudentProfileSchema = z.object({
   userId: z.string().uuid("Invalid user id."),
@@ -34,9 +35,18 @@ export const setClassTemplateStatusSchema = z.object({
 export const createOneOffSessionSchema = z.object({
   name: z.string().min(1).max(150).optional(),
   localDate: z.iso.date(),
-  startsAtLocalTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/),
+  startsAtLocalTime: calendarTimeSchema,
   durationMinutes: z.number().int().min(15).max(360),
   maxCapacity: z.number().int().min(1).max(DEFAULT_CLASS_CAPACITY).optional(),
+});
+
+export const createWeeklyCourseSchema = createClassTemplateSchema.pick({
+  name: true,
+  durationMinutes: true,
+  maxCapacity: true,
+}).extend({
+  firstClassDate: z.iso.date(),
+  startsAtLocalTime: calendarTimeSchema,
 });
 
 export const updateClassSessionSchema = z.object({
@@ -67,6 +77,12 @@ export const reserveSeatSchema = z.object({
   classSessionId: z.string().uuid("Invalid class session id."),
   studentProfileId: z.string().uuid("Invalid student profile id."),
   origin: z.enum(["ORDINARY", "MAKEUP"]).default("ORDINARY"),
+});
+
+export const ordinaryEnrollmentSchema = z.object({
+  studentProfileId: z.string().uuid(),
+  targetType: z.enum(["weekly", "one-off"]),
+  targetId: z.string().uuid(),
 });
 
 export const cancelReservationSchema = z.object({

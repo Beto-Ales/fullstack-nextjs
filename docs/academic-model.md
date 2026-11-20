@@ -1,5 +1,21 @@
 # Modelo académico (Prompt 06)
 
+## Modelo de cursos confirmado
+
+- `SUPER_ADMIN` puede crear un curso con una sesión semanal durante tres meses o un curso de una sola sesión en una fecha concreta. Cada curso admite como máximo 12 alumnos inscritos.
+- Anular la reserva habitual de un alumno libera la plaza de esa fecha. Las reservas de las demás fechas y la asignación al curso se conservan.
+- Un alumno elegible puede reservar una recuperación en otra clase futura programada. Al confirmar se cuentan las reservas confirmadas y los bloqueos activos y se comprueba el aforo antes de consumir el crédito en la misma transacción.
+
+### Estado funcional
+
+- El panel de administración permite crear cursos semanales y clases únicas, e inscribir alumnos de forma ordinaria en ambos. La clase única se guarda como sesión independiente con `template_id` vacío. En el curso semanal se crea una asignación a la plantilla y se reservan las sesiones futuras elegibles con plazas libres.
+- La reserva de una sesión aplica el menor de su capacidad y el límite de la normativa vigente bajo bloqueo de fila. La asignación a la plantilla limita a 12 alumnos distintos simultáneos durante la vigencia. La comprobación y el alta comparten el bloqueo por plantilla que usa el generador. Se comprueba también la coincidencia con altas futuras.
+- La gestión de cuentas y el cambio de contraseña siguen pendientes en la [documentación de autenticación](authentication.md#permisos-confirmados-de-fase-06). También quedan pendientes la sustitución por baja definitiva y la prioridad para sesiones con aforo insuficiente.
+
+## Creación de cursos semanales e inscripción
+
+El formulario **Crear curso semanal** toma la fecha de la primera clase, deduce el día de la semana y calcula el fin en `Europe/Copenhagen`. La vigencia fija empieza en esa fecha y termina el día anterior al aniversario de tres meses. Al guardar se materializan las fechas de ese curso desde el día actual y dentro de la vigencia. El horizonte móvil de tres meses sigue siendo el límite por defecto de cada ejecución periódica y respeta el fin de la plantilla. El formulario **Inscribir alumno** confirma cuántas sesiones quedaron reservadas. Una cancelación de reserva modifica únicamente la fecha cancelada y conserva la inscripción.
+
 ## Creación de clases únicas desde administración
 
 En `/admin`, el formulario **Crear clase única** solicita fecha, hora de inicio, duración y aforo. La acción de servidor comprueba el rol y el menor límite entre la normativa vigente y 12 plazas. Tras guardar, el panel muestra la fecha y las horas de la sesión guardada en la zona de Copenhague. La confirmación puede volver a consultarse al recargar la página.

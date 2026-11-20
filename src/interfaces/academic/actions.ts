@@ -9,10 +9,11 @@ import {
   createClassTemplate,
   createOneOffClassSession,
   createReservation,
-  createReservationForCurrentStudent,
   createStudentProfile,
+  createWeeklyCourse,
   detectAbsences,
   endStudentTemplateAssignment,
+  enrollStudentInAcademicOffering,
   generateClassSessions,
   getClassSessionAvailability,
   getStudentActivityHistory,
@@ -30,6 +31,11 @@ export async function createStudentProfileAction(input: unknown) {
 export async function createClassTemplateAction(input: unknown) {
   const actor = await requireRole("SUPER_ADMIN");
   return createClassTemplate({ userId: actor.userId, role: actor.role }, input);
+}
+
+export async function createWeeklyCourseAction(input: unknown) {
+  const actor = await requireRole("SUPER_ADMIN");
+  return createWeeklyCourse({ userId: actor.userId, role: actor.role }, input);
 }
 
 export async function setClassTemplateStatusAction(input: unknown) {
@@ -82,9 +88,9 @@ export async function createReservationAction(input: unknown) {
   return createReservation({ userId: actor.userId, role: actor.role }, input);
 }
 
-export async function createReservationForCurrentStudentAction(classSessionId: string) {
-  const actor = await requireRole("STUDENT");
-  return createReservationForCurrentStudent({ userId: actor.userId, role: actor.role }, classSessionId);
+export async function enrollStudentInAcademicOfferingAction(input: unknown) {
+  const actor = await requireRole("SUPER_ADMIN");
+  return enrollStudentInAcademicOffering({ userId: actor.userId, role: actor.role }, input);
 }
 
 export async function cancelReservationAction(input: unknown) {

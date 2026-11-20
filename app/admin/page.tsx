@@ -15,6 +15,7 @@ import { redirect } from "next/navigation";
 import { getPublicErrorMessage } from "@/src/infrastructure/errors";
 import { getRecoveryHistory } from "@/src/application/recovery/recovery-service";
 import Link from "next/link";
+import { CourseAdministration } from "./course-administration";
 
 type AdminPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -148,6 +149,7 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
           <button type="submit">Guardar clase única</button>
         </form>
       </section>
+      <CourseAdministration capacityLimit={capacityLimit} students={students} query={query} />
       <h2>Créditos</h2>
       {errorMessage ? (
         <p role="alert" aria-live="polite">

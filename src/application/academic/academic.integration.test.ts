@@ -47,6 +47,138 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (po
     return { templateId, sessionId };
   }
 
+  async function seedStudentProfiles(count: number) {
+    const students = Array.from({ length: count }, () => ({ userId: randomUUID(), profileId: randomUUID() }));
+    await client.query(
+      `insert into users (id, email, email_normalized, password_hash, role)
+       select id, id || '@example.com', id || '@example.com', 'hash', 'STUDENT'
+       from unnest($1::text[]) as student(id)`,
+      [students.map((student) => student.userId)],
+    );
+    await client.query(
+      `insert into student_profiles (id, user_id, first_name, last_name)
+       select profile_id, user_id, 'Test', 'Student'
+       from unnest($1::text[], $2::text[]) as student(profile_id, user_id)`,
+      [students.map((student) => student.profileId), students.map((student) => student.userId)],
+    );
+    return students;
+  }
+
+  it("creates a one-off session through the admin service and rejects the thirteenth seat under concurrency", async () => {
+    const admin = { userId: randomUUID(), role: "SUPER_ADMIN" as const };
+    const students = await seedStudentProfiles(13);
+    const date = DateTime.now().setZone(CENTER_TIME_ZONE).plus({ days: 9 });
+    const payload = { localDate: date.toISODate(), startsAtLocalTime: "18:00", durationMinutes: 60 };
+    await expect(academicService.createOneOffClassSession({ ...students[0], role: "STUDENT" }, payload))
+      .rejects.toMatchObject({ code: "forbidden" });
+    const { classSessionId } = await academicService.createOneOffClassSession(admin, payload);
+    const { rows } = await client.query("select template_id, local_date::text, max_capacity from class_sessions where id=$1", [classSessionId]);
+    expect(rows).toEqual([{ template_id: null, local_date: payload.localDate, max_capacity: 12 }]);
+
+    const book = (student: { profileId: string }) => academicService.enrollStudentInAcademicOffering(
+      admin, { targetType: "one-off", targetId: classSessionId, studentProfileId: student.profileId },
+    );
+    await Promise.all(students.slice(0, 11).map(book));
+    const lastSeat = await Promise.allSettled(students.slice(11).map(book));
+    expect(lastSeat.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(lastSeat).toContainEqual(expect.objectContaining({
+      status: "rejected", reason: expect.objectContaining({ code: "no_spots_available" }),
+    }));
+    expect(await academicService.getClassSessionAvailability(classSessionId))
+      .toMatchObject({ capacity: 12, confirmedReservations: 12, availableSpots: 0 });
+  });
+
+  it("keeps a fixed course within its dates when the periodic generator uses a longer horizon", async () => {
+    const admin = { userId: randomUUID(), role: "SUPER_ADMIN" as const };
+    const first = DateTime.now().setZone(CENTER_TIME_ZONE).plus({ months: 4 }).endOf("month").startOf("day");
+    const end = first.plus({ months: 3 });
+    const { templateId, insertedSessions } = await academicService.createWeeklyCourse(admin, {
+      name: "Fixed weekly course", firstClassDate: first.toISODate(), startsAtLocalTime: "18:00", durationMinutes: 60,
+    });
+    expect(insertedSessions).toBeGreaterThan(0);
+    expect(await academicService.generateClassSessions(admin, { horizonMonths: 12 }))
+      .toMatchObject({ inserted: 0, skipped: insertedSessions });
+    const { rows } = await client.query("select local_date::text from class_sessions where template_id=$1 order by local_date", [templateId]);
+    const dates = [];
+    for (let day = first; day < end; day = day.plus({ weeks: 1 })) dates.push({ local_date: day.toISODate() });
+    expect(rows).toEqual(dates);
+  });
+
+  it("rejects a course enrollment that would exceed capacity only after another enrollment starts", async () => {
+    const admin = { userId: randomUUID(), role: "SUPER_ADMIN" as const };
+    const students = await seedStudentProfiles(13);
+    const first = DateTime.now().setZone(CENTER_TIME_ZONE).plus({ days: 7 });
+    const later = first.plus({ weeks: 2 });
+    const { templateId } = await academicService.createClassTemplate(admin, {
+      name: "Future enrollment overlap", isoWeekday: first.weekday, startsAtLocalTime: "18:00", durationMinutes: 60,
+      effectiveFrom: first.toISODate(), effectiveTo: later.plus({ weeks: 2 }).toISODate(),
+    });
+    await Promise.all(students.slice(0, 12).map(({ profileId }, index) =>
+      academicService.assignStudentToTemplate(admin, {
+        templateId, studentProfileId: profileId, effectiveFrom: index === 11 ? later.toISODate() : first.toISODate(),
+      }),
+    ));
+    await expect(academicService.assignStudentToTemplate(admin, {
+      templateId, studentProfileId: students[12].profileId, effectiveFrom: first.toISODate(),
+    })).rejects.toMatchObject({ code: "course_enrollment_full" });
+  });
+
+  it("rejects the thirteenth simultaneous course enrollment and lets a recovery fill a cancelled seat for one date", async () => {
+    const admin = { userId: randomUUID(), role: "SUPER_ADMIN" as const };
+    const students = await seedStudentProfiles(14);
+    await client.query("insert into users (id,email,email_normalized,password_hash,role) values ($1,$2,$2,'hash','SUPER_ADMIN')",
+      [admin.userId, `${admin.userId}@example.com`]);
+    const first = DateTime.now().setZone(CENTER_TIME_ZONE).plus({ days: 9 });
+    const second = first.plus({ weeks: 1 });
+    const effectiveFrom = first.toISODate()!;
+    const { templateId } = await academicService.createClassTemplate(admin, {
+      name: "Weekly course", isoWeekday: first.weekday, startsAtLocalTime: "18:00", durationMinutes: 60,
+      effectiveFrom, effectiveTo: second.toISODate(),
+    });
+    expect(await academicService.generateClassSessions(admin, {})).toMatchObject({ inserted: 2 });
+    const assignments = await Promise.allSettled(students.slice(0, 13).map(({ profileId }) =>
+      academicService.enrollStudentInAcademicOffering(admin, {
+        targetType: "weekly", targetId: templateId, studentProfileId: profileId,
+      }),
+    ));
+    expect(assignments.filter(({ status }) => status === "fulfilled")).toHaveLength(12);
+    expect(assignments.filter(({ status }) => status === "rejected")).toEqual([expect.objectContaining({
+      reason: expect.objectContaining({ code: "course_enrollment_full" }),
+    })]);
+    const enrollmentCount = async () => {
+      const { rows: [{ count }] } = await client.query("select count(*)::int as count from student_template_assignments where template_id=$1", [templateId]);
+      return count;
+    };
+    expect(await enrollmentCount()).toBe(12);
+
+    const { rows: [firstSession, secondSession] } = await client.query(
+      "select id from class_sessions where template_id=$1 order by local_date", [templateId],
+    );
+    const { rows: [booking] } = await client.query(
+      `select r.id, p.user_id from class_reservations r join student_profiles p on p.id=r.student_profile_id
+       where r.class_session_id=$1 and r.status='CONFIRMED' limit 1`, [firstSession.id],
+    );
+    await academicService.cancelReservation({ userId: booking.user_id, role: "STUDENT" }, { reservationId: booking.id });
+    expect(await academicService.getClassSessionAvailability(firstSession.id))
+      .toMatchObject({ confirmedReservations: 11, availableSpots: 1 });
+    expect(await academicService.getClassSessionAvailability(secondSession.id))
+      .toMatchObject({ confirmedReservations: 12, availableSpots: 0 });
+    expect(await enrollmentCount()).toBe(12);
+
+    const recovering = students[13];
+    const creditService = await import("@/src/application/credits/credit-service");
+    const recoveryService = await import("@/src/application/recovery/recovery-service");
+    await creditService.grantManualCredits(admin, { studentProfileId: recovering.profileId, amount: 1, reason: "Recovery eligibility fixture" });
+    const recoveringActor = { userId: recovering.userId, role: "STUDENT" as const };
+    const reserved = await recoveryService.reserveRecovery(recoveringActor, { classSessionId: firstSession.id });
+    expect(reserved.consumedMovementId).toBeTruthy();
+    expect(await academicService.getClassSessionAvailability(firstSession.id))
+      .toMatchObject({ confirmedReservations: 12, availableSpots: 0 });
+    expect(await academicService.getClassSessionAvailability(secondSession.id))
+      .toMatchObject({ confirmedReservations: 12, availableSpots: 0 });
+    expect(await enrollmentCount()).toBe(12);
+  });
+
   it("enforces single student profile per student user", async () => {
     const userId = randomUUID();
 
