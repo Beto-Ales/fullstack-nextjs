@@ -37,6 +37,8 @@ Fase 8 — Panel del estudiante
 
 Calendario semanal, próximas clases, historial, créditos y recuperación.
 
+Fase iniciada con el calendario semanal en `/student`. El alcance validado y lo que sigue pendiente se registran en [Calendario semanal del alumno](docs/testing.md#fase-08--calendario-semanal-del-alumno).
+
 Fase 9 — Panel administrativo
 
 Calendario global, perfiles, estadísticas, bloqueos de plazas y gestión de créditos.

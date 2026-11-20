@@ -10,29 +10,39 @@ import {
 import { getPublicErrorMessage, isApplicationError } from "@/src/infrastructure/errors";
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import { DateTime } from "luxon";
+import { z } from "zod";
 import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
-import { listUpcomingOrdinaryReservations } from "@/src/application/academic/academic-service";
+import { listStudentCalendarReservations, listUpcomingOrdinaryReservations } from "@/src/application/academic/academic-service";
 import { cancelReservationAction } from "@/src/interfaces/academic/actions";
+import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { ChangePasswordForm } from "./change-password-form";
 import { RecoveryOptions } from "./recovery-options";
+import { WeeklyCalendar } from "./weekly-calendar";
 
 type StudentHomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-async function cancelClassFormAction(formData: FormData) {
+function studentResultPath(week: string | null, result: Record<string, string>) {
+  const params = new URLSearchParams(result);
+  if (week) params.set("week", week);
+  return `/student?${params}`;
+}
+
+async function cancelClassFormAction(week: string | null, formData: FormData) {
   "use server";
 
   const reservationId = String(formData.get("reservationId") ?? "");
   try {
     await cancelReservationAction({ reservationId });
   } catch (error) {
-    redirect(`/student?error=${encodeURIComponent(getPublicErrorMessage(error))}`);
+    redirect(studentResultPath(week, { error: getPublicErrorMessage(error) }));
   }
-  redirect("/student?class=cancelled");
+  redirect(studentResultPath(week, { class: "cancelled" }));
 }
 
-async function reserveRecoveryFormAction(formData: FormData) {
+async function reserveRecoveryFormAction(week: string | null, formData: FormData) {
   "use server";
 
   const classSessionId = String(formData.get("classSessionId") ?? "");
@@ -42,26 +52,36 @@ async function reserveRecoveryFormAction(formData: FormData) {
     const message = isApplicationError(error) && error.code === "no_spots_available"
       ? "La plaza ya no está disponible."
       : getPublicErrorMessage(error);
-    redirect(`/student?error=${encodeURIComponent(message)}`);
+    redirect(studentResultPath(week, { error: message }));
   }
-  redirect("/student?recovery=reserved");
+  redirect(studentResultPath(week, { recovery: "reserved" }));
 }
 
-async function cancelRecoveryFormAction(formData: FormData) {
+async function cancelRecoveryFormAction(week: string | null, formData: FormData) {
   "use server";
 
   const reservationId = String(formData.get("reservationId") ?? "");
   try {
     await cancelRecoveryReservationAction({ reservationId });
   } catch (error) {
-    redirect(`/student?error=${encodeURIComponent(getPublicErrorMessage(error))}`);
+    redirect(studentResultPath(week, { error: getPublicErrorMessage(error) }));
   }
-  redirect("/student?recovery=cancelled");
+  redirect(studentResultPath(week, { recovery: "cancelled" }));
 }
 
 export default async function StudentHomePage({ searchParams }: StudentHomePageProps) {
   const user = await requireRole("STUDENT");
   const query = (await searchParams) ?? {};
+  const requestedWeek = z.iso.date().safeParse(query.week);
+  const now = DateTime.now().setZone(CENTER_TIME_ZONE);
+  const currentWeek = now.startOf("week");
+  const week = requestedWeek.success
+    ? DateTime.fromISO(requestedWeek.data, { zone: CENTER_TIME_ZONE }).startOf("week")
+    : currentWeek;
+  const weekParam = week.equals(currentWeek) ? null : week.toISODate();
+  const cancelClass = cancelClassFormAction.bind(null, weekParam);
+  const reserveRecovery = reserveRecoveryFormAction.bind(null, weekParam);
+  const cancelRecovery = cancelRecoveryFormAction.bind(null, weekParam);
   const actionError = typeof query.error === "string" ? query.error : undefined;
   const confirmation = query.class === "cancelled"
     ? "Clase cancelada."
@@ -73,7 +93,10 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
   const nextUsableCredit = await getNextUsableCreditForActor({ userId: user.userId, role: user.role });
   const recoveryOptions = await listFutureRecoveryOptionsAction();
   const recoveryHistory = await getRecoveryHistoryAction();
-  const upcomingClasses = await listUpcomingOrdinaryReservations(user);
+  const [upcomingClasses, calendarReservations] = await Promise.all([
+    listUpcomingOrdinaryReservations(user),
+    listStudentCalendarReservations(user, week.toJSDate(), week.plus({ weeks: 1 }).toJSDate()),
+  ]);
 
   return (
     <main>
@@ -87,13 +110,15 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
         </p>
       ) : null}
       {confirmation && <p role="status">{confirmation}</p>}
+      <WeeklyCalendar week={week} now={now.toMillis()} reservations={calendarReservations}
+        cancelClass={cancelClass} cancelRecovery={cancelRecovery} />
       <section aria-labelledby="upcoming-classes">
         <h2 id="upcoming-classes">Mis próximas clases</h2>
         <ul>
           {upcomingClasses.map((reservation) => (
             <li key={reservation.reservationId}>
               {reservation.localDate} · {reservation.startsAtUtc.toISOString()}
-              <form action={cancelClassFormAction}>
+              <form action={cancelClass}>
                 <input type="hidden" name="reservationId" value={reservation.reservationId} />
                 <button type="submit">Cancelar clase</button>
               </form>
@@ -122,7 +147,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
           initialPage={recoveryOptions}
           nextGrantId={nextUsableCredit.nextUsableGrantMovementId}
           nextGrantExpiresAt={nextUsableCredit.nextUsableExpiresAt}
-          reserveAction={reserveRecoveryFormAction}
+          reserveAction={reserveRecovery}
         />
       </section>
 
@@ -133,7 +158,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
             <li key={reservation.reservationId}>
               {reservation.classLocalDate} · {reservation.classStartsAtUtc.toISOString()} · estado: {reservation.status}
               {reservation.status === "CONFIRMED" ? (
-                <form action={cancelRecoveryFormAction}>
+                <form action={cancelRecovery}>
                   <input type="hidden" name="reservationId" value={reservation.reservationId} />
                   <p>El crédito se devuelve si sigue vigente y cancelas con al menos {regulation.cancellationNoticeDays} días naturales de antelación.</p>
                   <button type="submit">Cancelar recuperación</button>

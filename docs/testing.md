@@ -233,6 +233,14 @@ Se incluyen pruebas de:
 - **Cierre de fase 07.** La revisión confirmó la paginación y volvió a ejecutar los E2E de la clase 101 y de la última plaza, junto con las pruebas de integración del cursor y de concurrencia. Quedan verificados los requisitos del [plan](../planificacion_general.md#8-recuperación-de-clases): búsqueda de plazas, crédito válido, límite mensual de celebración, reserva y consumo atómicos, y protección contra la doble reserva y el doble consumo.
 - La [fase 8 del plan](../planificacion_general.md#10-panel-del-estudiante) continúa con el panel del alumno. La vista administrativa de incidencias sigue en fase 9. Las discrepancias sobre la racha de cancelaciones quedan pendientes de decisión en el [modelo académico](academic-model.md#cancelaciones-y-secuencias).
 
+## Fase 08 — Calendario semanal del alumno
+
+- `/student` abre en la semana actual de lunes a domingo en `Europe/Copenhagen`. La consulta usa el usuario autenticado y el intervalo entre los dos lunes locales para devolver sus reservas confirmadas. La vista agrupa por día, ordena por hora y distingue clases habituales, ordinarias y recuperaciones. Usa el nombre de la plantilla cuando existe y muestra «Clase única» para sesiones sin plantilla.
+- El E2E `tests/e2e/student-calendar.spec.ts` cubre una clase habitual y una recuperación confirmada en la semana actual, navegación en ambos sentidos, estado vacío y un domingo y un lunes locales que comparten fecha UTC. Verifica que quedan fuera las reservas de otro alumno y las canceladas. En una ventana de 360 px comprueba que el calendario cabe sin desplazamiento horizontal.
+- Tras cancelar una recuperación desde el calendario, el panel conserva la semana elegida y actualiza su contenido. Las acciones de cancelación, el flujo de créditos y la búsqueda paginada de recuperaciones se conservan.
+- Pasaron 106 pruebas de Vitest y 16 E2E de Chromium en PostgreSQL TEST aislado, incluidos el calendario y las regresiones de cancelación, créditos y recuperaciones. TypeScript pasó y lint terminó sin errores, con tres avisos preexistentes.
+- Según el [plan del panel del estudiante](../planificacion_general.md#10-panel-del-estudiante), quedan pendientes la vista de horarios habituales, el historial de clases con asistencias y cancelaciones y la vista de créditos próximos a caducar. La fase 8 continúa abierta. Las diferencias sobre la racha quedan en el [modelo académico](academic-model.md#cancelaciones-y-secuencias) y la vista administrativa de incidencias sigue en fase 9.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

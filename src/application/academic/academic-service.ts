@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { and, eq, gt, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, gt, gte, inArray, lt, ne, sql, type SQLWrapper } from "drizzle-orm";
 import { DateTime } from "luxon";
 
 import {
@@ -126,29 +126,29 @@ async function getStudentProfileForUserId(tx: TransactionClient, userId: string)
   return profile.id;
 }
 
-async function isHabitualReservation(
-  tx: TransactionClient,
-  input: {
-    studentProfileId: string;
-    templateId: string | null;
-    localDate: string;
-  },
-): Promise<boolean> {
-  if (!input.templateId) {
-    return false;
-  }
-
-  const result = await tx.execute(sql`
-    select 1
-    from student_template_assignments sta
+function habitualAssignmentExists(input: {
+  studentProfileId: string | SQLWrapper;
+  templateId: string | SQLWrapper;
+  localDate: string | SQLWrapper;
+}) {
+  return sql<boolean>`exists (
+    select 1 from student_template_assignments sta
     where sta.student_profile_id = ${input.studentProfileId}
       and sta.template_id = ${input.templateId}
       and sta.effective_from <= ${input.localDate}
       and (sta.effective_to is null or sta.effective_to >= ${input.localDate})
-    limit 1
-  `);
+  )`;
+}
 
-  return result.rows.length > 0;
+async function isHabitualReservation(
+  tx: TransactionClient,
+  input: { studentProfileId: string; templateId: string | null; localDate: string },
+): Promise<boolean> {
+  if (!input.templateId) return false;
+  const { rows: [row] } = await tx.execute<{ habitual: boolean }>(
+    sql`select ${habitualAssignmentExists({ ...input, templateId: input.templateId })} as habitual`,
+  );
+  return row.habitual;
 }
 
 async function collectHabitualSequenceEvents(tx: QueryExecutor, studentProfileId: string): Promise<HabitualSequenceEvent[]> {
@@ -1238,11 +1238,14 @@ export async function detectAbsences(actor: Actor, input: unknown) {
   });
 }
 
-export async function listUpcomingOrdinaryReservations(actor: Actor) {
+function confirmedReservationsForStudent(actor: Actor) {
   if (actor.role !== "STUDENT") {
     throw new ApplicationError("Forbidden", "forbidden", 403, true);
   }
+  return and(eq(studentProfiles.userId, actor.userId), eq(classReservations.status, "CONFIRMED"));
+}
 
+export async function listUpcomingOrdinaryReservations(actor: Actor) {
   return db.select({
     reservationId: classReservations.id,
     localDate: classSessions.localDate,
@@ -1251,11 +1254,36 @@ export async function listUpcomingOrdinaryReservations(actor: Actor) {
     .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
     .innerJoin(studentProfiles, eq(studentProfiles.id, classReservations.studentProfileId))
     .where(and(
-      eq(studentProfiles.userId, actor.userId),
+      confirmedReservationsForStudent(actor),
       eq(classReservations.origin, "ORDINARY"),
-      eq(classReservations.status, "CONFIRMED"),
       eq(classSessions.status, "SCHEDULED"),
       gt(classSessions.startsAtUtc, new Date()),
+    ))
+    .orderBy(classSessions.startsAtUtc, classReservations.id);
+}
+
+export async function listStudentCalendarReservations(actor: Actor, start: Date, end: Date) {
+  return db.select({
+    reservationId: classReservations.id,
+    origin: classReservations.origin,
+    className: classTemplates.name,
+    startsAtUtc: classSessions.startsAtUtc,
+    endsAtUtc: classSessions.endsAtUtc,
+    sessionStatus: classSessions.status,
+    habitual: habitualAssignmentExists({
+      studentProfileId: classReservations.studentProfileId,
+      templateId: classSessions.templateId,
+      localDate: classSessions.localDate,
+    }),
+  }).from(classReservations)
+    .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
+    .innerJoin(studentProfiles, eq(studentProfiles.id, classReservations.studentProfileId))
+    .leftJoin(classTemplates, eq(classTemplates.id, classSessions.templateId))
+    .where(and(
+      confirmedReservationsForStudent(actor),
+      ne(classSessions.status, "CANCELLED"),
+      gte(classSessions.startsAtUtc, start),
+      lt(classSessions.startsAtUtc, end),
     ))
     .orderBy(classSessions.startsAtUtc, classReservations.id);
 }
