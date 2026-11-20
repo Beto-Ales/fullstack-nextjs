@@ -2,7 +2,7 @@
 
 Base técnica inicial para una aplicación de gestión de clases y alumnos con Next.js App Router, TypeScript estricto y PostgreSQL + Drizzle.
 
-> Estado funcional: incluye identidad, control de acceso base, reservas, asistencia, cancelaciones, ledger de créditos y reservas de recuperación con consumo/devolución FIFO; aún no incluye normativa configurable/versionada.
+> Estado funcional. Incluye identidad, control de acceso, reservas, asistencia, cancelaciones, ledger de créditos, recuperaciones con consumo/devolución FIFO y normativa académica versionada.
 > La especificación funcional consolidada (`PROJECT_SPEC.md`) sigue pendiente de incorporarse al repositorio.
 
 ## Requisitos

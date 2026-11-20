@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DateTime } from "luxon";
 
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
@@ -26,6 +26,10 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("recovery integration (po
 
   beforeEach(async () => {
     await resetTestDatabase(client);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   afterAll(async () => {
@@ -174,12 +178,52 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("recovery integration (po
 
     const actor = { userId: student.userId, role: "STUDENT" as const };
     const first = await recoveryService.reserveRecovery(actor, { classSessionId: session.sessionId, idempotencyKey: "reservation-1" });
-    const second = await recoveryService.reserveRecovery(actor, { classSessionId: session.sessionId, idempotencyKey: "reservation-2" });
+    const sameKey = await recoveryService.reserveRecovery(actor, { classSessionId: session.sessionId, idempotencyKey: "reservation-1" });
+    await expect(recoveryService.reserveRecovery(actor, { classSessionId: session.sessionId, idempotencyKey: "reservation-2" }))
+      .rejects.toMatchObject({ code: "recovery_idempotency_conflict" });
+    const second = await recoveryService.reserveRecovery(actor, { classSessionId: session.sessionId });
 
     expect(first.idempotent).toBe(false);
+    expect(sameKey).toEqual({ ...first, idempotent: true });
     expect(second.idempotent).toBe(true);
     expect(first.reservationId).toBe(second.reservationId);
     expect(await readConsumptionCount(student.profileId)).toBe(1);
+  });
+
+  it("rejects an ordinary reservation through both recovery entry points", async () => {
+    const student = await seedStudent();
+    const admin = await seedAdmin();
+    const { sessionId } = await seedSession("2027-01-15");
+    const studentActor = { userId: student.userId, role: "STUDENT" as const };
+    await academicService.createReservationForCurrentStudent(studentActor, sessionId);
+
+    await expect(recoveryService.reserveRecovery(studentActor, { classSessionId: sessionId }))
+      .rejects.toMatchObject({ code: "ordinary_reservation_exists" });
+    await expect(academicService.createReservation({ userId: admin.userId, role: "SUPER_ADMIN" }, {
+      studentProfileId: student.profileId, classSessionId: sessionId, origin: "MAKEUP",
+    })).rejects.toMatchObject({ code: "ordinary_reservation_exists" });
+    expect(await readConsumptionCount(student.profileId)).toBe(0);
+  });
+
+  it("rolls back when a recovery key belongs to another reservation", async () => {
+    const student = await seedStudent();
+    const anotherStudent = await seedStudent();
+    const first = await seedSession("2027-01-13");
+    const second = await seedSession("2027-01-14");
+    const actor = { userId: student.userId, role: "STUDENT" as const };
+    const anotherActor = { userId: anotherStudent.userId, role: "STUDENT" as const };
+    await grantCredits(student.profileId, 2);
+    await grantCredits(anotherStudent.profileId, 1);
+    await recoveryService.reserveRecovery(actor, { classSessionId: first.sessionId, idempotencyKey: "owned-recovery-key" });
+    await expect(recoveryService.reserveRecovery(actor, { classSessionId: second.sessionId, idempotencyKey: "owned-recovery-key" }))
+      .rejects.toMatchObject({ code: "recovery_idempotency_conflict" });
+    await expect(recoveryService.reserveRecovery(anotherActor, { classSessionId: second.sessionId, idempotencyKey: "owned-recovery-key" }))
+      .rejects.toMatchObject({ code: "recovery_idempotency_conflict" });
+
+    expect((await recoveryService.getRecoveryHistory(actor)).reservations).toHaveLength(1);
+    expect((await recoveryService.getRecoveryHistory(anotherActor)).reservations).toHaveLength(0);
+    expect(await readConsumptionCount(student.profileId)).toBe(1);
+    expect(await readConsumptionCount(anotherStudent.profileId)).toBe(0);
   });
 
   it("rolls back reservation if credit consumption cannot be created", async () => {
@@ -239,7 +283,9 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("recovery integration (po
     const student = await seedStudent();
     const sessionA = await seedSession("2027-03-25");
     const sessionB = await seedSession("2027-03-27");
-    await grantCredits(student.profileId, 1, "2027-07-20T10:00:00.000Z");
+    const grantId = await grantCredits(student.profileId, 1, "2027-07-20T10:00:00.000Z");
+    vi.setSystemTime(new Date("2026-12-01T10:00:00Z"));
+    await client.query("update credit_ledger_movements set created_at = '2026-12-01T10:00:00.000999Z' where id = $1", [grantId]);
 
     const actor = { userId: student.userId, role: "STUDENT" as const };
     const [first, second] = await Promise.allSettled([
@@ -324,23 +370,12 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("recovery integration (po
   it("registers refund but does not restore balance when credit already expired", async () => {
     const student = await seedStudent();
     const session = await seedSession("2027-05-20");
-    const grantId = await grantCredits(student.profileId, 1, "2027-01-01T10:00:00.000Z");
+    await grantCredits(student.profileId, 1, "2027-01-01T10:00:00.000Z");
 
     const actor = { userId: student.userId, role: "STUDENT" as const };
+    vi.setSystemTime(new Date("2026-12-31T10:00:00Z"));
     const reserved = await recoveryService.reserveRecovery(actor, { classSessionId: session.sessionId, idempotencyKey: randomUUID() });
-    await db
-      .insert(schema.creditLedgerMovements)
-      .values({
-        id: randomUUID(),
-        studentProfileId: student.profileId,
-        movementType: "EXPIRATION",
-        amount: 1,
-        createdAt: new Date("2027-01-01T10:00:00.000Z"),
-        sourceGrantMovementId: grantId,
-        sourceMovementId: grantId,
-        idempotencyKey: `seed-expire:${grantId}`,
-      });
-
+    vi.setSystemTime(new Date("2027-01-02T10:00:00Z"));
     const cancelled = await recoveryService.cancelRecoveryReservation(actor, { reservationId: reserved.reservationId });
     expect(cancelled.refunded).toBe(true);
     expect(cancelled.refundRestoredCredit).toBe(false);
@@ -396,13 +431,23 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("recovery integration (po
       sourceGrantMovementId: grantB,
     });
 
-    const cancelled = await academicService.cancelClassSession(
-      { userId: admin.userId, role: "SUPER_ADMIN" },
-      { classSessionId: session.sessionId },
-    );
+    const actor = { userId: admin.userId, role: "SUPER_ADMIN" as const };
+    await expect(academicService.updateClassSession(actor, { classSessionId: session.sessionId, status: "CANCELLED" }))
+      .rejects.toMatchObject({ code: "use_session_cancellation" });
+    const studentActor = { userId: studentA.userId, role: "STUDENT" as const };
+    expect((await recoveryService.getRecoveryHistory(studentActor)).reservations[0]?.status).toBe("CONFIRMED");
+
+    const cancelled = await academicService.cancelClassSession(actor, { classSessionId: session.sessionId });
 
     expect(cancelled.cancelledRecoveries).toBe(2);
     expect(cancelled.refundedRecoveries).toBe(2);
+    const history = await recoveryService.getRecoveryHistory(studentActor);
+    expect(history.reservations[0]).toMatchObject({ status: "CANCELLED", cancellationRegulationVersionId: "initial" });
+    expect(history.ledgerRows).toContainEqual(expect.objectContaining({
+      movementType: "RECOVERY_REFUND", regulationVersionId: "initial",
+    }));
+    const edits = await client.query("select status, regulation_version_id from class_session_edits where class_session_id = $1", [session.sessionId]);
+    expect(edits.rows).toEqual([{ status: "CANCELLED", regulation_version_id: "initial" }]);
 
     const refunds = await db
       .select({

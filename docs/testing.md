@@ -132,7 +132,8 @@ Se incluyen pruebas de:
 - Reglas de cancelación, secuencias y elegibilidad de candidaturas.
 - Cálculo de límites mensuales/caducidad de créditos y saldo derivado de ledger.
 - Selección FIFO para consumo en recuperaciones (caducidad, creación, id estable).
-- Reglas de devolución de recuperaciones según umbral de 7 días y caducidad del crédito origen.
+- Reglas de devolución de recuperaciones según la antelación vigente y la caducidad original del crédito.
+- Selección, autorización, publicación y auditoría de versiones de normativa académica.
 
 ## Integración con PostgreSQL de test
 
@@ -153,6 +154,22 @@ Se incluyen pruebas de:
   - devolución con/sin restauración de saldo según caducidad,
   - cancelación tardía sin devolución,
   - cancelación idempotente sin doble devolución.
+
+### Verificación de normativa (20 de noviembre de 2026)
+
+- `0006_academic_regulations` se aplicó mediante el flujo Drizzle de TEST. Las suites que limpian tablas se ejecutaron en una base temporal del servidor TEST.
+- `npm run test -- --configLoader runner --no-file-parallelism`. Aprobadas 86 pruebas en 24 archivos, incluidas las suites académicas, de créditos, de recuperaciones y de normativa.
+- `regulation.integration.test.ts` comprueba la vigencia antes y después de medianoche en Copenhague, el acceso de ambos roles, la publicación exclusiva de administración y su auditoría, y la conservación de las versiones y caducidades históricas. También comprueba que los límites nuevos se aplican a las operaciones nuevas.
+- Se verificó `/normativa` en Chromium contra TEST con sesiones de ambos perfiles. El acceso anónimo redirigió al inicio de sesión y la publicación quedó visible en el historial de administración con sus cambios.
+- Las dos reproducciones pendientes quedan juntas en la [siguiente tarea de generación de sesiones](academic-model.md#siguiente-tarea-generación-de-sesiones).
+
+### Regresión de reservas, cancelaciones y caducidad
+
+- Suite completa con `npm run test -- --configLoader runner --no-file-parallelism` en PostgreSQL TEST aislado. Pasaron 90 pruebas en 24 archivos. La base temporal se preparó con el flujo Drizzle hasta 0006.
+- Recuperaciones. Conflicto con reserva ordinaria para ambos perfiles, reintento con consumo original y rollback ante una clave que pertenece a otra reserva o a otro alumno.
+- Cancelación administrativa. La edición genérica rechaza `CANCELLED`. La operación específica cambia la sesión y las reservas, registra la versión y tramita las devoluciones.
+- Racha y caducidad. La secuencia 1, 2, 5, 4 conserva una sola concesión. Al vencer un crédito ya consumido se conserva el saldo de otras concesiones.
+- TypeScript y lint terminaron correctamente. Lint mantuvo tres avisos previos en `run-db-migrate.test.ts`.
 
 ## E2E de créditos
 

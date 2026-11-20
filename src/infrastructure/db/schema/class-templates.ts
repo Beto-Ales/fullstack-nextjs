@@ -2,6 +2,8 @@ import { date, index, integer, pgEnum, pgTable, text, time, timestamp } from "dr
 
 import { DEFAULT_CLASS_CAPACITY } from "@/src/domain/academic/constants";
 
+import { academicRegulations } from "@/src/infrastructure/db/schema/academic-regulations";
+
 export const classTemplateStatusEnum = pgEnum("class_template_status", ["ACTIVE", "INACTIVE"]);
 
 export const classTemplates = pgTable(
@@ -16,6 +18,7 @@ export const classTemplates = pgTable(
     effectiveFrom: date("effective_from").notNull(),
     effectiveTo: date("effective_to"),
     category: text("category"),
+    regulationVersionId: text("regulation_version_id").references(() => academicRegulations.id),
     maxCapacity: integer("max_capacity").notNull().default(DEFAULT_CLASS_CAPACITY),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

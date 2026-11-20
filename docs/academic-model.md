@@ -15,6 +15,7 @@
 - Detección idempotente de ausencias para sesiones finalizadas.
 - Ledger de créditos (`credit_ledger_movements`) con generación automática, concesión/retiro manual y caducidad.
 - Reservas de recuperación (`origin = MAKEUP`) con consumo FIFO y devoluciones según política de cancelación.
+- Normativa académica configurable, versionada y auditable, visible en `/normativa`.
 
 ## Tablas y relaciones
 
@@ -132,11 +133,12 @@ npm run academic:generate-sessions
 
 Fórmula:
 
-`disponibles = capacidad - reservas_confirmadas - plazas_bloqueadas`
+`disponibles = max(0, min(capacidad_de_sesión, aforo_vigente) - reservas_confirmadas - plazas_bloqueadas)`
 
 - nunca negativa,
 - calculada en servidor con datos de PostgreSQL,
 - sin confiar en datos del cliente.
+- El aforo máximo inicial es de 12 plazas. Una reducción entra en vigor para nuevas reservas y bloqueos y conserva los compromisos existentes.
 
 ## Concurrencia en reservas
 
@@ -153,14 +155,17 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
 
 - La cancelación de reserva solo aplica sobre reservas confirmadas y actor autorizado.
 - Clasificación temporal:
-  - `ON_TIME`: cancelación con al menos 7 días exactos de antelación al inicio.
-  - `LATE`: menos de 7 días.
+  - `ON_TIME`: cancelación con la antelación de la versión vigente. La versión inicial exige 7 días naturales entre la fecha local de cancelación y la fecha local de la clase.
+  - `LATE`: antelación inferior al umbral. Libera la plaza, cuenta en la racha habitual y queda sin crédito.
 - Secuencia habitual:
   - solo considera reservas de origen `ORDINARY`,
-  - se resetea con `ATTENDED` o `ABSENT`,
+  - la asistencia efectiva (`ATTENDED`) reinicia la racha,
+  - una falta sin aviso (`ABSENT`) se registra, mantiene la racha y deja el saldo intacto,
   - la 3.ª cancelación `ON_TIME` queda candidata a recuperación,
   - desde la 4.ª cancelación consecutiva ya no genera candidato.
-- La evaluación se recalcula transaccionalmente para mantener consistencia histórica.
+  - la racha se evalúa en el orden de celebración. Si una cancelación fuera de orden ocupa el tercer lugar de una racha que ya tiene una concesión, se registra la nueva decisión y se conserva la concesión previa.
+- Cada evaluación se registra en la transacción de cancelación con la versión aplicada. Las correcciones de asistencia se tienen en cuenta para las decisiones siguientes.
+- El código y la documentación anteriores contaban 168 horas y reiniciaban la racha con `ABSENT`. Los resultados de esas operaciones se conservan como se registraron.
 
 ## Detección de ausencias
 
@@ -173,13 +178,13 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
 - Integración automática:
   - al cancelar, si la cancelación queda como candidata elegible, se intenta generar crédito automático en la misma transacción.
 - Reglas aplicadas:
-  - máximo 2 créditos automáticos por alumno y mes natural en `Europe/Copenhagen`,
+  - límite inicial de 2 créditos automáticos por alumno y mes natural de cancelación en `Europe/Copenhagen`,
   - la concesión manual no consume ese límite,
   - idempotencia por cancelación para evitar duplicados.
 - Caducidad:
-  - cada `AUTO_CANCELLATION_GRANT` caduca individualmente a los 6 meses,
-  - la caducidad se materializa como movimiento `EXPIRATION`,
-  - la disponibilidad se calcula siempre desde ledger, no desde saldo persistido.
+  - cada `AUTO_CANCELLATION_GRANT` guarda la caducidad calculada con la versión de la cancelación, inicialmente 6 meses,
+  - `EXPIRATION` descuenta solo el remanente de la concesión al vencer. Los créditos ya consumidos quedan registrados en su movimiento de consumo,
+  - la disponibilidad se calcula por concesión desde el ledger. Una caducidad histórica se aplica al crédito de origen sin afectar otras concesiones.
 - Gestión manual (`SUPER_ADMIN`):
   - concesión de créditos (`MANUAL_GRANT`) con motivo obligatorio,
   - retirada de créditos (`MANUAL_WITHDRAWAL`) con motivo obligatorio,
@@ -192,17 +197,19 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
   - sesión futura en estado `SCHEDULED`,
   - capacidad disponible real (reservas + bloqueos),
   - sin reserva activa duplicada del alumno en la sesión,
-  - máximo 2 recuperaciones confirmadas por mes natural de la sesión (`Europe/Copenhagen`),
+  - límite inicial de 2 recuperaciones confirmadas por mes natural de la sesión (`Europe/Copenhagen`), evaluado con la versión vigente al reservar,
   - crédito FIFO disponible.
 - Consumo:
   - al confirmar se crea `RECOVERY_CONSUMPTION` en la misma transacción que la reserva.
   - selección FIFO: menor caducidad, luego menor fecha de generación, luego identificador estable.
+  - una reserva ordinaria activa produce un conflicto al solicitar una recuperación para la misma sesión. Un reintento recupera la reserva y su consumo. Si envía una clave de idempotencia, debe ser la clave original.
 - Cancelación de recuperación:
-  - con al menos 7 días: se crea `RECOVERY_REFUND`.
+  - con la antelación de la versión vigente al cancelar, inicialmente 7 días naturales, se crea `RECOVERY_REFUND`.
     - restaura saldo solo si el crédito origen seguía vigente;
     - si ya caducó, se registra devolución auditable sin restaurar saldo.
-  - con menos de 7 días: no hay devolución.
+  - con una antelación inferior se libera la plaza y el consumo permanece.
 - Cancelación administrativa de sesión:
+  - el cambio a `CANCELLED` se solicita mediante la operación específica de cancelación administrativa y queda registrado con la versión aplicada.
   - se cancelan recuperaciones confirmadas y se aplica devolución auditable bajo la misma regla de vigencia.
   - la operación es transaccional: si falla una devolución, no se confirma la cancelación de sesión.
   - cada devolución mantiene referencia al consumo origen y al crédito origen (`source_movement_id`, `source_grant_movement_id`).
@@ -214,12 +221,8 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
 
 - Al editar una sesión se recalcula `local_date` desde `starts_at_utc` en `Europe/Copenhagen`.
 - El cómputo mensual de recuperaciones usa siempre el mes de la fecha actual de la sesión (`class_sessions.local_date`).
-- Si una reprogramación mueve una sesión con reservas `MAKEUP` a otro mes y provoca que algún alumno supere el límite mensual (2), la reprogramación se rechaza explícitamente con error de conflicto.
+- Si una reprogramación mueve una sesión con reservas `MAKEUP` a otro mes y provoca que algún alumno supere el límite mensual vigente, la reprogramación se rechaza con un error de conflicto.
 - No se alteran movimientos históricos del ledger durante reprogramaciones.
-
-## Limitaciones conocidas de esta fase
-
-- No se implementó la normativa versionada completa.
 
 ## Actualización operativa (fase 06.3.2.13+)
 
@@ -231,3 +234,10 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
   - existe capacidad disponible real.
 - Se evita crear duplicados de reserva activa para el mismo alumno y sesión.
 - La operación mantiene control administrativo (`SUPER_ADMIN`) y se ejecuta en transacción.
+
+## Siguiente tarea de generación de sesiones
+
+- El generador de la aplicación materializa sesiones después de la asignación sin crear reservas para los alumnos habituales con asignación vigente. Se reprodujo en PostgreSQL con una sesión creada y cero reservas para el alumno asignado.
+- El CLI `npm run academic:generate-sessions` recibe las fechas de vigencia PostgreSQL como objetos `Date` y las pasa a `DateTime.fromISO`. Se reprodujo con una plantilla activa que produjo cero sesiones. La generación por CLI y la incorporación de alumnos habituales se revisarán juntas.
+
+Para verificar la siguiente tarea en TEST, usar una plantilla activa con fechas devueltas por PostgreSQL, una asignación vigente previa a la generación y un segundo intento de generación. Comprobar el aforo, la versión aplicada y la ausencia de reservas duplicadas. Queda por definir la prioridad cuando los alumnos habituales elegibles superan las plazas disponibles. El diagnóstico del CLI y los casos con plazas suficientes pueden avanzar con la regla vigente.

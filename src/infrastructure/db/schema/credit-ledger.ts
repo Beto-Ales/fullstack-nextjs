@@ -7,6 +7,8 @@ import { reservationCancellations } from "@/src/infrastructure/db/schema/reserva
 import { studentProfiles } from "@/src/infrastructure/db/schema/student-profiles";
 import { users } from "@/src/infrastructure/db/schema/users";
 
+import { academicRegulations } from "@/src/infrastructure/db/schema/academic-regulations";
+
 export const creditMovementTypeEnum = pgEnum("credit_movement_type", [
   "AUTO_CANCELLATION_GRANT",
   "MANUAL_GRANT",
@@ -38,6 +40,7 @@ export const creditLedgerMovements = pgTable(
     sourceMovementId: text("source_movement_id"),
     refundRestoredCredit: boolean("refund_restored_credit"),
     idempotencyKey: text("idempotency_key").notNull(),
+    regulationVersionId: text("regulation_version_id").references(() => academicRegulations.id),
   },
   (table) => [
     index("credit_ledger_student_created_idx").on(table.studentProfileId, table.createdAt),

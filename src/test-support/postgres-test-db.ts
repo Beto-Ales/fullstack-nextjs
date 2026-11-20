@@ -75,5 +75,22 @@ export async function resetTestDatabase(client: Client): Promise<void> {
   }
 
   const tableList = tables.rows.map(({ tablename }) => `"${tablename}"`).join(", ");
-  await client.query(`truncate table ${tableList} restart identity cascade`);
+  const hasRegulations = tables.rows.some(({ tablename }) => tablename === "academic_regulations");
+  await client.query("begin");
+  try {
+    if (hasRegulations) {
+      await client.query(`
+        create temporary table test_initial_regulation on commit drop as
+        select * from academic_regulations where id = 'initial'
+      `);
+    }
+    await client.query(`truncate table ${tableList} restart identity cascade`);
+    if (hasRegulations) {
+      await client.query("insert into academic_regulations select * from test_initial_regulation");
+    }
+    await client.query("commit");
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  }
 }

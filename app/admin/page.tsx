@@ -7,6 +7,7 @@ import { grantManualCreditsAction, withdrawManualCreditsAction } from "@/src/int
 import { redirect } from "next/navigation";
 import { getPublicErrorMessage } from "@/src/infrastructure/errors";
 import { getRecoveryHistory } from "@/src/application/recovery/recovery-service";
+import Link from "next/link";
 
 type AdminPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -70,6 +71,7 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
     <main>
       <h1>Área de administración</h1>
       <p>Sesión iniciada como: {user.email}</p>
+      <p><Link href="/normativa">Consultar y gestionar la normativa</Link></p>
       <h2>Créditos</h2>
       {errorMessage ? (
         <p role="alert" aria-live="polite">
@@ -122,6 +124,9 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
                 {movement.movementType} · +/−{movement.amount} · {movement.createdAt.toISOString()}
                 {movement.expiresAt ? ` · caduca ${movement.expiresAt.toISOString()}` : ""}
                 {movement.reason ? ` · motivo: ${movement.reason}` : ""}
+                {movement.regulationVersionId && (
+                  <> · <Link href={`/normativa#version-${movement.regulationVersionId}`}>Normativa aplicada</Link></>
+                )}
               </li>
             ))}
           </ul>
@@ -131,6 +136,12 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
             {recoveryHistory?.reservations.map((reservation) => (
               <li key={reservation.reservationId}>
                 {reservation.classLocalDate} · {reservation.classStartsAtUtc.toISOString()} · estado: {reservation.status}
+                {reservation.regulationVersionId && (
+                  <> · <Link href={`/normativa#version-${reservation.regulationVersionId}`}>Normativa de reserva</Link></>
+                )}
+                {reservation.cancellationRegulationVersionId && (
+                  <> · <Link href={`/normativa#version-${reservation.cancellationRegulationVersionId}`}>Normativa de cancelación</Link></>
+                )}
               </li>
             ))}
           </ul>

@@ -96,6 +96,14 @@ async function main() {
     await client.query("set transaction isolation level read committed");
     await client.query("select pg_advisory_xact_lock($1)", [ADVISORY_LOCK_KEY]);
 
+    const { rows: [regulation] } = await client.query(
+      "select id, max_class_capacity from academic_regulations where effective_from <= $1 order by effective_from desc limit 1",
+      [now.toISODate()],
+    );
+    if (!regulation) {
+      throw new Error("Missing initial academic regulation.");
+    }
+
     const { rows: templates } = await client.query(`
       select id, iso_weekday, starts_at_local_time, duration_minutes, effective_from, effective_to, max_capacity
       from class_templates
@@ -111,12 +119,16 @@ async function main() {
         const result = await client.query(
           `
             insert into class_sessions (
-              id, template_id, local_date, starts_at_utc, ends_at_utc, status, max_capacity, is_manually_edited, created_at, updated_at
+              id, template_id, local_date, starts_at_utc, ends_at_utc, status, max_capacity,
+              is_manually_edited, regulation_version_id, created_at, updated_at
             )
-            values ($1, $2, $3, $4, $5, 'SCHEDULED', $6, false, now(), now())
+            values ($1, $2, $3, $4, $5, 'SCHEDULED', $6, false, $7, now(), now())
             on conflict do nothing
           `,
-          [randomUUID(), candidate.templateId, candidate.localDate, candidate.startsAtUtc, candidate.endsAtUtc, candidate.maxCapacity],
+          [
+            randomUUID(), candidate.templateId, candidate.localDate, candidate.startsAtUtc, candidate.endsAtUtc,
+            Math.min(candidate.maxCapacity, regulation.max_class_capacity), regulation.id,
+          ],
         );
         if (result.rowCount > 0) {
           inserted += 1;

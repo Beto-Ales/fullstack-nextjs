@@ -1,11 +1,16 @@
 import { DateTime } from "luxon";
 
+import { INITIAL_REGULATION } from "@/src/domain/academic/regulation";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 
 export type CancellationTimingType = "ON_TIME" | "LATE";
 export type CancellationEligibilityReason = "TIMING" | "SEQUENCE_POSITION" | "NON_HABITUAL";
 
-export function classifyCancellationTiming(cancelledAtUtc: Date, classStartsAtUtc: Date): {
+export function classifyCancellationTiming(
+  cancelledAtUtc: Date,
+  classStartsAtUtc: Date,
+  noticeDays = INITIAL_REGULATION.cancellationNoticeDays,
+): {
   type: CancellationTimingType;
   meetsSevenDayRule: boolean;
   hoursBeforeStart: number;
@@ -13,7 +18,8 @@ export function classifyCancellationTiming(cancelledAtUtc: Date, classStartsAtUt
   const cancelledAt = DateTime.fromJSDate(cancelledAtUtc, { zone: "utc" }).setZone(CENTER_TIME_ZONE);
   const classStartsAt = DateTime.fromJSDate(classStartsAtUtc, { zone: "utc" }).setZone(CENTER_TIME_ZONE);
   const diffHours = classStartsAt.diff(cancelledAt, "hours").hours;
-  const meetsSevenDayRule = diffHours >= 7 * 24;
+  const noticeDeadline = classStartsAt.startOf("day").minus({ days: noticeDays });
+  const meetsSevenDayRule = cancelledAt.startOf("day") <= noticeDeadline && cancelledAt <= classStartsAt;
 
   return {
     type: meetsSevenDayRule ? "ON_TIME" : "LATE",
@@ -72,7 +78,7 @@ export function evaluateCancellationSequence(events: HabitualSequenceEvent[]): E
     }
 
     if (event.eventType === "ATTENDANCE") {
-      if (event.outcome === "ATTENDED" || event.outcome === "ABSENT") {
+      if (event.outcome === "ATTENDED") {
         sequenceCounter = 0;
         currentSequenceId = null;
       }

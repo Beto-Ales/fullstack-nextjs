@@ -34,6 +34,12 @@
 - `reservation_cancellations`: historial de cancelaciones con secuencia/elegibilidad.
 - `reservation_attendance_records`: historial de asistencia/ausencia con correcciones.
 - `credit_ledger_movements`: ledger inmutable de créditos (auto, manual, retirada y caducidad).
+- `academic_regulations`: versiones publicadas de normativa, con vigencia única y auditoría de cambios.
+- `class_session_edits`: ediciones de sesiones con la versión aplicada.
+
+## Migración de normativa
+
+`0006_academic_regulations` incorpora la versión inicial y las referencias de aplicación. El 20 de noviembre de 2026 se aplicó solo a PostgreSQL TEST mediante el flujo Drizzle del repositorio. Las referencias de operaciones previas se conservan vacías.
 
 ## Flujo de migraciones
 

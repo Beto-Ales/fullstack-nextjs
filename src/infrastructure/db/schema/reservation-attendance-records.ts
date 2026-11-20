@@ -6,6 +6,8 @@ import { classSessions } from "@/src/infrastructure/db/schema/class-sessions";
 import { studentProfiles } from "@/src/infrastructure/db/schema/student-profiles";
 import { users } from "@/src/infrastructure/db/schema/users";
 
+import { academicRegulations } from "@/src/infrastructure/db/schema/academic-regulations";
+
 export const attendanceOutcomeEnum = pgEnum("attendance_outcome", ["ATTENDED", "ABSENT"]);
 export const attendanceSourceEnum = pgEnum("attendance_source", ["MANUAL", "AUTO"]);
 
@@ -13,6 +15,7 @@ export const reservationAttendanceRecords = pgTable(
   "reservation_attendance_records",
   {
     id: text("id").primaryKey(),
+    regulationVersionId: text("regulation_version_id").references(() => academicRegulations.id),
     reservationId: text("reservation_id")
       .notNull()
       .references(() => classReservations.id, { onDelete: "cascade" }),

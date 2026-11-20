@@ -1,5 +1,6 @@
 import { DateTime } from "luxon";
 
+import { INITIAL_REGULATION } from "@/src/domain/academic/regulation";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 
 export type CreditMovementType =
@@ -19,8 +20,8 @@ export type CreditMovementSnapshot = {
 const CREDIT_MOVEMENT_TYPES: CreditMovementType[] = ["AUTO_CANCELLATION_GRANT", "MANUAL_GRANT", "RECOVERY_REFUND"];
 const DEBIT_MOVEMENT_TYPES: CreditMovementType[] = ["MANUAL_WITHDRAWAL", "EXPIRATION", "RECOVERY_CONSUMPTION"];
 
-export function calculateAutoCreditExpiration(generatedAtUtc: Date): Date {
-  return DateTime.fromJSDate(generatedAtUtc, { zone: "utc" }).setZone(CENTER_TIME_ZONE).plus({ months: 6 }).toUTC().toJSDate();
+export function calculateAutoCreditExpiration(generatedAtUtc: Date, months = INITIAL_REGULATION.creditExpirationMonths): Date {
+  return DateTime.fromJSDate(generatedAtUtc, { zone: CENTER_TIME_ZONE }).plus({ months }).toUTC().toJSDate();
 }
 
 export function getCenterMonthUtcWindow(referenceDateUtc: Date): { monthStartUtc: Date; nextMonthStartUtc: Date } {

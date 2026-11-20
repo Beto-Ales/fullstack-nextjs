@@ -5,6 +5,8 @@ import { classSessions } from "@/src/infrastructure/db/schema/class-sessions";
 import { studentProfiles } from "@/src/infrastructure/db/schema/student-profiles";
 import { users } from "@/src/infrastructure/db/schema/users";
 
+import { academicRegulations } from "@/src/infrastructure/db/schema/academic-regulations";
+
 export const classReservationStatusEnum = pgEnum("class_reservation_status", ["CONFIRMED", "CANCELLED"]);
 export const classReservationOriginEnum = pgEnum("class_reservation_origin", ["ORDINARY", "MAKEUP"]);
 
@@ -21,6 +23,8 @@ export const classReservations = pgTable(
     status: classReservationStatusEnum("status").notNull().default("CONFIRMED"),
     origin: classReservationOriginEnum("origin").notNull().default("ORDINARY"),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    regulationVersionId: text("regulation_version_id").references(() => academicRegulations.id),
+    cancellationRegulationVersionId: text("cancellation_regulation_version_id").references(() => academicRegulations.id),
     cancelledByUserId: text("cancelled_by_user_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

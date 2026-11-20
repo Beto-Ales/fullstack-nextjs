@@ -20,6 +20,16 @@ describe("classifyCancellationTiming", () => {
     expect(result.type).toBe("LATE");
     expect(result.meetsSevenDayRule).toBe(false);
   });
+
+  it("counts Copenhagen calendar dates across the daylight-saving change", () => {
+    const start = new Date("2026-04-04T06:00:00.000Z");
+    const beforeMidnight = new Date("2026-03-28T22:59:00.000Z");
+    const midnight = new Date("2026-03-28T23:00:00.000Z");
+
+    expect(classifyCancellationTiming(beforeMidnight, start).type).toBe("ON_TIME");
+    expect(classifyCancellationTiming(midnight, start).type).toBe("LATE");
+    expect(classifyCancellationTiming(beforeMidnight, start, 8).type).toBe("LATE");
+  });
 });
 
 describe("evaluateCancellationSequence", () => {
@@ -67,7 +77,7 @@ describe("evaluateCancellationSequence", () => {
     expect(results.find((item) => item.id === "c3")?.nonEligibilityReason).toBe("TIMING");
   });
 
-  it("resets sequence after ATTENDED and ABSENT", () => {
+  it("resets the sequence after ATTENDED and keeps it through ABSENT", () => {
     const results = evaluateCancellationSequence([
       cancellation("c1", "2026-01-01T10:00:00.000Z", "ON_TIME"),
       cancellation("c2", "2026-01-08T10:00:00.000Z", "ON_TIME"),
@@ -78,7 +88,7 @@ describe("evaluateCancellationSequence", () => {
     ]);
 
     expect(results.find((item) => item.id === "c3")?.sequencePosition).toBe(1);
-    expect(results.find((item) => item.id === "c4")?.sequencePosition).toBe(1);
+    expect(results.find((item) => item.id === "c4")?.sequencePosition).toBe(2);
   });
 
   it("ignores non-habitual cancellations for habitual sequence", () => {

@@ -1,5 +1,7 @@
 export * from "@/src/infrastructure/db/schema/app-metadata";
+export * from "@/src/infrastructure/db/schema/academic-regulations";
 export * from "@/src/infrastructure/db/schema/class-reservations";
+export * from "@/src/infrastructure/db/schema/class-session-edits";
 export * from "@/src/infrastructure/db/schema/class-sessions";
 export * from "@/src/infrastructure/db/schema/class-templates";
 export * from "@/src/infrastructure/db/schema/credit-ledger";

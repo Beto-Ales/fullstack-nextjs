@@ -14,7 +14,7 @@ Separar responsabilidades desde el inicio para mantener reglas de negocio fuera 
   - En esta fase: estrategia de zona horaria + identidad + reglas académicas de recurrencia/capacidad + utilidades de ledger de créditos.
 - `src/application/`
   - Casos de uso/coordinación de operaciones.
-  - En esta fase: autenticación, servicios académicos (plantillas, sesiones, asignaciones, reservas/cancelaciones/asistencia), servicios de créditos y servicios de recuperaciones.
+  - En esta fase: autenticación, servicios académicos (plantillas, sesiones, asignaciones, reservas/cancelaciones/asistencia), normativa versionada, créditos y recuperaciones.
 - `src/infrastructure/`
   - Implementaciones técnicas: entorno, logging, errores, base de datos, esquemas, hashing, rate limiting y persistencia académica.
   - Incluye ledger transaccional de créditos con claves de idempotencia e índices de concurrencia.
@@ -29,9 +29,15 @@ Separar responsabilidades desde el inicio para mantener reglas de negocio fuera 
 4. **Configuración centralizada**: entorno, DB, fechas y logging.
 5. **Preparado para crecer por fases** sin introducir abstracciones vacías.
 
-## Fuera de alcance actual
+## Normativa académica versionada
 
-- Normativa configurable/versionada para fases posteriores.
+- `/normativa` exige sesión y muestra los valores vigentes a alumnos y administradores. El servidor verifica el rol `SUPER_ADMIN` para publicar y consultar el historial.
+- La versión aplicable es la última con fecha de entrada en vigor igual o anterior a la fecha de la operación en `Europe/Copenhagen`. La entrada en vigor comienza a medianoche local. La publicación exige una fecha futura para preservar lo que estaba vigente en días previos.
+- Cada publicación registra el usuario, la fecha y hora, la versión con la que se comparó y los valores que cambiaron. Una fecha admite una sola versión. PostgreSQL impide editar o borrar las versiones publicadas.
+- Las operaciones guardan la referencia aplicada y los créditos conservan su fecha original de caducidad. Las reservas guardan por separado la versión de alta y la de cancelación. Las ediciones de sesiones guardan un registro por operación en `class_session_edits`.
+- Los registros anteriores a la migración conservan sus resultados y la referencia queda vacía cuando falta una versión verificable. La publicación solo añade una versión.
+
+La [siguiente tarea de generación de sesiones](academic-model.md#siguiente-tarea-generación-de-sesiones) reúne los dos fallos reproducidos.
 
 ## Orden global de bloqueo (concurrencia)
 

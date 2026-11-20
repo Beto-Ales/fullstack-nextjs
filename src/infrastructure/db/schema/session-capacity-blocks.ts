@@ -3,10 +3,13 @@ import { boolean, index, integer, pgTable, text, timestamp } from "drizzle-orm/p
 import { classSessions } from "@/src/infrastructure/db/schema/class-sessions";
 import { users } from "@/src/infrastructure/db/schema/users";
 
+import { academicRegulations } from "@/src/infrastructure/db/schema/academic-regulations";
+
 export const sessionCapacityBlocks = pgTable(
   "session_capacity_blocks",
   {
     id: text("id").primaryKey(),
+    regulationVersionId: text("regulation_version_id").references(() => academicRegulations.id),
     classSessionId: text("class_session_id")
       .notNull()
       .references(() => classSessions.id, { onDelete: "cascade" }),

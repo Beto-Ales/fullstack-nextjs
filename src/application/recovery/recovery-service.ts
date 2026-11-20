@@ -5,11 +5,12 @@ import { randomUUID } from "node:crypto";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 
-import { createRecoveryConsumption, createRecoveryRefund, lockStudentProfile, materializeExpiredCredits } from "@/src/application/credits/credit-service";
+import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { createRecoveryConsumption, createRecoveryRefund, lockStudentProfile, materializeExpiredCredits, readCreditBalance } from "@/src/application/credits/credit-service";
 import { cancelRecoverySchema, recoveryHistorySchema, reserveRecoverySchema } from "@/src/application/recovery/schemas";
 import { type UserRole } from "@/src/domain/auth/roles";
 import { classifyCancellationTiming } from "@/src/domain/academic/cancellation-rules";
-import { calculateAvailableCredits } from "@/src/domain/credits/ledger";
+import { calculateAvailableSpots } from "@/src/domain/academic/availability";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { db } from "@/src/infrastructure/db/client";
 import {
@@ -37,8 +38,6 @@ type LockedRecoveryReservation = {
   classStartsAtUtc: Date;
   classLocalDate: string;
 };
-
-const MONTHLY_RECOVERY_LIMIT = 2;
 
 function toMonthRange(localDate: string): { monthStartLocalDate: string; nextMonthStartLocalDate: string } {
   const local = DateTime.fromISO(localDate, { zone: CENTER_TIME_ZONE });
@@ -78,7 +77,7 @@ async function lockReservationForRecoveryCancellation(
       r.class_session_id,
       s.status as class_status,
       s.starts_at_utc as class_starts_at_utc,
-      s.local_date as class_local_date
+      s.local_date::text as class_local_date
     from class_reservations r
     inner join class_sessions s on s.id = r.class_session_id
     where r.id = ${reservationId}
@@ -163,12 +162,14 @@ export async function listFutureRecoveryOptions(actor: Actor) {
   return db.transaction(async (tx) => {
     const studentProfileId = await getStudentProfileIdForActor(tx, actor);
     await lockStudentProfile(tx, studentProfileId);
-    await materializeExpiredCredits(tx, studentProfileId, new Date());
+    const now = new Date();
+    const regulation = await resolveCurrentAcademicRegulation(tx, now);
+    await materializeExpiredCredits(tx, studentProfileId, now);
 
     const rows = await tx.execute(sql`
       select
         s.id,
-        s.local_date,
+        s.local_date::text as local_date,
         s.starts_at_utc,
         s.ends_at_utc,
         s.status,
@@ -192,7 +193,7 @@ export async function listFutureRecoveryOptions(actor: Actor) {
         ) as already_reserved
       from class_sessions s
       where s.status = 'SCHEDULED'
-        and s.starts_at_utc > now()
+        and s.starts_at_utc > ${now}
       order by s.starts_at_utc asc
       limit 100
     `);
@@ -208,8 +209,20 @@ export async function listFutureRecoveryOptions(actor: Actor) {
       blocked_spots: number;
       already_reserved: boolean;
     }>)
-      .filter((row) => row.max_capacity - row.confirmed_reservations - row.blocked_spots > 0)
-      .filter((row) => !row.already_reserved);
+      .filter((row) => !row.already_reserved)
+      .map((row) => {
+        const maxCapacity = Math.min(row.max_capacity, regulation.maxClassCapacity);
+        return {
+          ...row,
+          maxCapacity,
+          availableSpots: calculateAvailableSpots({
+            capacity: maxCapacity,
+            confirmedReservations: row.confirmed_reservations,
+            blockedSpots: row.blocked_spots,
+          }),
+        };
+      })
+      .filter((row) => row.availableSpots > 0);
 
     const monthlyUsage = new Map<string, number>();
     for (const row of sessions) {
@@ -229,25 +242,25 @@ export async function listFutureRecoveryOptions(actor: Actor) {
           localDate: row.local_date,
           startsAtUtc: new Date(row.starts_at_utc),
           endsAtUtc: new Date(row.ends_at_utc),
-          maxCapacity: row.max_capacity,
-          availableSpots: row.max_capacity - row.confirmed_reservations - row.blocked_spots,
+          maxCapacity: row.maxCapacity,
+          availableSpots: row.availableSpots,
           monthlyRecoveryUsed: used,
-          monthlyRecoveryRemaining: Math.max(0, MONTHLY_RECOVERY_LIMIT - used),
+          monthlyRecoveryRemaining: Math.max(0, regulation.monthlyRecoveries - used),
         };
       }),
     };
   });
 }
 
-export async function reserveRecovery(actor: Actor, input: unknown) {
-  if (actor.role !== "STUDENT") {
+export async function reserveRecovery(actor: Actor, input: unknown, studentProfileIdForAdmin?: string) {
+  if (studentProfileIdForAdmin ? actor.role !== "SUPER_ADMIN" : actor.role !== "STUDENT") {
     throw new ApplicationError("Forbidden", "forbidden", 403, true);
   }
   const payload = reserveRecoverySchema.parse(input);
 
   return db.transaction(async (tx) => {
     const sessionRows = await tx.execute(sql`
-      select id, status, starts_at_utc, local_date, max_capacity
+      select id, status, starts_at_utc, local_date::text as local_date, max_capacity
       from class_sessions
       where id = ${payload.classSessionId}
       for update
@@ -273,14 +286,15 @@ export async function reserveRecovery(actor: Actor, input: unknown) {
       throw new ApplicationError("Recovery class must be in the future.", "session_not_future", 409, true);
     }
 
-    const studentProfileId = await getStudentProfileIdForActor(tx, actor);
+    const studentProfileId = studentProfileIdForAdmin ?? await getStudentProfileIdForActor(tx, actor);
     await lockStudentProfile(tx, studentProfileId);
-    await materializeExpiredCredits(tx, studentProfileId, new Date());
+    const consumedAt = new Date();
+    await materializeExpiredCredits(tx, studentProfileId, consumedAt);
 
     const [existingReservation] = await tx
       .select({
         id: classReservations.id,
-        status: classReservations.status,
+        origin: classReservations.origin,
       })
       .from(classReservations)
       .where(
@@ -293,32 +307,46 @@ export async function reserveRecovery(actor: Actor, input: unknown) {
       .limit(1);
 
     if (existingReservation) {
+      if (existingReservation.origin !== "MAKEUP") {
+        throw new ApplicationError("An ordinary reservation already exists for this session.", "ordinary_reservation_exists", 409, true);
+      }
       const [existingConsumption] = await tx
         .select({
           id: creditLedgerMovements.id,
           sourceGrantMovementId: creditLedgerMovements.sourceGrantMovementId,
           expiresAt: creditLedgerMovements.expiresAt,
+          idempotencyKey: creditLedgerMovements.idempotencyKey,
         })
         .from(creditLedgerMovements)
         .where(
           and(
             eq(creditLedgerMovements.movementType, "RECOVERY_CONSUMPTION"),
             eq(creditLedgerMovements.relatedReservationId, existingReservation.id),
+            eq(creditLedgerMovements.studentProfileId, studentProfileId),
+            eq(creditLedgerMovements.classSessionId, payload.classSessionId),
           ),
         )
         .limit(1);
 
+      if (!existingConsumption) {
+        throw new ApplicationError("Recovery reservation has no associated consumption movement.", "recovery_consumption_missing", 500);
+      }
+      if (payload.idempotencyKey && payload.idempotencyKey !== existingConsumption.idempotencyKey) {
+        throw new ApplicationError("Recovery key does not match this operation.", "recovery_idempotency_conflict", 409, true);
+      }
+
       return {
         reservationId: existingReservation.id,
         idempotent: true,
-        consumedMovementId: existingConsumption?.id ?? null,
-        consumedFromGrantMovementId: existingConsumption?.sourceGrantMovementId ?? null,
-        consumedCreditExpiresAt: existingConsumption?.expiresAt ?? null,
+        consumedMovementId: existingConsumption.id,
+        consumedFromGrantMovementId: existingConsumption.sourceGrantMovementId,
+        consumedCreditExpiresAt: existingConsumption.expiresAt,
       };
     }
 
+    const regulation = await resolveCurrentAcademicRegulation(tx, consumedAt);
     const monthlyRecoveries = await countMonthlyRecoveries(tx, studentProfileId, session.local_date);
-    if (monthlyRecoveries >= MONTHLY_RECOVERY_LIMIT) {
+    if (monthlyRecoveries >= regulation.monthlyRecoveries) {
       throw new ApplicationError("Monthly recovery limit reached.", "monthly_recovery_limit_reached", 409, true);
     }
 
@@ -329,7 +357,7 @@ export async function reserveRecovery(actor: Actor, input: unknown) {
     `);
 
     const usage = counts.rows[0] as { confirmed_reservations: number; blocked_spots: number };
-    if (usage.confirmed_reservations + usage.blocked_spots >= session.max_capacity) {
+    if (usage.confirmed_reservations + usage.blocked_spots >= Math.min(session.max_capacity, regulation.maxClassCapacity)) {
       throw new ApplicationError("No spots available.", "no_spots_available", 409, true);
     }
 
@@ -340,17 +368,18 @@ export async function reserveRecovery(actor: Actor, input: unknown) {
       studentProfileId,
       status: "CONFIRMED",
       origin: "MAKEUP",
+      regulationVersionId: regulation.id,
       cancelledAt: null,
       cancelledByUserId: null,
     });
 
-    const consumedAt = new Date();
     const consumption = await createRecoveryConsumption(tx, {
       studentProfileId,
       reservationId,
       classSessionId: payload.classSessionId,
       idempotencyKey: payload.idempotencyKey ?? `recovery-consumption:${reservationId}`,
       consumedAt,
+      regulationVersionId: regulation.id,
     });
 
     return {
@@ -393,7 +422,8 @@ export async function cancelRecoveryReservation(actor: Actor, input: unknown) {
     await lockStudentProfile(tx, reservation.studentProfileId);
 
     const cancelledAt = new Date();
-    const timing = classifyCancellationTiming(cancelledAt, reservation.classStartsAtUtc);
+    const regulation = await resolveCurrentAcademicRegulation(tx, cancelledAt);
+    const timing = classifyCancellationTiming(cancelledAt, reservation.classStartsAtUtc, regulation.cancellationNoticeDays);
 
     await tx
       .update(classReservations)
@@ -401,6 +431,7 @@ export async function cancelRecoveryReservation(actor: Actor, input: unknown) {
         status: "CANCELLED",
         cancelledAt,
         cancelledByUserId: actor.userId,
+        cancellationRegulationVersionId: regulation.id,
         updatedAt: cancelledAt,
       })
       .where(eq(classReservations.id, reservation.reservationId));
@@ -419,7 +450,8 @@ export async function cancelRecoveryReservation(actor: Actor, input: unknown) {
     const refund = await createRecoveryRefund(tx, {
       reservationId: reservation.reservationId,
       refundedAt: cancelledAt,
-      refundReason: "Recovery cancelled on time (>=7 days)",
+      refundReason: "Recovery cancelled on time",
+      regulationVersionId: regulation.id,
     });
 
     return {
@@ -437,6 +469,8 @@ export async function cancelRecoveriesForCancelledSession(
     classSessionId: string;
     cancelledByUserId: string;
     reason: string;
+    cancelledAt: Date;
+    regulationVersionId: string;
   },
 ): Promise<{ cancelledRecoveries: number; refundsCreated: number }> {
   const rows = await tx.execute(sql`
@@ -460,21 +494,22 @@ export async function cancelRecoveriesForCancelledSession(
     await assertRecoveryConsumptionExists(tx, row.reservation_id);
 
     cancelledRecoveries += 1;
-    const now = new Date();
     await tx
       .update(classReservations)
       .set({
         status: "CANCELLED",
-        cancelledAt: now,
+        cancelledAt: input.cancelledAt,
         cancelledByUserId: input.cancelledByUserId,
-        updatedAt: now,
+        cancellationRegulationVersionId: input.regulationVersionId,
+        updatedAt: input.cancelledAt,
       })
       .where(eq(classReservations.id, row.reservation_id));
 
     const refund = await createRecoveryRefund(tx, {
       reservationId: row.reservation_id,
-      refundedAt: now,
+      refundedAt: input.cancelledAt,
       refundReason: input.reason,
+      regulationVersionId: input.regulationVersionId,
     });
     if (refund.created) {
       refundsCreated += 1;
@@ -504,6 +539,8 @@ export async function getRecoveryHistory(actor: Actor, input?: unknown) {
         reservationId: classReservations.id,
         status: classReservations.status,
         cancelledAt: classReservations.cancelledAt,
+        regulationVersionId: classReservations.regulationVersionId,
+        cancellationRegulationVersionId: classReservations.cancellationRegulationVersionId,
         classSessionId: classReservations.classSessionId,
         classStartsAtUtc: classSessions.startsAtUtc,
         classEndsAtUtc: classSessions.endsAtUtc,
@@ -528,6 +565,7 @@ export async function getRecoveryHistory(actor: Actor, input?: unknown) {
         createdAt: creditLedgerMovements.createdAt,
         expiresAt: creditLedgerMovements.expiresAt,
         refundRestoredCredit: creditLedgerMovements.refundRestoredCredit,
+        regulationVersionId: creditLedgerMovements.regulationVersionId,
       })
       .from(creditLedgerMovements)
       .where(
@@ -554,7 +592,9 @@ export async function getRecoveryAvailabilityForSession(actor: Actor, classSessi
   return db.transaction(async (tx) => {
     const studentProfileId = await getStudentProfileIdForActor(tx, actor);
     await lockStudentProfile(tx, studentProfileId);
-    await materializeExpiredCredits(tx, studentProfileId, new Date());
+    const now = new Date();
+    const regulation = await resolveCurrentAcademicRegulation(tx, now);
+    await materializeExpiredCredits(tx, studentProfileId, now);
 
     const [session] = await tx
       .select({
@@ -596,29 +636,22 @@ export async function getRecoveryAvailabilityForSession(actor: Actor, classSessi
       .limit(1);
 
     const monthlyRecoveries = await countMonthlyRecoveries(tx, studentProfileId, session.localDate);
-    const rows = await readAvailableCreditsSnapshot(tx, studentProfileId);
+    const { availableCredits } = await readCreditBalance(tx, studentProfileId);
 
     return {
       classSessionId: session.id,
       localDate: session.localDate,
       startsAtUtc: session.startsAtUtc,
       status: session.status,
-      availableSpots: session.maxCapacity - Number(aggregate?.confirmedReservations ?? 0) - Number(aggregate?.blockedSpots ?? 0),
-      availableCredits: calculateAvailableCredits(rows),
+      availableSpots: calculateAvailableSpots({
+        capacity: Math.min(session.maxCapacity, regulation.maxClassCapacity),
+        confirmedReservations: Number(aggregate?.confirmedReservations ?? 0),
+        blockedSpots: Number(aggregate?.blockedSpots ?? 0),
+      }),
+      availableCredits,
       monthlyRecoveryUsed: monthlyRecoveries,
-      monthlyRecoveryRemaining: Math.max(0, MONTHLY_RECOVERY_LIMIT - monthlyRecoveries),
+      monthlyRecoveryRemaining: Math.max(0, regulation.monthlyRecoveries - monthlyRecoveries),
     };
   });
-}
-
-async function readAvailableCreditsSnapshot(tx: TransactionClient, studentProfileId: string) {
-  return tx
-    .select({
-      movementType: creditLedgerMovements.movementType,
-      amount: creditLedgerMovements.amount,
-      refundRestoredCredit: creditLedgerMovements.refundRestoredCredit,
-    })
-    .from(creditLedgerMovements)
-    .where(eq(creditLedgerMovements.studentProfileId, studentProfileId));
 }
 

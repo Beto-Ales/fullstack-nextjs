@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { DateTime } from "luxon";
 
@@ -16,11 +16,6 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (po
 
   beforeEach(async () => {
     await resetTestDatabase(client);
-    await client.query("begin");
-  });
-
-  afterEach(async () => {
-    await client.query("rollback");
   });
 
   afterAll(async () => {
@@ -246,8 +241,10 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (po
       { classSessionId: session.sessionId, startsAtUtc: movedStart, endsAtUtc: movedEnd },
     );
 
-    const moved = await client.query<{ local_date: string }>(`select local_date from class_sessions where id = $1`, [session.sessionId]);
+    const moved = await client.query<{ local_date: string }>(`select local_date::text from class_sessions where id = $1`, [session.sessionId]);
     expect(moved.rows[0]?.local_date).toBe(movedDate);
+    const edit = await client.query("select regulation_version_id from class_session_edits where class_session_id = $1", [session.sessionId]);
+    expect(edit.rows).toEqual([{ regulation_version_id: "initial" }]);
   });
 
   it("rejects reprogramming that would exceed monthly recovery limit after month change", async () => {

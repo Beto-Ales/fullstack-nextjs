@@ -210,12 +210,12 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("credits integration (pos
       service.withdrawManualCredits(adminActor, {
         studentProfileId,
         amount: 3,
-        reason: "A",
+        reason: "Withdrawal A",
       }),
       service.withdrawManualCredits(adminActor, {
         studentProfileId,
         amount: 3,
-        reason: "B",
+        reason: "Withdrawal B",
       }),
     ]);
 

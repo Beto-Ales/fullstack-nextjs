@@ -5,6 +5,8 @@ import { classSessions } from "@/src/infrastructure/db/schema/class-sessions";
 import { studentProfiles } from "@/src/infrastructure/db/schema/student-profiles";
 import { users } from "@/src/infrastructure/db/schema/users";
 
+import { academicRegulations } from "@/src/infrastructure/db/schema/academic-regulations";
+
 export const reservationCancellationTypeEnum = pgEnum("reservation_cancellation_type", ["ON_TIME", "LATE"]);
 export const cancellationNonEligibilityReasonEnum = pgEnum("cancellation_non_eligibility_reason", [
   "TIMING",
@@ -27,6 +29,7 @@ export const reservationCancellations = pgTable(
       .references(() => classSessions.id, { onDelete: "cascade" }),
     cancelledByUserId: text("cancelled_by_user_id").references(() => users.id, { onDelete: "set null" }),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }).notNull(),
+    regulationVersionId: text("regulation_version_id").references(() => academicRegulations.id),
     cancellationType: reservationCancellationTypeEnum("cancellation_type").notNull(),
     hoursBeforeStart: integer("hours_before_start").notNull(),
     meetsSevenDayRule: boolean("meets_seven_day_rule").notNull(),

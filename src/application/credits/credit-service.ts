@@ -5,9 +5,10 @@ import { randomUUID } from "node:crypto";
 import { and, eq, gte, inArray, isNotNull, lt, lte, sql } from "drizzle-orm";
 
 import { creditStudentQuerySchema, manualCreditGrantSchema, manualCreditWithdrawSchema } from "@/src/application/credits/schemas";
+import { INITIAL_REGULATION } from "@/src/domain/academic/regulation";
 import { type UserRole } from "@/src/domain/auth/roles";
 import { pickNextFifoBucket, type FifoBucket } from "@/src/domain/credits/fifo";
-import { calculateAutoCreditExpiration, calculateAvailableCredits, getCenterMonthUtcWindow } from "@/src/domain/credits/ledger";
+import { calculateAutoCreditExpiration, getCenterMonthUtcWindow } from "@/src/domain/credits/ledger";
 import { db } from "@/src/infrastructure/db/client";
 import { creditLedgerMovements, studentProfiles } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
@@ -18,8 +19,6 @@ type Actor = {
 };
 
 export type TransactionClient = Parameters<Parameters<typeof db.transaction>[0]>[0];
-
-const AUTO_MONTHLY_LIMIT = 2;
 
 type LedgerRow = {
   id: string;
@@ -143,7 +142,7 @@ function applyDebitFifo(bucketByGrantId: Map<string, CreditBucket>, amount: numb
     if (remaining <= 0) {
       return;
     }
-    const used = Math.min(bucket.availableUnits, remaining);
+    const used = Math.min(Math.max(0, bucket.availableUnits), remaining);
     bucket.availableUnits -= used;
     remaining -= used;
   }
@@ -155,6 +154,8 @@ function buildCreditBuckets(rows: LedgerRow[]): FifoBucket[] {
   for (const row of rows) {
     if (row.movementType === "AUTO_CANCELLATION_GRANT" || row.movementType === "MANUAL_GRANT") {
       const bucket = getOrCreateBucket(bucketByGrantId, row.id, row.createdAt, row.expiresAt);
+      bucket.createdAt = row.createdAt;
+      bucket.expiresAt = row.expiresAt;
       bucket.availableUnits += row.amount;
       continue;
     }
@@ -189,7 +190,8 @@ function buildCreditBuckets(rows: LedgerRow[]): FifoBucket[] {
         continue;
       }
       const bucket = getOrCreateBucket(bucketByGrantId, row.sourceGrantMovementId, row.createdAt, null);
-      bucket.availableUnits = Math.max(0, bucket.availableUnits - row.amount);
+      // A linked debit can sort before its grant when both share a JavaScript millisecond.
+      bucket.availableUnits -= row.amount;
     }
   }
 
@@ -200,8 +202,8 @@ export async function materializeExpiredCredits(tx: TransactionClient, studentPr
   const expiredGrants = await tx
     .select({
       id: creditLedgerMovements.id,
-      amount: creditLedgerMovements.amount,
       expiresAt: creditLedgerMovements.expiresAt,
+      regulationVersionId: creditLedgerMovements.regulationVersionId,
     })
     .from(creditLedgerMovements)
     .where(
@@ -211,7 +213,8 @@ export async function materializeExpiredCredits(tx: TransactionClient, studentPr
         isNotNull(creditLedgerMovements.expiresAt),
         lte(creditLedgerMovements.expiresAt, referenceTime),
       ),
-    );
+    )
+    .orderBy(creditLedgerMovements.expiresAt, creditLedgerMovements.id);
 
   let created = 0;
 
@@ -227,7 +230,15 @@ export async function materializeExpiredCredits(tx: TransactionClient, studentPr
       )
       .limit(1);
 
-    if (existingExpiration) {
+    if (existingExpiration || !grant.expiresAt) {
+      continue;
+    }
+
+    const rows = await readLedgerRows(tx, studentProfileId);
+    const expiresAt = grant.expiresAt;
+    const bucket = buildCreditBuckets(rows.filter((row) => row.createdAt <= expiresAt))
+      .find((item) => item.grantMovementId === grant.id);
+    if (!bucket) {
       continue;
     }
 
@@ -235,10 +246,11 @@ export async function materializeExpiredCredits(tx: TransactionClient, studentPr
       id: randomUUID(),
       studentProfileId,
       movementType: "EXPIRATION",
-      amount: grant.amount,
-      createdAt: grant.expiresAt ?? referenceTime,
+      amount: bucket.availableUnits,
+      createdAt: expiresAt,
       expiresAt: null,
-      reason: "Auto-expiration after 6 months",
+      reason: "Auto-expiration on the credit's original expiry date",
+      regulationVersionId: grant.regulationVersionId,
       sourceGrantMovementId: grant.id,
       sourceMovementId: grant.id,
       idempotencyKey: `expiration:${grant.id}`,
@@ -263,21 +275,13 @@ export async function selectNextFifoCreditForConsumption(
   return { grantMovementId: winner.grantMovementId, expiresAt: winner.expiresAt };
 }
 
-async function readBalance(tx: TransactionClient, studentProfileId: string): Promise<{
+export async function readCreditBalance(tx: TransactionClient, studentProfileId: string): Promise<{
   availableCredits: number;
   expiredCredits: number;
   totalCreditsGranted: number;
 }> {
-  const movements = await tx
-    .select({
-      movementType: creditLedgerMovements.movementType,
-      amount: creditLedgerMovements.amount,
-      refundRestoredCredit: creditLedgerMovements.refundRestoredCredit,
-    })
-    .from(creditLedgerMovements)
-    .where(eq(creditLedgerMovements.studentProfileId, studentProfileId));
-
-  const availableCredits = calculateAvailableCredits(movements);
+  const movements = await readLedgerRows(tx, studentProfileId);
+  const availableCredits = buildCreditBuckets(movements).reduce((sum, bucket) => sum + bucket.availableUnits, 0);
   const expiredCredits = movements
     .filter((item) => item.movementType === "EXPIRATION")
     .reduce((acc, item) => acc + item.amount, 0);
@@ -300,34 +304,12 @@ export async function createRecoveryConsumption(
     classSessionId: string;
     idempotencyKey: string;
     consumedAt: Date;
+    regulationVersionId: string;
   },
 ): Promise<{ movementId: string; sourceGrantMovementId: string; expiresAt: Date | null }> {
   const fifo = await selectNextFifoCreditForConsumption(tx, input.studentProfileId, input.consumedAt);
   if (!fifo) {
     throw new ApplicationError("No available credits.", "no_available_credits", 409, true);
-  }
-
-  const existingForReservation = await tx
-    .select({
-      id: creditLedgerMovements.id,
-      sourceGrantMovementId: creditLedgerMovements.sourceGrantMovementId,
-      expiresAt: creditLedgerMovements.expiresAt,
-    })
-    .from(creditLedgerMovements)
-    .where(
-      and(
-        eq(creditLedgerMovements.movementType, "RECOVERY_CONSUMPTION"),
-        eq(creditLedgerMovements.relatedReservationId, input.reservationId),
-      ),
-    )
-    .limit(1);
-
-  if (existingForReservation[0]) {
-    return {
-      movementId: existingForReservation[0].id,
-      sourceGrantMovementId: existingForReservation[0].sourceGrantMovementId ?? fifo.grantMovementId,
-      expiresAt: existingForReservation[0].expiresAt,
-    };
   }
 
   const movementId = randomUUID();
@@ -341,6 +323,7 @@ export async function createRecoveryConsumption(
       createdAt: input.consumedAt,
       expiresAt: fifo.expiresAt,
       reason: "Recovery reservation consumption",
+      regulationVersionId: input.regulationVersionId,
       classSessionId: input.classSessionId,
       relatedReservationId: input.reservationId,
       sourceGrantMovementId: fifo.grantMovementId,
@@ -349,24 +332,7 @@ export async function createRecoveryConsumption(
     .onConflictDoNothing();
 
   if (!insertResult.rowCount) {
-    const [byIdempotencyKey] = await tx
-      .select({
-        id: creditLedgerMovements.id,
-        sourceGrantMovementId: creditLedgerMovements.sourceGrantMovementId,
-        expiresAt: creditLedgerMovements.expiresAt,
-      })
-      .from(creditLedgerMovements)
-      .where(eq(creditLedgerMovements.idempotencyKey, input.idempotencyKey))
-      .limit(1);
-
-    if (byIdempotencyKey) {
-      return {
-        movementId: byIdempotencyKey.id,
-        sourceGrantMovementId: byIdempotencyKey.sourceGrantMovementId ?? fifo.grantMovementId,
-        expiresAt: byIdempotencyKey.expiresAt,
-      };
-    }
-    throw new ApplicationError("Recovery credit consumption already exists.", "recovery_consumption_exists", 409, true);
+    throw new ApplicationError("Recovery key belongs to a different operation.", "recovery_idempotency_conflict", 409, true);
   }
 
   return {
@@ -382,6 +348,7 @@ export async function createRecoveryRefund(
     reservationId: string;
     refundedAt: Date;
     refundReason: string;
+    regulationVersionId: string;
   },
 ): Promise<{ created: boolean; restoredCredit: boolean }> {
   const rows = await tx.execute(sql`
@@ -403,7 +370,7 @@ export async function createRecoveryRefund(
         student_profile_id: string;
         class_session_id: string | null;
         source_grant_movement_id: string | null;
-        expires_at: Date | null;
+        expires_at: string | Date | null;
       }
     | undefined;
 
@@ -426,7 +393,8 @@ export async function createRecoveryRefund(
     return { created: false, restoredCredit: Boolean(existingRefund.refundRestoredCredit) };
   }
 
-  const restoredCredit = !consumption.expires_at || consumption.expires_at > input.refundedAt;
+  const expiresAt = consumption.expires_at ? new Date(consumption.expires_at) : null;
+  const restoredCredit = !expiresAt || expiresAt > input.refundedAt;
 
   await tx.insert(creditLedgerMovements).values({
     id: randomUUID(),
@@ -434,8 +402,9 @@ export async function createRecoveryRefund(
     movementType: "RECOVERY_REFUND",
     amount: 1,
     createdAt: input.refundedAt,
-    expiresAt: consumption.expires_at,
+    expiresAt,
     reason: input.refundReason,
+    regulationVersionId: input.regulationVersionId,
     classSessionId: consumption.class_session_id,
     relatedReservationId: input.reservationId,
     sourceGrantMovementId: consumption.source_grant_movement_id,
@@ -457,10 +426,14 @@ export async function tryGenerateAutoCreditFromCancellation(
       rc.student_profile_id,
       rc.class_session_id,
       rc.cancelled_at,
-      rc.can_generate_credit_candidate
+      rc.can_generate_credit_candidate,
+      rc.regulation_version_id,
+      policy.monthly_cancellation_credits,
+      policy.credit_expiration_months
     from reservation_cancellations rc
+    left join academic_regulations policy on policy.id = rc.regulation_version_id
     where rc.id = ${cancellationId}
-    for update
+    for update of rc
   `);
 
   const cancellation = cancellationRows.rows[0] as
@@ -470,6 +443,9 @@ export async function tryGenerateAutoCreditFromCancellation(
         class_session_id: string;
         cancelled_at: Date;
         can_generate_credit_candidate: boolean;
+        regulation_version_id: string | null;
+        monthly_cancellation_credits: number | null;
+        credit_expiration_months: number | null;
       }
     | undefined;
 
@@ -499,7 +475,8 @@ export async function tryGenerateAutoCreditFromCancellation(
       ),
     );
 
-  if (Number(monthlyAutoCount?.count ?? 0) >= AUTO_MONTHLY_LIMIT) {
+  const monthlyLimit = cancellation.monthly_cancellation_credits ?? INITIAL_REGULATION.monthlyCancellationCredits;
+  if (Number(monthlyAutoCount?.count ?? 0) >= monthlyLimit) {
     return { created: false, reason: "MONTHLY_LIMIT" };
   }
 
@@ -512,7 +489,11 @@ export async function tryGenerateAutoCreditFromCancellation(
       movementType: "AUTO_CANCELLATION_GRANT",
       amount: 1,
       createdAt: new Date(cancellation.cancelled_at),
-      expiresAt: calculateAutoCreditExpiration(new Date(cancellation.cancelled_at)),
+      expiresAt: calculateAutoCreditExpiration(
+        new Date(cancellation.cancelled_at),
+        cancellation.credit_expiration_months ?? INITIAL_REGULATION.creditExpirationMonths,
+      ),
+      regulationVersionId: cancellation.regulation_version_id,
       reason: "Auto credit from third consecutive ON_TIME cancellation",
       classSessionId: cancellation.class_session_id,
       sourceCancellationId: cancellation.id,
@@ -535,7 +516,7 @@ export async function getCreditOverview(actor: Actor, input?: unknown) {
   return db.transaction(async (tx) => {
     await lockStudentProfile(tx, studentProfileId);
     await materializeExpiredCredits(tx, studentProfileId, new Date());
-    const balance = await readBalance(tx, studentProfileId);
+    const balance = await readCreditBalance(tx, studentProfileId);
 
     const history = await tx
       .select({
@@ -545,6 +526,7 @@ export async function getCreditOverview(actor: Actor, input?: unknown) {
         createdAt: creditLedgerMovements.createdAt,
         expiresAt: creditLedgerMovements.expiresAt,
         reason: creditLedgerMovements.reason,
+        regulationVersionId: creditLedgerMovements.regulationVersionId,
         classSessionId: creditLedgerMovements.classSessionId,
         relatedReservationId: creditLedgerMovements.relatedReservationId,
         adminUserId: creditLedgerMovements.adminUserId,
@@ -683,7 +665,7 @@ export async function withdrawManualCredits(actor: Actor, input: unknown) {
     await lockStudentProfile(tx, payload.studentProfileId);
     await materializeExpiredCredits(tx, payload.studentProfileId, new Date());
 
-    const balance = await readBalance(tx, payload.studentProfileId);
+    const balance = await readCreditBalance(tx, payload.studentProfileId);
     if (payload.amount > balance.availableCredits) {
       throw new ApplicationError("Cannot withdraw more credits than available.", "insufficient_credits", 409, true);
     }

@@ -3,6 +3,8 @@ import { sql } from "drizzle-orm";
 
 import { classTemplates } from "@/src/infrastructure/db/schema/class-templates";
 
+import { academicRegulations } from "@/src/infrastructure/db/schema/academic-regulations";
+
 export const classSessionStatusEnum = pgEnum("class_session_status", ["SCHEDULED", "CANCELLED", "COMPLETED"]);
 
 export const classSessions = pgTable(
@@ -15,6 +17,7 @@ export const classSessions = pgTable(
     endsAtUtc: timestamp("ends_at_utc", { withTimezone: true }).notNull(),
     status: classSessionStatusEnum("status").notNull().default("SCHEDULED"),
     maxCapacity: integer("max_capacity").notNull(),
+    regulationVersionId: text("regulation_version_id").references(() => academicRegulations.id),
     isManuallyEdited: boolean("is_manually_edited").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

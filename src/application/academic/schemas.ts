@@ -23,7 +23,7 @@ export const createClassTemplateSchema = z.object({
   effectiveFrom: isoDateSchema,
   effectiveTo: isoDateSchema.optional(),
   category: z.string().max(120).optional(),
-  maxCapacity: z.number().int().min(1).max(100).default(DEFAULT_CLASS_CAPACITY),
+  maxCapacity: z.number().int().min(1).max(DEFAULT_CLASS_CAPACITY).optional(),
 });
 
 export const setClassTemplateStatusSchema = z.object({
@@ -36,14 +36,14 @@ export const createOneOffSessionSchema = z.object({
   localDate: isoDateSchema,
   startsAtLocalTime: localTimeSchema,
   durationMinutes: z.number().int().min(15).max(360),
-  maxCapacity: z.number().int().min(1).max(100).default(DEFAULT_CLASS_CAPACITY),
+  maxCapacity: z.number().int().min(1).max(DEFAULT_CLASS_CAPACITY).optional(),
 });
 
 export const updateClassSessionSchema = z.object({
   classSessionId: z.string().uuid("Invalid session id."),
   startsAtUtc: z.coerce.date().optional(),
   endsAtUtc: z.coerce.date().optional(),
-  maxCapacity: z.number().int().min(1).max(100).optional(),
+  maxCapacity: z.number().int().min(1).max(DEFAULT_CLASS_CAPACITY).optional(),
   status: z.enum(["SCHEDULED", "CANCELLED", "COMPLETED"]).optional(),
 });
 

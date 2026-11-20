@@ -9,6 +9,8 @@ import {
 } from "@/src/interfaces/recovery/actions";
 import { getPublicErrorMessage } from "@/src/infrastructure/errors";
 import { redirect } from "next/navigation";
+import Link from "next/link";
+import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 
 type StudentHomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -42,6 +44,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
   const user = await requireRole("STUDENT");
   const query = (await searchParams) ?? {};
   const actionError = typeof query.error === "string" ? query.error : undefined;
+  const regulation = await getCurrentAcademicRegulation(user);
   const creditOverview = await getCreditOverview({ userId: user.userId, role: user.role });
   const nextUsableCredit = await getNextUsableCreditForActor({ userId: user.userId, role: user.role });
   const recoveryOptions = await listFutureRecoveryOptionsAction();
@@ -51,6 +54,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
     <main>
       <h1>Área de alumno</h1>
       <p>Sesión iniciada como: {user.email}</p>
+      <p><Link href="/normativa">Consultar la normativa</Link></p>
       {actionError ? (
         <p role="alert" aria-live="polite">
           {actionError}
@@ -101,7 +105,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
             {reservation.status === "CONFIRMED" ? (
               <form action={cancelRecoveryFormAction}>
                 <input type="hidden" name="reservationId" value={reservation.reservationId} />
-                <p>Si faltan 7 días o más se devuelve crédito (si no caducó); en otro caso se pierde.</p>
+                <p>El crédito se devuelve si sigue vigente y cancelas con al menos {regulation.cancellationNoticeDays} días naturales de antelación.</p>
                 <button type="submit">Cancelar recuperación</button>
               </form>
             ) : null}

@@ -43,6 +43,13 @@
       "when": 1795007927776,
       "tag": "0005_odd_rachel_grey",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795169355945,
+      "tag": "0006_academic_regulations",
+      "breakpoints": true
     }
   ]
 }
