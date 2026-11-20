@@ -270,7 +270,14 @@ Se incluyen pruebas de:
 - Un alumno que canceló voluntariamente su reserva ordinaria para esa fecha conserva su inscripción habitual. El calendario excluye ese caso del recuento de pendientes y muestra la plaza liberada.
 - El E2E `tests/e2e/admin-calendar.spec.ts` comprueba navegación y estado vacío, el límite local entre domingo y lunes, las plazas libres, los bloqueos activos, la incidencia de aforo, el efecto de una cancelación voluntaria y el rechazo de acceso a un alumno.
 - Pasaron 106 pruebas de Vitest y 20 E2E de Chromium en PostgreSQL TEST aislado. También pasaron las dos pruebas focalizadas de calendarios, con un caso de aforo almacenado superior al límite vigente. TypeScript pasó y el lint terminó sin errores, con tres avisos preexistentes. La fixture de 2099 se verificó en solo lectura y conserva su reserva confirmada.
-- El siguiente pendiente del [apartado 11](../planificacion_general.md#11-panel-administrativo) es mostrar los alumnos inscritos por sesión. Los desempates, las discrepancias sobre la racha y la revisión visual transversal siguen pendientes por separado.
+- En la revisión previa al commit se repitieron los dos E2E de calendarios y las diez pruebas de generación y asignaciones habituales. Pasaron en PostgreSQL TEST aislado.
+
+### Inscritos por sesión
+
+- «Ver inscritos» abre un detalle de solo lectura protegido por `SUPER_ADMIN`, también al abrir la URL directamente. Muestra el nombre de cada alumno con reserva confirmada y distingue plazas ordinarias y de recuperación. El enlace de vuelta conserva la semana elegida.
+- El E2E `tests/e2e/admin-session-enrollments.spec.ts` compara el total con el calendario, comprueba ambos tipos de plaza, excluye reservas canceladas y de otras sesiones, valida el estado vacío y comprueba el rechazo de acceso a un alumno. Al volver, sigue visible el indicador de habituales pendientes.
+- En PostgreSQL TEST aislado pasaron tres E2E de Chromium, el detalle de inscritos y los calendarios del administrador y del alumno. TypeScript y el lint focalizado pasaron.
+- El siguiente pendiente del [apartado 11](../planificacion_general.md#11-panel-administrativo) es consultar las cancelaciones por sesión. Los desempates, las discrepancias sobre la racha y la revisión visual transversal siguen pendientes por separado.
 
 ## Matriz de pruebas (Fase 06.2)
 

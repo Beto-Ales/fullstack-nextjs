@@ -1,4 +1,5 @@
 import type { DateTime } from "luxon";
+import Link from "next/link";
 
 import { CalendarTimeRange, WeeklyCalendarLayout } from "@/app/components/weekly-calendar";
 import type { listAdminCalendarSessions } from "@/src/application/academic/admin-calendar-service";
@@ -40,6 +41,8 @@ export function AdminWeeklyCalendar({ week, sessions }: AdminWeeklyCalendarProps
             )}
           </dl>
           {session.capacityConflict && <p className="font-semibold">Los habituales pendientes superan las plazas libres.</p>}
+          <Link className="underline" prefetch={false}
+            href={`/admin/sesiones/${encodeURIComponent(session.id)}?week=${week.toISODate()}`}>Ver inscritos</Link>
         </div>
       )}
     />

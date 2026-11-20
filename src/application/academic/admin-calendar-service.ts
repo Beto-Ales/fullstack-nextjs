@@ -7,13 +7,17 @@ import { calculateAvailableSpots } from "@/src/domain/academic/availability";
 import type { UserRole } from "@/src/domain/auth/roles";
 import { db } from "@/src/infrastructure/db/client";
 import { activeHabitualStudents, sessionUsageCounts } from "@/src/infrastructure/db/habitual-reservations.mjs";
-import { classSessions, classTemplates } from "@/src/infrastructure/db/schema";
+import { classReservations, classSessions, classTemplates, studentProfiles } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
 
-export async function listAdminCalendarSessions(actor: { role: UserRole }, start: Date, end: Date, now: Date) {
+function requireCalendarAdmin(actor: { role: UserRole }) {
   if (actor.role !== "SUPER_ADMIN") {
     throw new ApplicationError("Forbidden", "forbidden", 403, true);
   }
+}
+
+export async function listAdminCalendarSessions(actor: { role: UserRole }, start: Date, end: Date, now: Date) {
+  requireCalendarAdmin(actor);
   const regulation = await resolveCurrentAcademicRegulation(db, now);
   const habitualStudents = activeHabitualStudents({ templateId: classSessions.templateId, localDate: classSessions.localDate });
   const sessions = await db.select({
@@ -53,4 +57,35 @@ export async function listAdminCalendarSessions(actor: { role: UserRole }, start
     const capacityConflict = session.habitualPending !== null && session.habitualPending > availableSpots;
     return { ...session, capacity, availableSpots, capacityConflict };
   });
+}
+
+export async function getAdminCalendarSessionEnrollments(actor: { role: UserRole }, sessionId: string) {
+  requireCalendarAdmin(actor);
+  const rows = await db.select({
+    name: classTemplates.name,
+    startsAtUtc: classSessions.startsAtUtc,
+    endsAtUtc: classSessions.endsAtUtc,
+    reservationId: classReservations.id,
+    origin: classReservations.origin,
+    firstName: studentProfiles.firstName,
+    lastName: studentProfiles.lastName,
+  }).from(classSessions)
+    .leftJoin(classTemplates, eq(classTemplates.id, classSessions.templateId))
+    .leftJoin(classReservations, and(
+      eq(classReservations.classSessionId, classSessions.id),
+      eq(classReservations.status, "CONFIRMED"),
+    ))
+    .leftJoin(studentProfiles, eq(studentProfiles.id, classReservations.studentProfileId))
+    .where(eq(classSessions.id, sessionId))
+    .orderBy(studentProfiles.lastName, studentProfiles.firstName, classReservations.id);
+
+  if (!rows.length) return null;
+  const { name, startsAtUtc, endsAtUtc } = rows[0];
+  return {
+    name,
+    startsAtUtc,
+    endsAtUtc,
+    enrollments: rows.flatMap(({ reservationId, origin, firstName, lastName }) =>
+      reservationId === null ? [] : [{ reservationId, origin, firstName, lastName }]),
+  };
 }
