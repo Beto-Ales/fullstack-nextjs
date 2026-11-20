@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Request } from "@playwright/test";
+import { DateTime } from "luxon";
 import { seedHabitualCreditScenario, seedRecoveryCapacityScenario, seedRecoveryPaginationSessions, withCreditsAccount } from "./credits-fixtures";
 
 async function login(page: Page, email: string, password: string) {
@@ -84,7 +85,11 @@ test.describe("credits flows", () => {
       await expect(page).toHaveURL(/\/student\?recovery=cancelled$/);
       await expect(page.getByRole("status")).toHaveText("Recuperación cancelada.");
       await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
-      await expect(recovery).toContainText("estado: CANCELLED");
+      await expect(recovery).toHaveCount(0);
+      const historyEntry = page.getByRole("region", { name: "Historial de clases" })
+        .getByRole("listitem").filter({ hasText: DateTime.fromISO(recoveryDate).toFormat("dd/MM/yyyy") });
+      await expect(historyEntry).toContainText("Recuperación");
+      await expect(historyEntry).toContainText("Reserva cancelada");
       await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
       await expect(options.getByRole("listitem").filter({ hasText: recoveryDate })).toContainText("plazas: 1");
 

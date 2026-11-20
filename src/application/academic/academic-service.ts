@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { and, eq, gt, gte, inArray, lt, ne, sql, type SQLWrapper } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql, type SQLWrapper } from "drizzle-orm";
 import { DateTime } from "luxon";
 
 import {
@@ -1238,11 +1238,15 @@ export async function detectAbsences(actor: Actor, input: unknown) {
   });
 }
 
-function confirmedReservationsForStudent(actor: Actor) {
+function reservationOwnerIsStudent(actor: Actor) {
   if (actor.role !== "STUDENT") {
     throw new ApplicationError("Forbidden", "forbidden", 403, true);
   }
-  return and(eq(studentProfiles.userId, actor.userId), eq(classReservations.status, "CONFIRMED"));
+  return eq(studentProfiles.userId, actor.userId);
+}
+
+function confirmedReservationsForStudent(actor: Actor) {
+  return and(reservationOwnerIsStudent(actor), eq(classReservations.status, "CONFIRMED"));
 }
 
 export async function listUpcomingOrdinaryReservations(actor: Actor) {
@@ -1262,20 +1266,23 @@ export async function listUpcomingOrdinaryReservations(actor: Actor) {
     .orderBy(classSessions.startsAtUtc, classReservations.id);
 }
 
+const studentClassDetails = {
+  reservationId: classReservations.id,
+  origin: classReservations.origin,
+  className: classTemplates.name,
+  startsAtUtc: classSessions.startsAtUtc,
+  endsAtUtc: classSessions.endsAtUtc,
+  sessionStatus: classSessions.status,
+};
+
+const reservationHasHabitualAssignment = habitualAssignmentExists({
+  studentProfileId: classReservations.studentProfileId,
+  templateId: classSessions.templateId,
+  localDate: classSessions.localDate,
+});
+
 export async function listStudentCalendarReservations(actor: Actor, start: Date, end: Date) {
-  return db.select({
-    reservationId: classReservations.id,
-    origin: classReservations.origin,
-    className: classTemplates.name,
-    startsAtUtc: classSessions.startsAtUtc,
-    endsAtUtc: classSessions.endsAtUtc,
-    sessionStatus: classSessions.status,
-    habitual: habitualAssignmentExists({
-      studentProfileId: classReservations.studentProfileId,
-      templateId: classSessions.templateId,
-      localDate: classSessions.localDate,
-    }),
-  }).from(classReservations)
+  return db.select({ ...studentClassDetails, habitual: reservationHasHabitualAssignment }).from(classReservations)
     .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
     .innerJoin(studentProfiles, eq(studentProfiles.id, classReservations.studentProfileId))
     .leftJoin(classTemplates, eq(classTemplates.id, classSessions.templateId))
@@ -1286,6 +1293,39 @@ export async function listStudentCalendarReservations(actor: Actor, start: Date,
       lt(classSessions.startsAtUtc, end),
     ))
     .orderBy(classSessions.startsAtUtc, classReservations.id);
+}
+
+export async function listStudentClassHistory(actor: Actor, now: Date) {
+  const historical = or(
+    eq(classReservations.status, "CANCELLED"),
+    ne(classSessions.status, "SCHEDULED"),
+    lte(classSessions.endsAtUtc, now),
+    isNotNull(reservationAttendanceRecords.id),
+  );
+  const rows = await db.select({
+    ...studentClassDetails,
+    localDate: classSessions.localDate,
+    status: classReservations.status,
+    cancellationType: reservationCancellations.cancellationType,
+    attendanceOutcome: reservationAttendanceRecords.outcome,
+    habitual: sql<boolean>`coalesce(${reservationCancellations.isHabitualReservation}, ${reservationHasHabitualAssignment})`,
+    historical: sql<boolean>`${historical}`,
+  }).from(classReservations)
+    .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
+    .innerJoin(studentProfiles, eq(studentProfiles.id, classReservations.studentProfileId))
+    .leftJoin(classTemplates, eq(classTemplates.id, classSessions.templateId))
+    .leftJoin(reservationCancellations, eq(reservationCancellations.reservationId, classReservations.id))
+    .leftJoin(reservationAttendanceRecords, and(
+      eq(reservationAttendanceRecords.reservationId, classReservations.id),
+      isNull(reservationAttendanceRecords.supersededAt),
+    ))
+    .where(and(reservationOwnerIsStudent(actor), or(historical, eq(classReservations.origin, "MAKEUP"))))
+    .orderBy(desc(classSessions.startsAtUtc), desc(classReservations.id));
+
+  return {
+    history: rows.filter((row) => row.historical),
+    pendingRecoveries: rows.filter((row) => !row.historical).reverse(),
+  };
 }
 
 export async function listStudentHabitualSchedules(actor: Actor, localDate: string) {

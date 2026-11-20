@@ -37,7 +37,7 @@ Fase 8 — Panel del estudiante
 
 Calendario semanal, próximas clases, historial, créditos y recuperación.
 
-El calendario semanal y los horarios habituales están disponibles en `/student`. Quedan pendientes el historial de clases con asistencias y cancelaciones y la vista de créditos próximos a caducar. [Avance y pruebas](docs/testing.md#fase-08--calendario-semanal-del-alumno).
+El calendario semanal, los horarios habituales y el historial de clases están disponibles en `/student`. El siguiente incremento para cerrar la fase es la vista de créditos próximos a caducar. [Avance y pruebas](docs/testing.md#fase-08--calendario-semanal-del-alumno).
 
 Fase 9 — Panel administrativo
 

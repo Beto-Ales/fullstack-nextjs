@@ -3,7 +3,6 @@ import { requireRole } from "@/src/interfaces/auth/session";
 import { getCreditOverview, getNextUsableCreditForActor } from "@/src/application/credits/credit-service";
 import {
   cancelRecoveryReservationAction,
-  getRecoveryHistoryAction,
   listFutureRecoveryOptionsAction,
   reserveRecoveryAction,
 } from "@/src/interfaces/recovery/actions";
@@ -13,10 +12,13 @@ import Link from "next/link";
 import { DateTime } from "luxon";
 import { z } from "zod";
 import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
-import { listStudentCalendarReservations, listStudentHabitualSchedules, listUpcomingOrdinaryReservations } from "@/src/application/academic/academic-service";
+import {
+  listStudentCalendarReservations, listStudentClassHistory, listStudentHabitualSchedules, listUpcomingOrdinaryReservations,
+} from "@/src/application/academic/academic-service";
 import { cancelReservationAction } from "@/src/interfaces/academic/actions";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { ChangePasswordForm } from "./change-password-form";
+import { ClassHistory } from "./class-history";
 import { HabitualSchedules } from "./habitual-schedules";
 import { RecoveryOptions } from "./recovery-options";
 import { WeeklyCalendar } from "./weekly-calendar";
@@ -93,11 +95,11 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
   const creditOverview = await getCreditOverview({ userId: user.userId, role: user.role });
   const nextUsableCredit = await getNextUsableCreditForActor({ userId: user.userId, role: user.role });
   const recoveryOptions = await listFutureRecoveryOptionsAction();
-  const recoveryHistory = await getRecoveryHistoryAction();
-  const [upcomingClasses, calendarReservations, habitualSchedules] = await Promise.all([
+  const [upcomingClasses, calendarReservations, habitualSchedules, { history, pendingRecoveries }] = await Promise.all([
     listUpcomingOrdinaryReservations(user),
     listStudentCalendarReservations(user, week.toJSDate(), week.plus({ weeks: 1 }).toJSDate()),
     listStudentHabitualSchedules(user, now.toISODate()!),
+    listStudentClassHistory(user, now.toJSDate()),
   ]);
 
   return (
@@ -157,20 +159,19 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
       <section aria-labelledby="my-recoveries">
         <h3 id="my-recoveries">Mis recuperaciones</h3>
         <ul>
-          {recoveryHistory.reservations.map((reservation) => (
+          {pendingRecoveries.map((reservation) => (
             <li key={reservation.reservationId}>
-              {reservation.classLocalDate} · {reservation.classStartsAtUtc.toISOString()} · estado: {reservation.status}
-              {reservation.status === "CONFIRMED" ? (
-                <form action={cancelRecovery}>
-                  <input type="hidden" name="reservationId" value={reservation.reservationId} />
-                  <p>El crédito se devuelve si sigue vigente y cancelas con al menos {regulation.cancellationNoticeDays} días naturales de antelación.</p>
-                  <button type="submit">Cancelar recuperación</button>
-                </form>
-              ) : null}
+              {reservation.localDate} · {reservation.startsAtUtc.toISOString()} · estado: {reservation.status}
+              <form action={cancelRecovery}>
+                <input type="hidden" name="reservationId" value={reservation.reservationId} />
+                <p>El crédito se devuelve si sigue vigente y cancelas con al menos {regulation.cancellationNoticeDays} días naturales de antelación.</p>
+                <button type="submit">Cancelar recuperación</button>
+              </form>
             </li>
           ))}
         </ul>
       </section>
+      <ClassHistory entries={history} />
 
       <form action={logoutAction}>
         <button type="submit">Cerrar sesión</button>
