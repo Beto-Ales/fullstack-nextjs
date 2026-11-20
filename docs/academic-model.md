@@ -219,5 +219,15 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
 
 ## Limitaciones conocidas de esta fase
 
-- No se implementó reserva automática por horario habitual.
 - No se implementó la normativa versionada completa.
+
+## Actualización operativa (fase 06.3.2.13+)
+
+- La asignación habitual (`student_template_assignments`) ahora integra reserva automática de sesiones ya materializadas cuando:
+  - la sesión está `SCHEDULED`,
+  - pertenece a la misma plantilla,
+  - cae dentro de la vigencia de la asignación,
+  - es futura (`starts_at_utc >= now()`),
+  - existe capacidad disponible real.
+- Se evita crear duplicados de reserva activa para el mismo alumno y sesión.
+- La operación mantiene control administrativo (`SUPER_ADMIN`) y se ejecuta en transacción.

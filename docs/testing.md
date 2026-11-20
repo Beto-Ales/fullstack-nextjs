@@ -128,6 +128,7 @@ Se incluyen pruebas de:
 - Conversión local/UTC y casos de DST.
 - Generación recurrente de sesiones (horizonte, vigencia e idempotencia).
 - Cálculo de disponibilidad (capacidad, reservas y plazas bloqueadas).
+- Asignación habitual con reserva automática de sesiones futuras respetando capacidad y duplicados.
 - Reglas de cancelación, secuencias y elegibilidad de candidaturas.
 - Cálculo de límites mensuales/caducidad de créditos y saldo derivado de ledger.
 - Selección FIFO para consumo en recuperaciones (caducidad, creación, id estable).
@@ -190,6 +191,7 @@ Estado:
 | ADMIN-CANCEL-003 | Atomicidad: fallo intermedio revierte cancelación de sesión/devoluciones | Integración | `src/application/recovery/recovery.integration.test.ts` | Pendiente de infraestructura | `npm run test -- src/application/recovery/recovery.integration.test.ts` |
 | ATTEND-001 | Corrección de asistencia mantiene trazabilidad superseded | Unitaria/Integración de flujo | `src/domain/academic/cancellation-rules.test.ts` + servicios académicos | Ejecutada correctamente (parte unitaria) / Integración pendiente de infraestructura | `npm run test -- src/domain/academic/cancellation-rules.test.ts src/application/academic/academic.integration.test.ts` |
 | ABSENCE-001 | Detección de ausencias idempotente y sin dependencia UUID extension | Integración | `src/application/academic/academic.integration.test.ts` | Pendiente de infraestructura | `npm run test -- src/application/academic/academic.integration.test.ts` |
+| HABITUAL-001 | Asignación habitual reserva sesiones futuras, evita duplicados y respeta capacidad | Integración | `src/application/academic/habitual-assignment.integration.test.ts` | Ejecutada correctamente | `npm run test -- src/application/academic/habitual-assignment.integration.test.ts` |
 | LEDGER-INT-001 | Integridad ledger: detección de consumos/devoluciones huérfanos y auditoría manual incompleta | Integración | `src/application/credits/credit-service.integration.test.ts` | Pendiente de infraestructura | `npm run test -- src/application/credits/credit-service.integration.test.ts` |
 | LOCK-CROSS-001 | Cruce reserva de recuperación vs cancelación administrativa sin estado imposible | Integración | `src/application/recovery/recovery.integration.test.ts` | Pendiente de infraestructura | `npm run test -- src/application/recovery/recovery.integration.test.ts` |
 | E2E-AUTH-001 | Guardas de autenticación y rutas protegidas | E2E | `tests/e2e/auth-guards.spec.ts` | Ejecutada correctamente | `npm run test:e2e` |

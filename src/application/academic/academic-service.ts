@@ -233,6 +233,77 @@ async function recalculateStudentCancellationSequences(tx: TransactionClient, st
   }
 }
 
+async function autoReserveSessionsForTemplateAssignment(
+  tx: TransactionClient,
+  input: {
+    studentProfileId: string;
+    templateId: string;
+    effectiveFrom: string;
+    effectiveTo: string | null;
+  },
+): Promise<number> {
+  const lockedSessionsResult = await tx.execute(sql`
+    select id, max_capacity
+    from class_sessions
+    where template_id = ${input.templateId}
+      and status = 'SCHEDULED'
+      and local_date >= ${input.effectiveFrom}
+      and (${input.effectiveTo}::date is null or local_date <= ${input.effectiveTo})
+      and starts_at_utc >= now()
+    order by starts_at_utc asc
+    for update
+  `);
+
+  let createdReservations = 0;
+
+  for (const row of lockedSessionsResult.rows as Array<{ id: string; max_capacity: number }>) {
+    const [existingReservation] = await tx
+      .select({ id: classReservations.id })
+      .from(classReservations)
+      .where(
+        sql`${classReservations.classSessionId} = ${row.id}
+          and ${classReservations.studentProfileId} = ${input.studentProfileId}
+          and ${classReservations.status} = 'CONFIRMED'`,
+      )
+      .limit(1);
+
+    if (existingReservation) {
+      continue;
+    }
+
+    const usage = await readSessionUsage(tx, row.id);
+    const availableSpots = calculateAvailableSpots({
+      capacity: row.max_capacity,
+      ...usage,
+    });
+
+    if (availableSpots <= 0) {
+      continue;
+    }
+
+    await tx.insert(classReservations).values({
+      id: randomUUID(),
+      classSessionId: row.id,
+      studentProfileId: input.studentProfileId,
+      status: "CONFIRMED",
+      origin: "ORDINARY",
+    });
+
+    createdReservations += 1;
+  }
+
+  return createdReservations;
+}
+
+async function readSessionUsage(reader: QueryExecutor, classSessionId: string) {
+  const result = await reader.execute(sql`
+    select
+      (select count(*)::int from class_reservations where class_session_id = ${classSessionId} and status = 'CONFIRMED') as "confirmedReservations",
+      (select coalesce(sum(blocked_spots), 0)::int from session_capacity_blocks where class_session_id = ${classSessionId} and is_active) as "blockedSpots"
+  `);
+  return result.rows[0] as { confirmedReservations: number; blockedSpots: number };
+}
+
 export async function createStudentProfile(actor: Actor, input: unknown) {
   requireSuperAdmin(actor);
   const payload = createStudentProfileSchema.parse(input);
@@ -492,17 +563,26 @@ export async function assignStudentToTemplate(actor: Actor, input: unknown) {
     throw new ApplicationError("effectiveTo must be greater than or equal to effectiveFrom.", "invalid_date_range", 400, true);
   }
 
-  const assignmentId = randomUUID();
-  await db.insert(studentTemplateAssignments).values({
-    id: assignmentId,
-    studentProfileId: payload.studentProfileId,
-    templateId: payload.templateId,
-    effectiveFrom: payload.effectiveFrom,
-    effectiveTo: payload.effectiveTo ?? null,
-    status: payload.effectiveTo ? "ENDED" : "ACTIVE",
-  });
+  return db.transaction(async (tx) => {
+    const assignmentId = randomUUID();
+    await tx.insert(studentTemplateAssignments).values({
+      id: assignmentId,
+      studentProfileId: payload.studentProfileId,
+      templateId: payload.templateId,
+      effectiveFrom: payload.effectiveFrom,
+      effectiveTo: payload.effectiveTo ?? null,
+      status: payload.effectiveTo ? "ENDED" : "ACTIVE",
+    });
 
-  return { assignmentId };
+    const autoReservedReservationCount = await autoReserveSessionsForTemplateAssignment(tx, {
+      studentProfileId: payload.studentProfileId,
+      templateId: payload.templateId,
+      effectiveFrom: payload.effectiveFrom,
+      effectiveTo: payload.effectiveTo ?? null,
+    });
+
+    return { assignmentId, autoReservedReservationCount };
+  });
 }
 
 export async function endStudentTemplateAssignment(actor: Actor, input: unknown) {
