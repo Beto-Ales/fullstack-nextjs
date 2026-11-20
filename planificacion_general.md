@@ -31,6 +31,8 @@ Fase 7 — Recuperación de clases
 
 Búsqueda de plazas, validación de créditos, reservas y protección contra concurrencia.
 
+El estado de la implementación y su validación se registran en [Disponibilidad y concurrencia de recuperaciones](docs/testing.md#fase-07--disponibilidad-y-concurrencia-de-recuperaciones).
+
 Fase 8 — Panel del estudiante
 
 Calendario semanal, próximas clases, historial, créditos y recuperación.

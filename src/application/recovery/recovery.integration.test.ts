@@ -160,6 +160,53 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("recovery integration (po
     );
   }
 
+  it("limits chronologically ordered recovery options after excluding unavailable sessions", async () => {
+    const student = await seedStudent();
+    const occupant = await seedStudent();
+    vi.setSystemTime(new Date("2028-01-01T10:00:00Z"));
+    await grantCredits(student.profileId, 1, "2028-07-01T10:00:00Z");
+
+    async function seedDailySessions(count: number, dayOffset = 0) {
+      const ids = Array.from({ length: count }, () => randomUUID());
+      await client.query(
+        `insert into class_sessions (id, local_date, starts_at_utc, ends_at_utc, max_capacity)
+         select id, local_date, (local_date + time '18:00') at time zone $3,
+           (local_date + time '19:00') at time zone $3, 1
+         from (
+           select id, date '2028-01-01' + ($2::int + position::int) as local_date
+           from unnest($1::text[]) with ordinality as sessions(id, position)
+         ) as dated_sessions`,
+        [ids, dayOffset, CENTER_TIME_ZONE],
+      );
+      return ids;
+    }
+
+    const sessions = await seedDailySessions(101);
+    const blocked = sessions.slice(50, 100);
+    const last = sessions[100];
+    const filled = sessions.slice(0, 50);
+    await client.query(
+      `insert into class_reservations (id, class_session_id, student_profile_id, status)
+       select 'full-' || session_id, session_id, $2, 'CONFIRMED'
+       from unnest($1::text[]) as full_sessions(session_id)`,
+      [filled, occupant.profileId],
+    );
+    await client.query(
+      `insert into session_capacity_blocks (id, class_session_id, blocked_spots, is_active)
+       select 'block-' || session_id, session_id, 1, true
+       from unnest($1::text[]) as blocked_sessions(session_id)`,
+      [blocked],
+    );
+
+    const actor = { userId: student.userId, role: "STUDENT" as const };
+    const initial = await recoveryService.listFutureRecoveryOptions(actor);
+    expect(initial.sessions).toMatchObject([{ id: last, maxCapacity: 1, availableSpots: 1 }]);
+
+    const later = await seedDailySessions(100, sessions.length);
+    const capped = await recoveryService.listFutureRecoveryOptions(actor);
+    expect(capped.sessions.map(({ id }) => id)).toEqual([last, ...later.slice(0, 99)]);
+  });
+
   it("reserves recovery and consumes one credit atomically", async () => {
     const student = await seedStudent();
     const session = await seedSession("2027-01-10");

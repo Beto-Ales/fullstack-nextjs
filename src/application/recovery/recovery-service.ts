@@ -169,63 +169,49 @@ export async function listFutureRecoveryOptions(actor: Actor) {
     const regulation = await resolveCurrentAcademicRegulation(tx, now);
     await materializeExpiredCredits(tx, studentProfileId, now);
 
-    const rows = await tx.execute(sql`
-      select
-        s.id,
-        s.local_date::text as local_date,
-        s.starts_at_utc,
-        s.ends_at_utc,
-        s.status,
-        s.max_capacity,
-        (
-          select count(*)::int
-          from class_reservations r
-          where r.class_session_id = s.id and r.status = 'CONFIRMED'
-        ) as confirmed_reservations,
-        (
-          select coalesce(sum(blocked_spots), 0)::int
-          from session_capacity_blocks b
-          where b.class_session_id = s.id and b.is_active = true
-        ) as blocked_spots,
-        exists(
-          select 1
-          from class_reservations existing
-          where existing.class_session_id = s.id
-            and existing.student_profile_id = ${studentProfileId}
-            and existing.status = 'CONFIRMED'
-        ) as already_reserved
-      from class_sessions s
-      where s.status = 'SCHEDULED'
-        and s.starts_at_utc > ${now}
-      order by s.starts_at_utc asc
-      limit 100
-    `);
-
-    const sessions = (rows.rows as Array<{
+    const { rows: sessions } = await tx.execute<{
       id: string;
       local_date: string;
       starts_at_utc: Date;
       ends_at_utc: Date;
-      status: "SCHEDULED" | "CANCELLED" | "COMPLETED";
       max_capacity: number;
-      confirmed_reservations: number;
-      blocked_spots: number;
-      already_reserved: boolean;
-    }>)
-      .filter((row) => !row.already_reserved)
-      .map((row) => {
-        const maxCapacity = Math.min(row.max_capacity, regulation.maxClassCapacity);
-        return {
-          ...row,
-          maxCapacity,
-          availableSpots: calculateAvailableSpots({
-            capacity: maxCapacity,
-            confirmedReservations: row.confirmed_reservations,
-            blockedSpots: row.blocked_spots,
-          }),
-        };
-      })
-      .filter((row) => row.availableSpots > 0);
+      available_spots: number;
+    }>(sql`
+      with session_usage as (
+        select
+          s.id,
+          s.local_date::text as local_date,
+          s.starts_at_utc,
+          s.ends_at_utc,
+          least(s.max_capacity, ${regulation.maxClassCapacity}::int) as max_capacity,
+          (
+            select count(*)::int
+            from class_reservations r
+            where r.class_session_id = s.id and r.status = 'CONFIRMED'
+          ) as confirmed_reservations,
+          (
+            select coalesce(sum(blocked_spots), 0)::int
+            from session_capacity_blocks b
+            where b.class_session_id = s.id and b.is_active = true
+          ) as blocked_spots
+        from class_sessions s
+        where s.status = 'SCHEDULED'
+          and s.starts_at_utc > ${now}
+          and not exists (
+            select 1
+            from class_reservations existing
+            where existing.class_session_id = s.id
+              and existing.student_profile_id = ${studentProfileId}
+              and existing.status = 'CONFIRMED'
+          )
+      )
+      select id, local_date, starts_at_utc, ends_at_utc, max_capacity,
+        max_capacity - confirmed_reservations - blocked_spots as available_spots
+      from session_usage
+      where confirmed_reservations + blocked_spots < max_capacity
+      order by starts_at_utc asc, id asc
+      limit 100
+    `);
 
     const monthlyUsage = new Map<string, number>();
     for (const row of sessions) {
@@ -245,8 +231,8 @@ export async function listFutureRecoveryOptions(actor: Actor) {
           localDate: row.local_date,
           startsAtUtc: new Date(row.starts_at_utc),
           endsAtUtc: new Date(row.ends_at_utc),
-          maxCapacity: row.maxCapacity,
-          availableSpots: row.availableSpots,
+          maxCapacity: row.max_capacity,
+          availableSpots: row.available_spots,
           monthlyRecoveryUsed: used,
           monthlyRecoveryRemaining: Math.max(0, regulation.monthlyRecoveries - used),
         };
