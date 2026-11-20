@@ -114,12 +114,17 @@ Servicio en `src/application/academic/academic-service.ts`:
 - Respeta vigencia de plantilla.
 - Inserta con `on conflict do nothing` para idempotencia.
 - No altera sesiones existentes (incluidas editadas/canceladas).
+- Si omite una sesión futura programada que ya existe, vuelve a comprobar el aforo y reporta el mismo identificador mientras queden más alumnos habituales sin reserva que plazas libres.
+- Para cada sesión futura nueva, reserva en la misma transacción a los alumnos cuya asignación cubre la fecha local. Los intervalos incluyen ambos extremos y las asignaciones solapadas del mismo alumno cuentan una vez.
+- La sesión y las nuevas reservas guardan la versión de normativa aplicada. La transacción usa el aforo vigente, las reservas confirmadas y los bloqueos activos. Si el grupo no cabe, la sesión se conserva sin reservar a ningún alumno del grupo y el generador informa del conflicto.
 
 Comando CLI:
 
 ```bash
 npm run academic:generate-sessions
 ```
+
+El CLI interpreta las fechas PostgreSQL `DATE` y las cadenas ISO como fechas de calendario. Los valores `Date` del driver representan medianoche en la zona del proceso. El CLI conserva ese día y calcula el inicio de la clase en Copenhague.
 
 ## Zona horaria y DST
 
@@ -237,7 +242,6 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
 
 ## Siguiente tarea de generación de sesiones
 
-- El generador de la aplicación materializa sesiones después de la asignación sin crear reservas para los alumnos habituales con asignación vigente. Se reprodujo en PostgreSQL con una sesión creada y cero reservas para el alumno asignado.
-- El CLI `npm run academic:generate-sessions` recibe las fechas de vigencia PostgreSQL como objetos `Date` y las pasa a `DateTime.fromISO`. Se reprodujo con una plantilla activa que produjo cero sesiones. La generación por CLI y la incorporación de alumnos habituales se revisarán juntas.
+Definir qué prioridad se aplica cuando los alumnos habituales elegibles superan las plazas. Durante la generación y sus reintentos, el servicio devuelve las sesiones afectadas dentro del horizonte en `habitualCapacityConflicts` y el CLI imprime sus identificadores.
 
-Para verificar la siguiente tarea en TEST, usar una plantilla activa con fechas devueltas por PostgreSQL, una asignación vigente previa a la generación y un segundo intento de generación. Comprobar el aforo, la versión aplicada y la ausencia de reservas duplicadas. Queda por definir la prioridad cuando los alumnos habituales elegibles superan las plazas disponibles. El diagnóstico del CLI y los casos con plazas suficientes pueden avanzar con la regla vigente.
+Para localizar sesiones concretas fuera de ese informe, consultar `class_sessions` y cruzar plantilla y fecha local con `student_template_assignments`. Contar alumnos distintos sin reserva confirmada y comparar con el aforo efectivo menos las reservas confirmadas y los bloqueos activos. Una vez acordada la prioridad, `createReservationAction` permite a `SUPER_ADMIN` crear una reserva ordinaria para un alumno concreto con comprobación transaccional de aforo. Si se amplía el aforo de una sesión, `updateClassSessionAction` valida el límite vigente y registra la edición. El generador conserva las reservas de las sesiones existentes.

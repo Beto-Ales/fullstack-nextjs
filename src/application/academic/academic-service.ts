@@ -35,6 +35,10 @@ import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { type UserRole } from "@/src/domain/auth/roles";
 import { db } from "@/src/infrastructure/db/client";
 import {
+  findExistingHabitualCapacityConflict, lockTemplateAssignments, readSessionUsage,
+  reserveGeneratedSessionHabitualSeats, reserveHabitualSeats,
+} from "@/src/infrastructure/db/habitual-reservations.mjs";
+import {
   classReservations,
   classSessionEdits,
   classSessions,
@@ -273,40 +277,12 @@ async function autoReserveSessionsForTemplateAssignment(
   let createdReservations = 0;
 
   for (const row of lockedSessionsResult.rows as Array<{ id: string; max_capacity: number }>) {
-    const [existingReservation] = await tx
-      .select({ id: classReservations.id })
-      .from(classReservations)
-      .where(
-        sql`${classReservations.classSessionId} = ${row.id}
-          and ${classReservations.studentProfileId} = ${input.studentProfileId}
-          and ${classReservations.status} = 'CONFIRMED'`,
-      )
-      .limit(1);
-
-    if (existingReservation) {
-      continue;
-    }
-
-    const usage = await readSessionUsage(tx, row.id);
-    const availableSpots = calculateAvailableSpots({
-      capacity: Math.min(row.max_capacity, regulation.maxClassCapacity),
-      ...usage,
-    });
-
-    if (availableSpots <= 0) {
-      continue;
-    }
-
-    await tx.insert(classReservations).values({
-      id: randomUUID(),
+    const result = await reserveHabitualSeats(tx, {
       classSessionId: row.id,
-      studentProfileId: input.studentProfileId,
-      status: "CONFIRMED",
-      origin: "ORDINARY",
+      capacity: Math.min(row.max_capacity, regulation.maxClassCapacity),
       regulationVersionId: regulation.id,
-    });
-
-    createdReservations += 1;
+    }, [input.studentProfileId]);
+    createdReservations += result.reserved;
   }
 
   return createdReservations;
@@ -624,6 +600,7 @@ export async function assignStudentToTemplate(actor: Actor, input: unknown) {
   }
 
   return db.transaction(async (tx) => {
+    await lockTemplateAssignments(tx, payload.templateId);
     const regulation = await resolveCurrentAcademicRegulation(tx);
     const assignmentId = randomUUID();
     await tx.insert(studentTemplateAssignments).values({
@@ -650,14 +627,20 @@ export async function endStudentTemplateAssignment(actor: Actor, input: unknown)
   requireSuperAdmin(actor);
   const payload = endStudentTemplateAssignmentSchema.parse(input);
 
-  await db
-    .update(studentTemplateAssignments)
-    .set({
-      effectiveTo: payload.effectiveTo ?? nowCenterTime().toISODate(),
-      status: "ENDED",
-      updatedAt: new Date(),
-    })
-    .where(eq(studentTemplateAssignments.id, payload.assignmentId));
+  await db.transaction(async (tx) => {
+    const [assignment] = await tx.select({ templateId: studentTemplateAssignments.templateId })
+      .from(studentTemplateAssignments)
+      .where(eq(studentTemplateAssignments.id, payload.assignmentId));
+    if (!assignment) return;
+    await lockTemplateAssignments(tx, assignment.templateId);
+    await tx.update(studentTemplateAssignments)
+      .set({
+        effectiveTo: payload.effectiveTo ?? nowCenterTime().toISODate(),
+        status: "ENDED",
+        updatedAt: new Date(),
+      })
+      .where(eq(studentTemplateAssignments.id, payload.assignmentId));
+  });
 }
 
 export async function addSessionCapacityBlock(actor: Actor, input: unknown) {
@@ -689,15 +672,6 @@ export async function addSessionCapacityBlock(actor: Actor, input: unknown) {
     });
     return { blockId };
   });
-}
-
-async function readSessionUsage(reader: QueryExecutor, classSessionId: string) {
-  const result = await reader.execute(sql`
-    select
-      (select count(*)::int from class_reservations where class_session_id = ${classSessionId} and status = 'CONFIRMED') as "confirmedReservations",
-      (select coalesce(sum(blocked_spots), 0)::int from session_capacity_blocks where class_session_id = ${classSessionId} and is_active) as "blockedSpots"
-  `);
-  return result.rows[0] as { confirmedReservations: number; blockedSpots: number };
 }
 
 export async function getClassSessionAvailability(classSessionId: string): Promise<SessionAvailability> {
@@ -1239,54 +1213,60 @@ export async function materializeDefaultClassSessionsWindow() {
 async function materializeClassSessions(input: { now: DateTime; horizonEnd: DateTime }) {
   const regulation = await resolveCurrentAcademicRegulation(db, input.now.toJSDate());
   const templates = await db
-    .select({
-      id: classTemplates.id,
-      isoWeekday: classTemplates.isoWeekday,
-      startsAtLocalTime: classTemplates.startsAtLocalTime,
-      durationMinutes: classTemplates.durationMinutes,
-      effectiveFrom: classTemplates.effectiveFrom,
-      effectiveTo: classTemplates.effectiveTo,
-      maxCapacity: classTemplates.maxCapacity,
-    })
+    .select({ id: classTemplates.id })
     .from(classTemplates)
     .where(eq(classTemplates.status, "ACTIVE"));
 
   let inserted = 0;
   let skipped = 0;
+  let habitualReservations = 0;
+  const habitualCapacityConflicts: string[] = [];
 
-  for (const template of templates) {
-    const candidates = generateRecurringSessionCandidates(template, {
-      now: input.now,
-      horizonEnd: input.horizonEnd,
-    });
+  for (const { id } of templates) {
+    await db.transaction(async (tx) => {
+      await lockTemplateAssignments(tx, id);
+      const [template] = await tx.select().from(classTemplates)
+        .where(and(eq(classTemplates.id, id), eq(classTemplates.status, "ACTIVE")));
+      if (!template) return;
 
-    for (const candidate of candidates) {
-      const result = await db
-        .insert(classSessions)
-        .values({
-          id: randomUUID(),
-          templateId: candidate.templateId,
-          localDate: candidate.localDate,
-          startsAtUtc: candidate.startsAtUtc,
-          endsAtUtc: candidate.endsAtUtc,
+      for (const candidate of generateRecurringSessionCandidates(template, input)) {
+        const classSessionId = randomUUID();
+        const capacity = Math.min(candidate.maxCapacity, regulation.maxClassCapacity);
+        const result = await tx.insert(classSessions).values({
+          ...candidate,
+          id: classSessionId,
           status: "SCHEDULED",
-          maxCapacity: Math.min(candidate.maxCapacity, regulation.maxClassCapacity),
+          maxCapacity: capacity,
           regulationVersionId: regulation.id,
           isManuallyEdited: false,
-        })
-        .onConflictDoNothing();
+        }).onConflictDoNothing();
+        if (!result.rowCount) {
+          skipped += 1;
+          const conflict = await findExistingHabitualCapacityConflict(tx, {
+            templateId: id, localDate: candidate.localDate, now: input.now.toJSDate(),
+            maxClassCapacity: regulation.maxClassCapacity,
+          });
+          if (conflict) habitualCapacityConflicts.push(conflict);
+          continue;
+        }
 
-      if (result.rowCount && result.rowCount > 0) {
         inserted += 1;
-      } else {
-        skipped += 1;
+        if (candidate.startsAtUtc < input.now.toJSDate()) continue;
+        const seats = await reserveGeneratedSessionHabitualSeats(tx, {
+          classSessionId, templateId: id, localDate: candidate.localDate,
+          capacity, regulationVersionId: regulation.id,
+        });
+        habitualReservations += seats.reserved;
+        if (seats.capacityConflict) habitualCapacityConflicts.push(classSessionId);
       }
-    }
+    });
   }
 
   return {
     inserted,
     skipped,
+    habitualReservations,
+    habitualCapacityConflicts,
     horizonEnd: input.horizonEnd.toISO(),
   };
 }

@@ -37,7 +37,7 @@ Separar responsabilidades desde el inicio para mantener reglas de negocio fuera 
 - Las operaciones guardan la referencia aplicada y los créditos conservan su fecha original de caducidad. Las reservas guardan por separado la versión de alta y la de cancelación. Las ediciones de sesiones guardan un registro por operación en `class_session_edits`.
 - Los registros anteriores a la migración conservan sus resultados y la referencia queda vacía cuando falta una versión verificable. La publicación solo añade una versión.
 
-La [siguiente tarea de generación de sesiones](academic-model.md#siguiente-tarea-generación-de-sesiones) reúne los dos fallos reproducidos.
+La aplicación y el CLI comparten la reserva habitual y se coordinan por plantilla con las altas y bajas de asignaciones. La [siguiente tarea de generación de sesiones](academic-model.md#siguiente-tarea-generación-de-sesiones) recoge la decisión pendiente sobre el aforo insuficiente.
 
 ## Orden global de bloqueo (concurrencia)
 

@@ -2,6 +2,10 @@ import nextEnv from "@next/env";
 import { DateTime } from "luxon";
 import { Client } from "pg";
 import { randomUUID } from "node:crypto";
+import { drizzle } from "drizzle-orm/node-postgres";
+import {
+  findExistingHabitualCapacityConflict, lockTemplateAssignments, reserveGeneratedSessionHabitualSeats,
+} from "../src/infrastructure/db/habitual-reservations.mjs";
 
 const CENTER_TIME_ZONE = "Europe/Copenhagen";
 const HORIZON_MONTHS = 3;
@@ -40,10 +44,18 @@ function resolveLocalDateTime(localDate, localTime) {
   return localDateTime;
 }
 
+function parseCalendarDate(value) {
+  // The pg DATE parser creates a Date at midnight in the process time zone.
+  const localDate = value instanceof Date ? DateTime.fromJSDate(value, { zone: "local" }).toISODate() : value;
+  const parsed = DateTime.fromISO(localDate, { zone: CENTER_TIME_ZONE });
+  if (!parsed.isValid) throw new Error("Invalid recurring template date.");
+  return parsed;
+}
+
 function buildCandidates(template, now, horizonEnd) {
-  const templateStart = DateTime.fromISO(template.effective_from, { zone: CENTER_TIME_ZONE }).startOf("day");
+  const templateStart = parseCalendarDate(template.effective_from).startOf("day");
   const templateEnd = template.effective_to
-    ? DateTime.fromISO(template.effective_to, { zone: CENTER_TIME_ZONE }).endOf("day")
+    ? parseCalendarDate(template.effective_to).endOf("day")
     : horizonEnd;
 
   const rangeStart = now.startOf("day") > templateStart ? now.startOf("day") : templateStart;
@@ -87,6 +99,7 @@ async function main() {
 
   const client = new Client({ connectionString: databaseUrl });
   await client.connect();
+  const tx = drizzle(client);
 
   const now = DateTime.now().setZone(CENTER_TIME_ZONE);
   const horizonEnd = now.plus({ months: HORIZON_MONTHS }).endOf("day");
@@ -108,14 +121,20 @@ async function main() {
       select id, iso_weekday, starts_at_local_time, duration_minutes, effective_from, effective_to, max_capacity
       from class_templates
       where status = 'ACTIVE'
+      order by id
     `);
 
     let inserted = 0;
     let skipped = 0;
+    let habitualReservations = 0;
+    const habitualCapacityConflicts = [];
 
     for (const template of templates) {
+      await lockTemplateAssignments(tx, template.id);
       const candidates = buildCandidates(template, now, horizonEnd);
       for (const candidate of candidates) {
+        const classSessionId = randomUUID();
+        const capacity = Math.min(candidate.maxCapacity, regulation.max_class_capacity);
         const result = await client.query(
           `
             insert into class_sessions (
@@ -126,20 +145,36 @@ async function main() {
             on conflict do nothing
           `,
           [
-            randomUUID(), candidate.templateId, candidate.localDate, candidate.startsAtUtc, candidate.endsAtUtc,
-            Math.min(candidate.maxCapacity, regulation.max_class_capacity), regulation.id,
+            classSessionId, candidate.templateId, candidate.localDate, candidate.startsAtUtc, candidate.endsAtUtc,
+            capacity, regulation.id,
           ],
         );
         if (result.rowCount > 0) {
           inserted += 1;
+          if (Date.parse(candidate.startsAtUtc) >= now.toMillis()) {
+            const seats = await reserveGeneratedSessionHabitualSeats(tx, {
+              classSessionId, templateId: template.id, localDate: candidate.localDate,
+              capacity, regulationVersionId: regulation.id,
+            });
+            habitualReservations += seats.reserved;
+            if (seats.capacityConflict) habitualCapacityConflicts.push(classSessionId);
+          }
         } else {
           skipped += 1;
+          const conflict = await findExistingHabitualCapacityConflict(tx, {
+            templateId: template.id, localDate: candidate.localDate, now: now.toJSDate(),
+            maxClassCapacity: regulation.max_class_capacity,
+          });
+          if (conflict) habitualCapacityConflicts.push(conflict);
         }
       }
     }
 
     await client.query("commit");
-    console.log(`Class sessions generation complete. Inserted=${inserted}, skipped=${skipped}, horizonEnd=${horizonEnd.toISO()}`);
+    console.log(`Class sessions generation complete. Inserted=${inserted}, skipped=${skipped}, habitualReservations=${habitualReservations}, horizonEnd=${horizonEnd.toISO()}`);
+    if (habitualCapacityConflicts.length) {
+      console.warn(`Habitual capacity conflicts: ${habitualCapacityConflicts.join(", ")}`);
+    }
   } catch (error) {
     await client.query("rollback");
     console.error("Failed to generate class sessions.");
