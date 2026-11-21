@@ -10,6 +10,8 @@ import { requireRole } from "@/src/interfaces/auth/session";
 
 import { submitAttendanceForm } from "./attendance-action";
 import { AttendanceForm } from "./attendance-form";
+import { SessionCapacityBlocks } from "./capacity-blocks";
+import { SessionCapacity } from "./session-capacity";
 
 type SessionEnrollmentsProps = {
   params: Promise<{ sessionId: string }>;
@@ -27,12 +29,13 @@ const attendanceLabels = { ATTENDED: "Asistió", ABSENT: "Ausente" };
 export default async function SessionEnrollmentsPage({ params, searchParams }: SessionEnrollmentsProps) {
   const user = await requireRole("SUPER_ADMIN");
   const [{ sessionId }, query] = await Promise.all([params, searchParams]);
-  const session = await getAdminCalendarSessionDetails(user, sessionId);
+  const now = new Date();
+  const session = await getAdminCalendarSessionDetails(user, sessionId, now);
   if (!session) notFound();
 
   const { week } = resolveCenterWeek(query.week, DateTime.fromJSDate(session.startsAtUtc));
   const cancelled = session.sessionStatus === "CANCELLED";
-  const ended = session.endsAtUtc <= new Date();
+  const ended = session.endsAtUtc <= now;
 
   return (
     <main className="space-y-3">
@@ -46,6 +49,9 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
         <CalendarTimeRange start={session.startsAtUtc} end={session.endsAtUtc} />
         {" · Hora de Copenhague"}
       </p>
+      <SessionCapacity capacity={session.capacityOverview}>
+        <SessionCapacityBlocks sessionId={sessionId} blocks={session.capacityBlocks} canBlock={session.capacityOverview.reservableSpots > 0} />
+      </SessionCapacity>
       <section aria-labelledby="attendance-control" className="space-y-2">
         <h2 id="attendance-control">Control de asistencia</h2>
         {cancelled && <p>La sesión está cancelada. Solo se pueden consultar los registros existentes.</p>}

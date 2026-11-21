@@ -57,6 +57,13 @@
       "when": 1795185463006,
       "tag": "0007_student_withdrawals",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1795293900081,
+      "tag": "0008_session_capacity_block_release",
+      "breakpoints": true
     }
   ]
 }

@@ -18,6 +18,7 @@ import {
   getClassSessionAvailability,
   getStudentActivityHistory,
   recordAttendance,
+  releaseSessionCapacityBlock,
   setClassTemplateStatus,
   updateClassSession,
 } from "@/src/application/academic/academic-service";
@@ -76,6 +77,11 @@ export async function endStudentTemplateAssignmentAction(input: unknown) {
 export async function addSessionCapacityBlockAction(input: unknown) {
   const actor = await requireRole("SUPER_ADMIN");
   return addSessionCapacityBlock({ userId: actor.userId, role: actor.role }, input);
+}
+
+export async function releaseSessionCapacityBlockAction(input: unknown) {
+  const actor = await requireRole("SUPER_ADMIN");
+  return releaseSessionCapacityBlock({ userId: actor.userId, role: actor.role }, input);
 }
 
 export async function getClassSessionAvailabilityAction(classSessionId: string) {

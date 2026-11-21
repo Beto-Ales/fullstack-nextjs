@@ -21,6 +21,7 @@ import {
   generateSessionsSchema,
   ordinaryEnrollmentSchema,
   recordAttendanceSchema,
+  releaseCapacityBlockSchema,
   reserveSeatSchema,
   setClassTemplateStatusSchema,
   updateClassSessionSchema,
@@ -30,7 +31,7 @@ import { resolveCurrentAcademicRegulation } from "@/src/application/academic/reg
 import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
 import { lockStudentProfile, tryGenerateAutoCreditFromCancellation } from "@/src/application/credits/credit-service";
 import { cancelRecoveriesForCancelledSession, cancelRecoveryReservation, reserveRecovery } from "@/src/application/recovery/recovery-service";
-import { calculateAvailableSpots } from "@/src/domain/academic/availability";
+import { calculateAvailableSpots, getSessionBookingStatus } from "@/src/domain/academic/availability";
 import { classifyCancellationTiming, evaluateCancellationSequence, type HabitualSequenceEvent } from "@/src/domain/academic/cancellation-rules";
 import {
   DEFAULT_CLASS_CAPACITY, SESSION_GENERATION_HORIZON_MONTHS, WEEKLY_COURSE_DURATION_MONTHS,
@@ -769,34 +770,82 @@ export async function endStudentTemplateAssignment(actor: Actor, input: unknown)
   });
 }
 
+async function lockCapacitySession(tx: TransactionClient, classSessionId: string) {
+  const [session] = await tx.select({
+    maxCapacity: classSessions.maxCapacity,
+    sessionStatus: classSessions.status,
+    startsAtUtc: classSessions.startsAtUtc,
+    endsAtUtc: classSessions.endsAtUtc,
+  }).from(classSessions).where(eq(classSessions.id, classSessionId)).for("update");
+  if (!session) {
+    throw new ApplicationError("Class session not found.", "session_not_found", 404, true);
+  }
+  return session;
+}
+
 export async function addSessionCapacityBlock(actor: Actor, input: unknown) {
   requireSuperAdmin(actor);
   const payload = blockCapacitySchema.parse(input);
+  const conflict = () => new ApplicationError("El identificador ya corresponde a otro bloqueo.", "block_id_conflict", 409, true);
 
   return db.transaction(async (tx) => {
-    const [session] = await tx.select({ maxCapacity: classSessions.maxCapacity })
-      .from(classSessions).where(eq(classSessions.id, payload.classSessionId)).for("update");
-    if (!session) {
-      throw new ApplicationError("Class session not found.", "session_not_found", 404, true);
+    const session = await lockCapacitySession(tx, payload.classSessionId);
+    const [existing] = await tx.select().from(sessionCapacityBlocks).where(eq(sessionCapacityBlocks.id, payload.blockId));
+    if (existing) {
+      if (existing.classSessionId !== payload.classSessionId || existing.blockedSpots !== payload.blockedSpots
+        || existing.reason !== payload.reason || existing.blockedByUserId !== actor.userId) {
+        throw conflict();
+      }
+      return { blockId: existing.id, created: false };
     }
-    const regulation = await resolveCurrentAcademicRegulation(tx);
+
+    const now = new Date();
+    if (getSessionBookingStatus(session, now) !== "UPCOMING") {
+      throw new ApplicationError("Solo se pueden bloquear plazas en sesiones futuras y programadas.", "session_not_reservable", 409, true);
+    }
+    const regulation = await resolveCurrentAcademicRegulation(tx, now);
     const capacity = Math.min(session.maxCapacity, regulation.maxClassCapacity);
     const usage = await readSessionUsage(tx, payload.classSessionId);
-    if (payload.isActive && usage.confirmedReservations + usage.blockedSpots + payload.blockedSpots > capacity) {
+    if (payload.blockedSpots > calculateAvailableSpots({ ...usage, capacity })) {
       throw new ApplicationError("El bloqueo supera las plazas disponibles.", "capacity_conflict", 409, true);
     }
 
-    const blockId = randomUUID();
-    await tx.insert(sessionCapacityBlocks).values({
-      id: blockId,
+    const [created] = await tx.insert(sessionCapacityBlocks).values({
+      id: payload.blockId,
       classSessionId: payload.classSessionId,
       blockedSpots: payload.blockedSpots,
       reason: payload.reason,
       blockedByUserId: actor.userId,
-      isActive: payload.isActive,
       regulationVersionId: regulation.id,
-    });
-    return { blockId };
+      createdAt: now,
+      updatedAt: now,
+    }).onConflictDoNothing({ target: sessionCapacityBlocks.id }).returning({ id: sessionCapacityBlocks.id });
+    if (!created) throw conflict();
+    return { blockId: created.id, created: true };
+  });
+}
+
+export async function releaseSessionCapacityBlock(actor: Actor, input: unknown) {
+  requireSuperAdmin(actor);
+  const payload = releaseCapacityBlockSchema.parse(input);
+  return db.transaction(async (tx) => {
+    await lockCapacitySession(tx, payload.classSessionId);
+    const scope = and(eq(sessionCapacityBlocks.id, payload.blockId), eq(sessionCapacityBlocks.classSessionId, payload.classSessionId));
+    const [block] = await tx.select({ isActive: sessionCapacityBlocks.isActive }).from(sessionCapacityBlocks).where(scope);
+    if (!block) {
+      throw new ApplicationError("El bloqueo no existe en esta sesión.", "capacity_block_not_found", 404, true);
+    }
+    if (!block.isActive) return { blockId: payload.blockId, released: false };
+
+    const now = new Date();
+    await tx.update(sessionCapacityBlocks).set({
+      isActive: false,
+      releasedByUserId: actor.userId,
+      releasedAt: now,
+      releaseReason: payload.reason,
+      updatedAt: now,
+    }).where(scope);
+    return { blockId: payload.blockId, released: true };
   });
 }
 

@@ -43,7 +43,7 @@ Fase 9 — Panel administrativo
 
 Calendario global, perfiles, estadísticas, bloqueos de plazas y gestión de créditos.
 
-El calendario global muestra las incidencias de aforo. El detalle de sesión permite consultar inscritos y cancelaciones y registrar o corregir asistencia después de la hora de fin. Quedan pendientes el desglose de aforo en el detalle, la gestión de bloqueos y los demás flujos administrativos del apartado 11. [Avance y pruebas](docs/testing.md#incremento-92--control-de-asistencia-en-el-detalle-de-sesión)
+El calendario global muestra las incidencias de aforo. El detalle de sesión distingue capacidad física y plazas reservables, permite consultar inscritos y cancelaciones y gestionar asistencia. También permite bloquear y desbloquear plazas con auditoría y protección frente a reservas concurrentes. La gestión de reservas desde el detalle es el siguiente flujo administrativo pendiente. [Avance y pruebas](docs/testing.md#incremento-94--bloqueo-y-desbloqueo-administrativo-de-plazas)
 
 Fase 10 — Seguridad y pruebas
 

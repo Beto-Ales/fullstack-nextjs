@@ -131,7 +131,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (po
       classSessionId: sessionIds[1], studentProfileId: remaining.profileId,
     });
     for (const classSessionId of sessionIds.slice(1, 3)) {
-      await academicService.addSessionCapacityBlock(admin, { classSessionId, blockedSpots: 1 });
+      await academicService.addSessionCapacityBlock(admin, { classSessionId, blockId: randomUUID(), blockedSpots: 1, reason: "Bloqueo de prueba" });
       expect(await academicService.getClassSessionAvailability(classSessionId)).toMatchObject({ availableSpots: 0 });
     }
     const credit = await import("@/src/application/credits/credit-service");

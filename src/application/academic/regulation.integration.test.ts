@@ -173,9 +173,9 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic regulation (pos
     await expect(recoveryService.cancelRecoveryReservation(student, { reservationId: booking.reservationId }))
       .resolves.toMatchObject({ cancelled: true, refunded: false });
 
-    await academicService.addSessionCapacityBlock(admin, { classSessionId: blockSessionId, blockedSpots: 1 });
+    await academicService.addSessionCapacityBlock(admin, { classSessionId: blockSessionId, blockId: randomUUID(), blockedSpots: 1, reason: "Bloqueo de prueba" });
     await academicService.createReservationForCurrentStudent(student, blockSessionId);
-    await expect(academicService.addSessionCapacityBlock(admin, { classSessionId: blockSessionId, blockedSpots: 1 }))
+    await expect(academicService.addSessionCapacityBlock(admin, { classSessionId: blockSessionId, blockId: randomUUID(), blockedSpots: 1, reason: "Bloqueo de prueba" }))
       .rejects.toMatchObject({ code: "capacity_conflict" });
     expect(await academicService.getClassSessionAvailability(blockSessionId))
       .toMatchObject({ capacity: 2, blockedSpots: 1, confirmedReservations: 1, availableSpots: 0 });

@@ -100,11 +100,14 @@ export const correctAttendanceSchema = recordAttendanceSchema.extend({
   reason: z.string().trim().min(3).max(300),
 });
 
-export const blockCapacitySchema = z.object({
+export const releaseCapacityBlockSchema = z.strictObject({
   classSessionId: z.string().uuid("Invalid class session id."),
+  blockId: z.uuid(),
+  reason: z.string().trim().min(3).max(300),
+});
+
+export const blockCapacitySchema = releaseCapacityBlockSchema.extend({
   blockedSpots: z.number().int().min(1).max(100),
-  reason: z.string().max(300).optional(),
-  isActive: z.boolean().default(true),
 });
 
 export const generateSessionsSchema = z.object({

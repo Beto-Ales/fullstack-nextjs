@@ -173,6 +173,21 @@ Fórmula:
 - sin confiar en datos del cliente.
 - El aforo máximo inicial es de 12 plazas. Una reducción entra en vigor para nuevas reservas y bloqueos y conserva los compromisos existentes.
 
+### Aforo en el detalle administrativo
+
+- **Capacidad física** es la guardada en la sesión. Las plazas físicamente libres se calculan restando las reservas confirmadas y los bloqueos activos, con mínimo cero. Las cancelaciones y los bloqueos históricos quedan fuera del cálculo. Si una plaza liberada se vuelve a reservar, la nueva confirmación ocupa esa capacidad.
+- **Aforo efectivo** es el menor valor entre la capacidad física y el límite de la normativa vigente al consultar. Calendario y detalle comparten el cálculo y los agregados de PostgreSQL, que también usa la gestión de reservas ordinarias. **Plazas reservables** aplica el aforo efectivo y se muestra en cero cuando la sesión empezó, terminó o se canceló, como en la búsqueda de recuperaciones. El número expresa capacidad de la sesión. Reservar una recuperación también requiere que el alumno cumpla las condiciones de créditos y cupo mensual.
+- Los habituales pendientes se muestran por separado. Si superan la disponibilidad efectiva se indica la incidencia. El flujo de reservas actual cuenta compromisos confirmados y bloqueos activos, y no descuenta los habituales pendientes. Si esos compromisos ya superan el aforo efectivo, el detalle muestra el exceso y mantiene las plazas reservables en cero.
+- Si un dato histórico tiene una cancelación registrada y la reserva sigue confirmada, el detalle lo señala y conserva el recuento de capacidad que aplican el calendario y las reservas.
+
+### Bloqueo y desbloqueo administrativo de plazas
+
+- `SUPER_ADMIN` puede bloquear plazas de una sesión futura y programada. El formulario bloquea una unidad por envío y admite operaciones independientes consecutivas. El servicio conserva el soporte de varias unidades en un mismo bloqueo. Cada alta exige un motivo de 3 a 300 caracteres tras recortar los espacios y registra actor, fecha y normativa aplicada.
+- El alta y la desactivación adquieren el bloqueo de fila de la sesión con `FOR UPDATE`, igual que las reservas. El alta lee la hora, la normativa y el uso de plazas después de tomar el bloqueo. Los habituales pendientes se muestran como incidencia y las reservas confirmadas y los bloqueos activos son los compromisos que consumen el aforo. Si los compromisos ocupan o superan el límite efectivo, se rechazan nuevos bloqueos.
+- El UUID del bloqueo identifica la solicitud de alta. Reenviarla con el mismo actor, sesión, cantidad y motivo devuelve el resultado original. Un UUID reutilizado con datos diferentes se rechaza. La desactivación de un bloqueo activo conserva la fila y anota el motivo, el actor y la fecha de desbloqueo. Repetirla conserva la primera desactivación.
+- Se puede desactivar un bloqueo activo en exceso de aforo o en una sesión cerrada. La disponibilidad permanece en cero si la sesión está en curso, finalizada o cancelada. La operación solo modifica el bloqueo y el cálculo posterior de disponibilidad.
+- La migración `0008_session_capacity_block_release` añade los tres campos de auditoría de desbloqueo. Los bloqueos históricos anteriores conservan sus datos y muestran los datos de auditoría que consten. La lectura del detalle consulta aforo y bloqueos en la misma instantánea de PostgreSQL.
+
 ## Concurrencia en reservas
 
 La creación de reserva usa transacción con bloqueo de fila (`FOR UPDATE`) sobre `class_sessions`:

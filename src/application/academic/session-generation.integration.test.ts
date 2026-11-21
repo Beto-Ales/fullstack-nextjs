@@ -155,7 +155,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("session generation (post
   it.each(["application", "cli-date"] as const)("still reports a generated session with blocked seats on retry with %s", async (generator) => {
     await generate("application");
     const [created] = await sessions();
-    await service.addSessionCapacityBlock(admin, { classSessionId: created.id, blockedSpots: 2 });
+    await service.addSessionCapacityBlock(admin, { classSessionId: created.id, blockId: randomUUID(), blockedSpots: 2, reason: "Bloqueo de prueba" });
     expect(await assign(await createStudent())).toMatchObject({ autoReservedReservationCount: 0 });
     const retried = await generate(generator);
     if ("stderr" in retried) {

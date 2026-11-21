@@ -10,7 +10,8 @@ type AdminWeeklyCalendarProps = {
 };
 
 const statuses = {
-  SCHEDULED: "Programada",
+  UPCOMING: "Programada",
+  IN_PROGRESS: "En curso",
   CANCELLED: "Cancelada",
   COMPLETED: "Finalizada",
 };
@@ -29,18 +30,19 @@ export function AdminWeeklyCalendar({ week, sessions }: AdminWeeklyCalendarProps
           <p className="font-medium">{session.name ?? "Clase única"}</p>
           <p>
             <CalendarTimeRange start={session.startsAtUtc} end={session.endsAtUtc} />
-            {" · "}{statuses[session.sessionStatus]}
+            {" · "}{statuses[session.bookingStatus]}
           </p>
           <dl className="grid grid-cols-2 gap-x-2 text-sm">
             <dt>Aforo efectivo</dt><dd>{session.capacity}</dd>
             <dt>Reservas confirmadas</dt><dd>{session.confirmedReservations}</dd>
             <dt>Bloqueos activos</dt><dd>{session.blockedSpots}</dd>
-            <dt>Plazas libres</dt><dd>{session.availableSpots}</dd>
+            <dt>Plazas reservables</dt><dd>{session.reservableSpots}</dd>
             {session.habitualPending !== null && (
               <><dt>Habituales pendientes de reserva</dt><dd>{session.habitualPending}</dd></>
             )}
           </dl>
           {session.capacityConflict && <p className="font-semibold">Los habituales pendientes superan las plazas libres.</p>}
+          {session.capacityExcess > 0 && <p className="font-semibold">El aforo efectivo está superado.</p>}
           <Link className="underline" prefetch={false}
             href={`/admin/sesiones/${encodeURIComponent(session.id)}?week=${week.toISODate()}`}>Ver inscritos</Link>
         </div>
