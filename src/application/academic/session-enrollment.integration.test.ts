@@ -258,4 +258,145 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("administrative enrollment in a 
     expect((await calendar.getAdminCalendarSessionDetails(admin, later))?.capacityOverview)
       .toMatchObject({ habitualPending: 0, confirmedReservations: 1, reservableSpots: 0 });
   });
+
+  describe("administrative cancellation of a single ordinary reservation", () => {
+    async function book(classSessionId: string, studentProfileId = first.profileId) {
+      const input = request(classSessionId, studentProfileId);
+      await academic.enrollStudentInSession(admin, input);
+      return { classSessionId, reservationId: input.reservationId, cancellationId: randomUUID(), reason: "Ajuste administrativo" };
+    }
+
+    it("audits the original reservation, releases its seat and preserves other students and history", async () => {
+      const id = await seedSession(2);
+      const target = await book(id);
+      const retained = await book(id, second.profileId);
+      await expect(academic.cancelSessionEnrollment(otherAdmin, { ...target, reason: `  ${target.reason}  ` }))
+        .resolves.toEqual({ cancellationId: target.cancellationId, created: true, autoCreditGenerated: false });
+      const view = await checkAvailability(id, 1, 0, 1);
+      expect(view.enrollments).toMatchObject([{ reservationId: retained.reservationId }]);
+      expect(view.cancellations).toMatchObject([{
+        reservationId: target.reservationId, cancellationId: target.cancellationId, origin: "ORDINARY", status: "CANCELLED",
+        cancelledAt: now, cancellationSource: "ADMIN_DECISION", administrativeReason: target.reason,
+      }]);
+      const { rows } = await client.query(`select r.created_by_user_id, c.cancelled_by_user_id, c.student_profile_id, c.class_session_id,
+        c.regulation_version_id, c.sequence_position, c.can_generate_credit_candidate
+        from reservation_cancellations c join class_reservations r on r.id=c.reservation_id where c.id=$1`, [target.cancellationId]);
+      expect(rows).toEqual([{
+        created_by_user_id: admin.userId, cancelled_by_user_id: otherAdmin.userId, student_profile_id: first.profileId,
+        class_session_id: id, regulation_version_id: "initial", sequence_position: null, can_generate_credit_candidate: false,
+      }]);
+      expect(await academic.listUpcomingOrdinaryReservations(first)).toEqual([]);
+      expect((await academic.listStudentClassHistory(first, now)).history)
+        .toMatchObject([{ reservationId: target.reservationId, cancellationSource: "ADMIN_DECISION" }]);
+      expect((await client.query("select * from credit_ledger_movements")).rows).toEqual([]);
+    });
+
+    it("excludes the decision from the middle of an existing streak and preserves the student's third cancellation grant", async () => {
+      const templateId = randomUUID();
+      await client.query(`insert into class_templates (id, name, iso_weekday, starts_at_local_time, duration_minutes, effective_from)
+        values ($1, 'Curso habitual', 4, '17:00', 60, '2031-04-01')`, [templateId]);
+      const assignmentId = randomUUID();
+      await client.query(`insert into student_template_assignments (id, student_profile_id, template_id, effective_from)
+        values ($1, $2, $3, '2031-04-01')`, [assignmentId, first.profileId, templateId]);
+      const targets = [];
+      for (const days of [0, 7, 14, 21, 28]) {
+        targets.push(await book(await seedSession(1, "SCHEDULED", new Date(start.getTime() + days * 86_400_000), templateId)));
+      }
+      const [firstDate, adminDate, secondDate, thirdDate, untouched] = targets;
+      await academic.cancelReservation(first, firstDate);
+      await client.query("update reservation_cancellations set decision_source=null where reservation_id=$1", [firstDate.reservationId]);
+      await academic.cancelSessionEnrollment(admin, adminDate);
+      expect(await academic.getStudentActivityHistory(first)).toMatchObject({ currentConsecutiveCancellations: 1 });
+      expect((await calendar.getAdminCalendarSessionDetails(admin, adminDate.classSessionId))?.capacityOverview)
+        .toMatchObject({ habitualPending: 0, confirmedReservations: 0, reservableSpots: 1 });
+      await expect(academic.cancelReservation(first, secondDate)).resolves.toMatchObject({ autoCreditGenerated: false });
+      const credited = await academic.cancelReservation(first, thirdDate);
+      expect(credited).toMatchObject({ autoCreditGenerated: true });
+      expect(await academic.getStudentActivityHistory(first)).toMatchObject({ currentConsecutiveCancellations: 3 });
+      expect((await client.query("select movement_type from credit_ledger_movements")).rows)
+        .toEqual([{ movement_type: "AUTO_CANCELLATION_GRANT" }]);
+      expect((await client.query("select id from student_template_assignments")).rows).toEqual([{ id: assignmentId }]);
+      expect((await calendar.getAdminCalendarSessionDetails(admin, untouched.classSessionId))?.enrollments)
+        .toMatchObject([{ reservationId: untouched.reservationId }]);
+    });
+
+    it("rejects mismatched targets, invalid IDs or reasons, unauthorized actors, closed sessions and recovery bookings", async () => {
+      const target = await book(await seedSession());
+      await expect(academic.cancelSessionEnrollment(first, target)).rejects.toMatchObject({ code: "forbidden" });
+      await expect(academic.cancelReservation(admin, target)).rejects.toMatchObject({ code: "forbidden" });
+      for (const fields of [{ reason: "   " }, { cancellationId: "invalid" }, { classSessionId: "invalid" }, { reservationId: "invalid" }]) {
+        await expect(academic.cancelSessionEnrollment(admin, { ...target, ...fields })).rejects.toMatchObject({ name: "ZodError" });
+      }
+      await expect(academic.cancelSessionEnrollment(admin, { ...target, reservationId: randomUUID() }))
+        .rejects.toMatchObject({ code: "reservation_not_found" });
+      await expect(academic.cancelSessionEnrollment(admin, { ...target, classSessionId: await seedSession() }))
+        .rejects.toMatchObject({ code: "reservation_not_found" });
+      await client.query("update class_reservations set origin='MAKEUP' where id=$1", [target.reservationId]);
+      await expect(academic.cancelSessionEnrollment(admin, target)).rejects.toMatchObject({ code: "reservation_not_ordinary" });
+      await client.query("update class_reservations set origin='ORDINARY' where id=$1", [target.reservationId]);
+      vi.setSystemTime(start);
+      await expect(academic.cancelSessionEnrollment(admin, target)).rejects.toMatchObject({ code: "session_not_cancellable" });
+      vi.setSystemTime(new Date(start.getTime() + 3_600_000));
+      await academic.recordAttendance(admin, { ...target, outcome: "ABSENT" });
+      await expect(academic.cancelSessionEnrollment(admin, target)).rejects.toMatchObject({ code: "attendance_already_recorded" });
+      await client.query("update class_sessions set status='COMPLETED' where id=$1", [target.classSessionId]);
+      await expect(academic.cancelSessionEnrollment(admin, target)).rejects.toMatchObject({ code: "session_not_cancellable" });
+      expect((await client.query("select id from reservation_cancellations")).rows).toEqual([]);
+    });
+
+    it("records replays once and rejects changed actors, reasons, keys and cross-reservation keys", async () => {
+      const target = await book(await seedSession());
+      const results = await Promise.all(Array.from({ length: 3 }, () => academic.cancelSessionEnrollment(admin, target)));
+      expect(results.filter(({ created }) => created)).toHaveLength(1);
+      expect(results.every(({ cancellationId }) => cancellationId === target.cancellationId)).toBe(true);
+      await expect(academic.cancelSessionEnrollment(otherAdmin, target)).rejects.toMatchObject({ code: "reservation_already_cancelled" });
+      for (const changed of [{ reason: "Otro motivo" }, { cancellationId: randomUUID() }]) {
+        await expect(academic.cancelSessionEnrollment(admin, { ...target, ...changed }))
+          .rejects.toMatchObject({ code: "reservation_already_cancelled" });
+      }
+      const another = await book(await seedSession());
+      await expect(academic.cancelSessionEnrollment(admin, { ...another, cancellationId: target.cancellationId }))
+        .rejects.toMatchObject({ code: "cancellation_id_conflict" });
+      await checkAvailability(another.classSessionId, 1, 0, 0);
+      expect((await client.query("select id from reservation_cancellations")).rows).toEqual([{ id: target.cancellationId }]);
+    });
+
+    it("serializes decisions with a different administrator, a student and session cancellation", async () => {
+      const target = await book(await seedSession());
+      await race([
+        academic.cancelSessionEnrollment(admin, target),
+        academic.cancelSessionEnrollment(otherAdmin, { ...target, cancellationId: randomUUID() }),
+      ], ["reservation_already_cancelled"]);
+      const next = await book(await seedSession());
+      const adminWon = await race([
+        academic.cancelSessionEnrollment(admin, next), academic.cancelReservation(first, next),
+      ], ["reservation_not_confirmed", "reservation_already_cancelled"]);
+      expect((await checkAvailability(next.classSessionId, 0, 0, 1)).cancellations)
+        .toMatchObject([{ cancellationSource: adminWon ? "ADMIN_DECISION" : "STUDENT_REQUEST" }]);
+      const last = await book(await seedSession());
+      const [individual] = await Promise.allSettled([
+        academic.cancelSessionEnrollment(admin, last), academic.cancelClassSession(otherAdmin, last),
+      ]);
+      if (individual.status === "rejected") expect(individual.reason).toMatchObject({ code: "reservation_not_confirmed" });
+      const detail = await checkAvailability(last.classSessionId, 0, 0, 0);
+      expect(detail.sessionStatus).toBe("CANCELLED");
+      expect(detail.cancellations).toHaveLength(1);
+      expect((await client.query("select id from credit_ledger_movements")).rows).toEqual([]);
+    });
+
+    it("serializes capacity with enrollment and stays exclusive with attendance", async () => {
+      const target = await book(await seedSession());
+      const [cancelled, enrolled, attendance] = await Promise.allSettled([
+        academic.cancelSessionEnrollment(admin, target),
+        academic.enrollStudentInSession(otherAdmin, request(target.classSessionId, second.profileId)),
+        academic.recordAttendance(admin, { ...target, outcome: "ABSENT" }),
+      ]);
+      expect(cancelled.status).toBe("fulfilled");
+      expect(attendance.status).toBe("rejected");
+      if (attendance.status === "rejected") expect(["reservation_not_confirmed", "session_not_ended"]).toContain(attendance.reason.code);
+      const count = Number(enrolled.status === "fulfilled");
+      if (enrolled.status === "rejected") expect(enrolled.reason).toMatchObject({ code: "no_spots_available" });
+      await checkAvailability(target.classSessionId, count, 0, 1 - count);
+    });
+  });
 });

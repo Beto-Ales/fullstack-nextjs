@@ -181,7 +181,8 @@ test("shows confirmed enrollments and cancellation history for one session and p
         await expect(details.getByRole("listitem").filter({ hasText: makeupName })).toContainText("Recuperación");
         await expect(details.getByText(cancelledName)).toHaveCount(0);
         await expect(details.getByText(foreignName)).toHaveCount(0);
-        await expect(details.getByRole("button")).toHaveCount(0);
+        await expect(details.getByRole("button", { name: "Registrar asistencia" })).toHaveCount(0);
+        await expect(details.getByText("Cancelar inscripción", { exact: true })).toHaveCount(1);
 
         const cancellations = page.getByRole("region", { name: "Cancelaciones", exact: true });
         const entries = cancellations.getByRole("listitem");
@@ -614,6 +615,119 @@ test("validates submitted student data and denies both enrollment actions on sta
         expect(rows).toEqual([]);
       } finally {
         await searchPage.close();
+        await studentPage.close();
+      }
+    });
+  });
+});
+
+test("cancels a single ordinary enrollment by keyboard, preserves capacity blocks and shows both histories", async ({ page, browser }) => {
+  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withCreditsAccount("STUDENT", async (student) => {
+      await withCreditsAccount("STUDENT", async (other) => {
+        const ordinary = await seedAttendanceProfile(student, "Ada", "Ordinaria");
+        const makeup = await seedAttendanceProfile(other, "Luz", "Recuperación");
+        const startsAt = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("week").plus({ weeks: 1 }).set({ hour: 16 });
+        const session = await seedAttendanceSession(admin, startsAt, [{ id: ordinary, origin: "ORDINARY" }, { id: makeup, origin: "MAKEUP" }]);
+        await admin.client.query("update class_sessions set max_capacity=3 where id=$1", [session.id]);
+        await admin.client.query(`insert into session_capacity_blocks (id,class_session_id,blocked_spots,reason)
+          values ($1,$2,1,'Material')`, [randomUUID(), session.id]);
+        const stalePage = await page.context().newPage();
+        const studentContext = await browser.newContext();
+        try {
+          await page.setViewportSize({ width: 360, height: 780 });
+          await login(page, admin);
+          await expect(page).toHaveURL(/\/admin$/);
+          const calendar = page.getByRole("region", { name: "Calendario semanal global" });
+          await calendar.getByRole("link", { name: "Semana siguiente" }).click();
+          const card = calendar.getByRole("listitem").filter({ has: page.locator(`a[href="${session.path}"]`) });
+          await expect(card.locator("dd")).toHaveText(["3", "2", "1", "0"]);
+          await card.getByRole("link", { name: "Ver inscritos" }).click();
+          await stalePage.goto(session.path);
+          const stale = stalePage.getByRole("region", { name: "Reservas confirmadas" });
+          await stale.getByText("Cancelar inscripción", { exact: true }).click();
+          await stale.getByLabel("Motivo de la cancelación").fill("Decisión desactualizada");
+
+          await page.bringToFront();
+          const confirmed = page.getByRole("region", { name: "Reservas confirmadas" });
+          const row = confirmed.getByRole("listitem").filter({ hasText: "Ada Ordinaria" });
+          const trigger = row.getByText("Cancelar inscripción", { exact: true });
+          await expect(confirmed.getByRole("listitem").filter({ hasText: "Luz Recuperación" }).getByText("Cancelar inscripción")).toHaveCount(0);
+          await trigger.focus();
+          await trigger.press("Enter");
+          const reason = row.getByLabel("Motivo de la cancelación");
+          const confirm = row.getByRole("button", { name: "Confirmar cancelación" });
+          await expect(reason).toBeVisible();
+          await expect(row).toContainText("Cancelar la reserva ordinaria de Ada Ordinaria");
+          await expect(row).toContainText("Hora de Copenhague");
+          await expect(row).toContainText("El saldo de créditos y la racha del alumno se conservan");
+          expect(await row.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+          await expect(confirmed.getByText("Total de inscritos: 2")).toBeVisible();
+          await reason.fill("   ");
+          await reason.press("Tab");
+          await expect(confirm).toBeFocused();
+          await confirm.press("Enter");
+          await expect(confirmed.getByRole("alert")).toContainText("Escribe un motivo");
+          await reason.fill("Decisión de coordinación");
+          await reason.press("Tab");
+          await confirm.press("Enter");
+          await page.keyboard.press("Enter");
+          await expect(confirmed.getByRole("status")).toHaveText("Inscripción cancelada.");
+          await expect(confirmed.getByRole("listitem")).toHaveCount(1);
+          await expect(confirmed.getByText("Luz Recuperación")).toBeVisible();
+          await expect(page.getByRole("region", { name: "Aforo y disponibilidad" }).locator("dd"))
+            .toHaveText(["3", "3", "1", "1", "1", "1"]);
+          await expect(page.getByRole("region", { name: "Inscribir a un alumno" }).getByRole("button", { name: "Buscar alumnos" })).toBeVisible();
+          const history = page.getByRole("region", { name: "Cancelaciones", exact: true });
+          await expect(history.getByRole("listitem")).toHaveCount(1);
+          await expect(history).toContainText("Decisión administrativa");
+          await expect(history).toContainText("Motivo: Decisión de coordinación");
+
+          await stale.getByRole("button", { name: "Confirmar cancelación" }).click();
+          await expect(stale.getByRole("alert")).toHaveText("La reserva ya tiene una cancelación registrada.");
+          await expect(stale.getByRole("listitem")).toHaveCount(1);
+          await page.getByRole("link", { name: "Volver al calendario" }).click();
+          await expect(page).toHaveURL((url) => url.pathname === "/admin" && url.searchParams.get("week") === session.week);
+          await expect(card.locator("dd")).toHaveText(["3", "1", "1", "1"]);
+
+          const studentPage = await studentContext.newPage();
+          await login(studentPage, student);
+          await expect(studentPage.getByRole("region", { name: "Mis próximas clases" }).getByRole("listitem")).toHaveCount(0);
+          await expect(studentPage.getByRole("region", { name: "Historial de clases" })).toContainText("Cancelación por decisión administrativa");
+          await expect(studentPage.getByText("Motivo: Decisión de coordinación")).toHaveCount(0);
+          const { rows } = await admin.client.query("select decision_source,administrative_reason,cancelled_by_user_id from reservation_cancellations where class_session_id=$1", [session.id]);
+          expect(rows).toEqual([{ decision_source: "ADMIN_DECISION", administrative_reason: "Decisión de coordinación", cancelled_by_user_id: admin.userId }]);
+        } finally {
+          await stalePage.close();
+          await studentContext.close();
+        }
+      });
+    });
+  });
+});
+
+test("rejects cancellation from an old admin form after authentication switches to a student", async ({ page }) => {
+  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withCreditsAccount("STUDENT", async (student) => {
+      const id = await seedAttendanceProfile(student, "Noa", "Inscrita");
+      const session = await seedAttendanceSession(admin, DateTime.now().setZone(CENTER_TIME_ZONE).plus({ weeks: 1 }), [{ id, origin: "ORDINARY" }]);
+      await login(page, admin);
+      await expect(page).toHaveURL(/\/admin$/);
+      await page.goto(session.path);
+      await page.getByText("Cancelar inscripción", { exact: true }).click();
+      await page.getByLabel("Motivo de la cancelación").fill("Intento fuera del rol");
+      await page.context().clearCookies();
+      const studentPage = await page.context().newPage();
+      try {
+        await login(studentPage, student);
+        await expect(studentPage).toHaveURL(/\/student$/);
+        await page.getByRole("button", { name: "Confirmar cancelación" }).click();
+        await expect(page).toHaveURL(/\/student$/);
+        const { rows } = await admin.client.query("select status from class_reservations where class_session_id=$1", [session.id]);
+        expect(rows).toEqual([{ status: "CONFIRMED" }]);
+      } finally {
         await studentPage.close();
       }
     });

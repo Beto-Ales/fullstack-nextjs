@@ -46,7 +46,13 @@ function selectAdminSessions(now: Date, reader: AdminSessionReader = db) {
             and r.student_profile_id = habitual.student_profile_id
             and (
               r.status = 'CONFIRMED'
-              or (r.status = 'CANCELLED' and r.origin = 'ORDINARY' and r.cancelled_by_user_id = habitual.user_id)
+              or (r.status = 'CANCELLED' and r.origin = 'ORDINARY' and (
+                r.cancelled_by_user_id = habitual.user_id
+                or exists (
+                  select 1 from reservation_cancellations c
+                  where c.reservation_id = r.id and c.decision_source = 'ADMIN_DECISION'
+                )
+              ))
             )
         )
       ) end`.as("habitual_pending"),
@@ -116,6 +122,9 @@ async function readSessionDetails(reader: AdminSessionReader, sessionId: string,
     cancellationId: reservationCancellations.id,
     cancelledAt,
     cancelledByRole: users.role,
+    cancellationSource: reservationCancellations.decisionSource,
+    administrativeReason: reservationCancellations.administrativeReason,
+    cancelledByEmail: users.email,
     cancellationType: reservationCancellations.cancellationType,
     nonEligibilityReason: reservationCancellations.nonEligibilityReason,
   }).from(selectedSession)

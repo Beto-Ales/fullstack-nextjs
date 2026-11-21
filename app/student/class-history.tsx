@@ -4,6 +4,7 @@ import { formatInCenterTimeZone } from "@/src/domain/time/timezone";
 type ClassHistoryEntry = Awaited<ReturnType<typeof listStudentClassHistory>>["history"][number];
 
 function cancellationOutcome(entry: ClassHistoryEntry) {
+  if (entry.cancellationSource === "ADMIN_DECISION") return "Cancelación por decisión administrativa";
   if (entry.cancellationType === "ON_TIME") return "Cancelación anticipada";
   if (entry.cancellationType === "LATE") return "Cancelación tardía";
   if (entry.sessionStatus === "CANCELLED") return "Clase cancelada";
@@ -13,7 +14,8 @@ function cancellationOutcome(entry: ClassHistoryEntry) {
 function formatOutcome(entry: ClassHistoryEntry) {
   const attendance = entry.attendanceOutcome === "ATTENDED" ? "Asistencia registrada"
     : entry.attendanceOutcome === "ABSENT" ? "Falta registrada" : undefined;
-  return [cancellationOutcome(entry), attendance].filter(Boolean).join(" · ") || "Sin asistencia registrada";
+  const source = entry.cancellationSource === "STUDENT_REQUEST" ? "Solicitada por el alumno" : undefined;
+  return [cancellationOutcome(entry), source, attendance].filter(Boolean).join(" · ") || "Sin asistencia registrada";
 }
 
 export function ClassHistory({ entries }: { entries: ClassHistoryEntry[] }) {

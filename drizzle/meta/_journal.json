@@ -71,6 +71,13 @@
       "when": 1795295850192,
       "tag": "0009_admin_session_enrollment",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795296982443,
+      "tag": "0010_admin_reservation_cancellation",
+      "breakpoints": true
     }
   ]
 }

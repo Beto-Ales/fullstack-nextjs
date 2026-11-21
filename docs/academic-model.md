@@ -232,6 +232,14 @@ La [especificación general](../planificacion_general.md#cancelaciones-consecuti
 
 Ambos casos se evalúan en [`evaluateCancellationSequence`](../src/domain/academic/cancellation-rules.ts). La fase 7 usa créditos ya concedidos para verificar las recuperaciones y conserva las reglas de concesión y los movimientos históricos.
 
+### Cancelación individual por decisión administrativa
+
+- `SUPER_ADMIN` puede cancelar desde el detalle una reserva ordinaria confirmada de una sesión programada y futura, con un motivo de 3 a 300 caracteres tras recortar espacios. La acción verifica permisos y pertenencia a la sesión. Una asistencia vigente impide la cancelación. La operación conserva la reserva, su origen, su historial y el horario habitual, y libera su ocupación.
+- La decisión administrativa queda fuera del cálculo de la racha. No cuenta como cancelación del alumno ni interrumpe o reinicia la secuencia. El flujo deja intactos el ledger, el saldo y los límites mensuales de generación y recuperaciones. Una eventual compensación se tramita por separado con la concesión manual auditada. Las solicitudes de alumnado conservan la política vigente. Las recuperaciones y las cancelaciones de sesión completa conservan sus flujos.
+- La migración `0010_admin_reservation_cancellation` añade el origen explícito de la decisión y el motivo administrativo a `reservation_cancellations`. Las nuevas filas ordinarias distinguen `ADMIN_DECISION` de `STUDENT_REQUEST`. La auditoría registra reserva, alumno, sesión, ejecutor, fecha y versión normativa. La fila administrativa registra la transición de confirmada a cancelada. Los registros anteriores conservan origen y motivo desconocidos, incluso si se conoce el ejecutor.
+- La cancelación usa los bloqueos de sesión, reserva y perfil del alumno del flujo ordinario. Comprueba el estado después de bloquear y guarda la transición y la auditoría en la misma transacción. Un reintento con el mismo UUID, sesión, reserva, actor y motivo normalizado devuelve la auditoría original. Una solicitud diferente sobre una reserva cancelada se rechaza.
+- Calendario y detalle actualizan el aforo. La cancelación administrativa de un habitual se reconoce para esa fecha en el indicador de habituales pendientes. El historial del alumno distingue la decisión administrativa y el motivo queda en el historial de administración. Se revalidan el detalle, el calendario administrativo y el panel del alumno.
+
 ## Registro y corrección de asistencia
 
 - `SUPER_ADMIN` puede registrar asistencia o ausencia desde el instante exacto de `ends_at_utc`, incluida la hora de fin de una sesión reprogramada. El servidor compara ese instante con su propio reloj. Las fechas de la sesión siguen las convenciones de `Europe/Copenhagen` del modelo académico.

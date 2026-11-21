@@ -10,6 +10,7 @@ import {
   blockCapacitySchema,
   cancelClassSessionSchema,
   cancelReservationSchema,
+  cancelSessionEnrollmentSchema,
   cancellationHistorySchema,
   correctAttendanceSchema,
   createClassTemplateSchema,
@@ -167,6 +168,7 @@ async function collectHabitualSequenceEvents(tx: QueryExecutor, studentProfileId
     from reservation_cancellations rc
     inner join class_sessions cs on cs.id = rc.class_session_id
     where rc.student_profile_id = ${studentProfileId}
+      and rc.decision_source is distinct from 'ADMIN_DECISION'
     order by cs.starts_at_utc asc, rc.cancelled_at asc
   `);
 
@@ -1106,23 +1108,54 @@ async function lockReservationForMutation(tx: TransactionClient, reservationId: 
 }
 
 export async function cancelReservation(actor: Actor, input: unknown) {
+  if (actor.role !== "STUDENT") {
+    throw new ApplicationError("Forbidden", "forbidden", 403, true);
+  }
   const payload = cancelReservationSchema.parse(input);
-
-  const reservation = await db.transaction((tx) => lockReservationForMutation(tx, payload.reservationId));
-  if (reservation.reservationOrigin === "MAKEUP") {
+  const [reservation] = await db.select({ origin: classReservations.origin }).from(classReservations)
+    .where(eq(classReservations.id, payload.reservationId));
+  if (reservation?.origin === "MAKEUP") {
     return cancelRecoveryReservation(actor, input);
   }
+  return cancelOrdinaryReservation(actor, payload.reservationId);
+}
 
+export async function cancelSessionEnrollment(actor: Actor, input: unknown) {
+  requireSuperAdmin(actor);
+  const decision = cancelSessionEnrollmentSchema.parse(input);
+  return cancelOrdinaryReservation(actor, decision.reservationId, decision);
+}
+
+async function cancelOrdinaryReservation(
+  actor: Actor,
+  reservationId: string,
+  decision?: ReturnType<typeof cancelSessionEnrollmentSchema.parse>,
+) {
   return db.transaction(async (tx) => {
-    const lockedReservation = await lockReservationForMutation(tx, payload.reservationId);
+    const lockedReservation = await lockReservationForMutation(tx, reservationId);
 
-    if (actor.role === "STUDENT") {
+    if (decision) {
+      if (lockedReservation.classSessionId !== decision.classSessionId) {
+        throw new ApplicationError("Reservation not found in this session.", "reservation_not_found", 404, true);
+      }
+      if (lockedReservation.reservationOrigin !== "ORDINARY") {
+        throw new ApplicationError("Only ordinary reservations can be cancelled here.", "reservation_not_ordinary", 409, true);
+      }
+      const [existing] = await tx.select().from(reservationCancellations)
+        .where(eq(reservationCancellations.reservationId, reservationId));
+      if (existing) {
+        if (lockedReservation.reservationStatus === "CANCELLED" && existing.id === decision.cancellationId
+          && existing.decisionSource === "ADMIN_DECISION" && existing.cancelledByUserId === actor.userId
+          && existing.administrativeReason === decision.reason) {
+          return { cancellationId: existing.id, created: false, autoCreditGenerated: false };
+        }
+        throw new ApplicationError("A cancellation already exists.", "reservation_already_cancelled", 409, true);
+      }
+    } else {
       const profileId = await getStudentProfileForUserId(tx, actor.userId);
       if (profileId !== lockedReservation.studentProfileId) {
         throw new ApplicationError("Forbidden", "forbidden", 403, true);
       }
-    } else {
-      requireSuperAdmin(actor);
     }
 
     if (lockedReservation.reservationStatus !== "CONFIRMED") {
@@ -1135,6 +1168,9 @@ export async function cancelReservation(actor: Actor, input: unknown) {
 
     await lockStudentProfile(tx, lockedReservation.studentProfileId);
     const cancelledAt = new Date();
+    if (decision && lockedReservation.classStartsAtUtc <= cancelledAt) {
+      throw new ApplicationError("Only future reservations can be cancelled here.", "session_not_cancellable", 409, true);
+    }
     const regulation = await resolveCurrentAcademicRegulation(tx, cancelledAt);
     const timing = classifyCancellationTiming(cancelledAt, lockedReservation.classStartsAtUtc, regulation.cancellationNoticeDays);
     const isHabitual = await isHabitualReservation(tx, {
@@ -1154,14 +1190,16 @@ export async function cancelReservation(actor: Actor, input: unknown) {
       })
       .where(eq(classReservations.id, lockedReservation.reservationId));
 
-    const cancellationId = randomUUID();
-    await tx.insert(reservationCancellations).values({
+    const cancellationId = decision?.cancellationId ?? randomUUID();
+    const [created] = await tx.insert(reservationCancellations).values({
       id: cancellationId,
       reservationId: lockedReservation.reservationId,
       studentProfileId: lockedReservation.studentProfileId,
       classSessionId: lockedReservation.classSessionId,
       cancelledByUserId: actor.userId,
       cancelledAt,
+      decisionSource: decision ? "ADMIN_DECISION" : "STUDENT_REQUEST",
+      administrativeReason: decision?.reason,
       regulationVersionId: regulation.id,
       cancellationType: timing.type,
       hoursBeforeStart: timing.hoursBeforeStart,
@@ -1172,7 +1210,11 @@ export async function cancelReservation(actor: Actor, input: unknown) {
       isThirdCancellation: false,
       canGenerateCreditCandidate: false,
       nonEligibilityReason: null,
-    });
+    }).onConflictDoNothing({ target: reservationCancellations.id }).returning({ id: reservationCancellations.id });
+    if (!created) {
+      throw new ApplicationError("Cancellation request ID is already in use.", "cancellation_id_conflict", 409, true);
+    }
+    if (decision) return { cancellationId, created: true, autoCreditGenerated: false };
 
     const alreadyCredited = await snapshotCancellationSequence(tx, lockedReservation.studentProfileId, cancellationId);
     const autoCredit = alreadyCredited
@@ -1181,6 +1223,7 @@ export async function cancelReservation(actor: Actor, input: unknown) {
 
     return {
       cancellationId,
+      created: true,
       cancellationType: timing.type,
       meetsSevenDayRule: timing.meetsSevenDayRule,
       autoCreditGenerated: autoCredit.created,
@@ -1450,6 +1493,7 @@ export async function listStudentClassHistory(actor: Actor, now: Date) {
     localDate: classSessions.localDate,
     status: classReservations.status,
     cancellationType: reservationCancellations.cancellationType,
+    cancellationSource: reservationCancellations.decisionSource,
     attendanceOutcome: reservationAttendanceRecords.outcome,
     habitual: sql<boolean>`coalesce(${reservationCancellations.isHabitualReservation}, ${reservationHasHabitualAssignment})`,
     historical: sql<boolean>`${historical}`,
@@ -1531,6 +1575,7 @@ export async function getStudentActivityHistory(actor: Actor, input?: unknown) {
       cancelledAt: reservationCancellations.cancelledAt,
       regulationVersionId: reservationCancellations.regulationVersionId,
       cancellationType: reservationCancellations.cancellationType,
+      cancellationSource: reservationCancellations.decisionSource,
       meetsSevenDayRule: reservationCancellations.meetsSevenDayRule,
       sequenceId: reservationCancellations.sequenceId,
       sequencePosition: reservationCancellations.sequencePosition,

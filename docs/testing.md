@@ -333,6 +333,14 @@ npm.cmd run test:e2e -- --workers=1
 - Preparar bases TEST desechables y separadas por suite con el journal hasta `0009_admin_session_enrollment`. En PostgreSQL 15.20 se verificó también la actualización desde `0008` con una reserva confirmada y otra cancelada. Ambas conservaron sus datos y el creador quedó a nulo.
 - Pasaron **171 pruebas de Vitest**, incluidas **15 nuevas de integración**, y **26 E2E de Chromium sin reintentos**. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes. La base TEST habitual conserva sus siete migraciones.
 
+### Incremento 9.6 — Cancelación individual auditada
+
+- [Modelo académico](academic-model.md#cancelación-individual-por-decisión-administrativa). El detalle permite a `SUPER_ADMIN` confirmar con motivo la cancelación de una reserva ordinaria futura. La decisión queda fuera de la racha y el ledger.
+- [Integración PostgreSQL](../src/application/academic/session-enrollment.integration.test.ts). Cubre la auditoría y la transición de una reserva del 9.5, aforo e historial, conservación del curso, validaciones, reintentos y concurrencia con administradores, alumno, cancelación de sesión, asistencia y nueva inscripción. Una decisión administrativa intercalada conserva la concesión vigente para la tercera cancelación elegible del estudiante.
+- [Chromium](../tests/e2e/admin-session-enrollments.spec.ts). Comprueba identificación, confirmación y validación mediante teclado a 360 px, recuentos, un intento desactualizado, el cambio de rol, el historial de ambos paneles y la semana de origen.
+- Usar bases TEST desechables separadas con el journal hasta `0010_admin_reservation_cancellation`. Se verificó la actualización desde `0009` en PostgreSQL 15.20 con cancelaciones históricas ejecutadas por ambos roles. Los registros y actores se conservaron y las columnas nuevas quedaron a nulo.
+- Pasaron **177 pruebas de Vitest**, incluidas **6 nuevas de integración**, y **28 E2E de Chromium sin reintentos**. TypeScript y `drizzle-kit check` pasaron. ESLint registró cero errores y tres avisos preexistentes. El TEST persistente conserva sus siete migraciones.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

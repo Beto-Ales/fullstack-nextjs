@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { DateTime } from "luxon";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -12,6 +13,7 @@ import { submitAttendanceForm } from "./attendance-action";
 import { AttendanceForm } from "./attendance-form";
 import { SessionCapacityBlocks } from "./capacity-blocks";
 import { SessionCapacity } from "./session-capacity";
+import { SessionCancellationForm, SessionCancellationPanel } from "./session-cancellation-form";
 import { SessionEnrollmentForm } from "./session-enrollment-form";
 
 type SessionEnrollmentsProps = {
@@ -37,6 +39,9 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
   const { week } = resolveCenterWeek(query.week, DateTime.fromJSDate(session.startsAtUtc));
   const cancelled = session.sessionStatus === "CANCELLED";
   const ended = session.endsAtUtc <= now;
+  const sessionLabel = `${session.name ?? "Clase única"} · ${formatInCenterTimeZone(session.startsAtUtc, "es-ES", {
+    dateStyle: "short", timeStyle: "short",
+  })} · Hora de Copenhague`;
 
   return (
     <main className="space-y-3">
@@ -64,24 +69,30 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
         <section aria-labelledby="confirmed-enrollments" className="space-y-2">
           <h3 id="confirmed-enrollments">Reservas confirmadas</h3>
           <p>Total de inscritos: {session.enrollments.length}</p>
-          {session.enrollments.length === 0 ? <p>No hay inscritos en esta sesión.</p> : (
-            <ul className="space-y-2">
-              {session.enrollments.map(({ reservationId, origin, firstName, lastName, attendanceOutcome }) => {
-                const studentName = `${firstName} ${lastName}`;
-                return (
-                  <li key={reservationId} className="rounded border p-3 wrap-break-word">
-                    <p className="font-medium">{studentName}</p>
-                    <p>{origin === "MAKEUP" ? "Recuperación" : "Ordinaria"}</p>
-                    <p>Estado: <strong>{attendanceOutcome ? attendanceLabels[attendanceOutcome] : "Sin registrar"}</strong></p>
-                    {!cancelled && ended && reservationId && (
-                      <AttendanceForm outcome={attendanceOutcome} studentName={studentName}
-                        action={submitAttendanceForm.bind(null, sessionId, reservationId, attendanceOutcome !== null)} />
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+          <SessionCancellationPanel sessionId={sessionId}>
+            {session.enrollments.length === 0 ? <p>No hay inscritos en esta sesión.</p> : (
+              <ul className="space-y-2">
+                {session.enrollments.map(({ reservationId, origin, firstName, lastName, attendanceOutcome }) => {
+                  const studentName = `${firstName} ${lastName}`;
+                  return (
+                    <li key={reservationId} className="rounded border p-3 wrap-break-word">
+                      <p className="font-medium">{studentName}</p>
+                      <p>{origin === "MAKEUP" ? "Recuperación" : "Ordinaria"}</p>
+                      <p>Estado: <strong>{attendanceOutcome ? attendanceLabels[attendanceOutcome] : "Sin registrar"}</strong></p>
+                      {session.capacityOverview.bookingStatus === "UPCOMING" && origin === "ORDINARY" && !attendanceOutcome && reservationId && (
+                        <SessionCancellationForm reservationId={reservationId} cancellationId={randomUUID()}
+                          studentName={studentName} sessionLabel={sessionLabel} />
+                      )}
+                      {!cancelled && ended && reservationId && (
+                        <AttendanceForm outcome={attendanceOutcome} studentName={studentName}
+                          action={submitAttendanceForm.bind(null, sessionId, reservationId, attendanceOutcome !== null)} />
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </SessionCancellationPanel>
         </section>
       </section>
       <section aria-labelledby="session-cancellations" className="space-y-2">
@@ -97,10 +108,17 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
                     {formatInCenterTimeZone(cancellation.cancelledAt, "es-ES", { dateStyle: "short", timeStyle: "short" })}
                   </time>
                 ) : "Fecha de cancelación sin registrar."}</p>
-                {cancellation.cancelledByRole && (
-                  <p>{cancellation.cancelledByRole === "SUPER_ADMIN" ? "Por administración" : "Por el alumno"}</p>
+                {cancellation.cancellationSource === "ADMIN_DECISION" && (
+                  <>
+                    <p>Decisión administrativa{cancellation.cancelledByEmail ? ` · ${cancellation.cancelledByEmail}` : ""}</p>
+                    <p>Motivo: {cancellation.administrativeReason}</p>
+                  </>
                 )}
-                {cancellation.cancellationType && (
+                {cancellation.cancellationSource === "STUDENT_REQUEST" && <p>Solicitada por el alumno</p>}
+                {!cancellation.cancellationSource && cancellation.cancelledByRole && (
+                  <p>{cancellation.cancelledByRole === "SUPER_ADMIN" ? "Por administración" : "Por el alumno"} · Origen de la decisión sin registrar</p>
+                )}
+                {cancellation.cancellationSource !== "ADMIN_DECISION" && cancellation.cancellationType && (
                   <p>{cancellation.cancellationType === "ON_TIME" ? "Con antelación" : "Cancelación tardía"}</p>
                 )}
                 {cancellation.nonEligibilityReason && (

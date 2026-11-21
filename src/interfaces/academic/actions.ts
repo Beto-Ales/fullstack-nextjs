@@ -100,7 +100,7 @@ export async function enrollStudentInAcademicOfferingAction(input: unknown) {
 }
 
 export async function cancelReservationAction(input: unknown) {
-  const actor = await requireUser();
+  const actor = await requireRole("STUDENT");
   return cancelReservation({ userId: actor.userId, role: actor.role }, input);
 }
 

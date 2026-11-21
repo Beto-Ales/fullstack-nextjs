@@ -97,6 +97,12 @@ export const cancelReservationSchema = z.object({
   reservationId: z.string().uuid("Invalid reservation id."),
 });
 
+export const cancelSessionEnrollmentSchema = cancelReservationSchema.extend({
+  classSessionId: z.uuid(),
+  cancellationId: z.uuid(),
+  reason: z.string().trim().min(3).max(300),
+}).strict();
+
 export const recordAttendanceSchema = z.object({
   classSessionId: z.string().uuid("Invalid class session id."),
   reservationId: z.string().uuid("Invalid reservation id."),
