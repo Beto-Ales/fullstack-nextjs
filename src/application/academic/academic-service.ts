@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql, type SQLWrapper } from "drizzle-orm";
+import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lt, lte, ne, notExists, or, sql, type SQLWrapper } from "drizzle-orm";
 import { DateTime } from "luxon";
 
 import {
@@ -18,11 +18,13 @@ import {
   createWeeklyCourseSchema,
   detectAbsencesSchema,
   endStudentTemplateAssignmentSchema,
+  enrollStudentInSessionSchema,
   generateSessionsSchema,
   ordinaryEnrollmentSchema,
   recordAttendanceSchema,
   releaseCapacityBlockSchema,
   reserveSeatSchema,
+  searchSessionEnrollmentStudentsSchema,
   setClassTemplateStatusSchema,
   updateClassSessionSchema,
 } from "@/src/application/academic/schemas";
@@ -39,6 +41,7 @@ import {
 import { generateRecurringSessionCandidates } from "@/src/domain/academic/recurrence";
 import { resolveLocalDateTime, toUtcDate } from "@/src/domain/time/local-datetime";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
+import { normalizeEmail } from "@/src/domain/auth/email";
 import { type UserRole } from "@/src/domain/auth/roles";
 import { lockClassSessionForReservation } from "@/src/infrastructure/db/class-reservation-locks";
 import { db } from "@/src/infrastructure/db/client";
@@ -730,7 +733,7 @@ export async function enrollStudentInAcademicOffering(actor: Actor, input: unkno
     return { reservedSessions: result.autoReservedReservationCount };
   }
 
-  await createReservationTransaction(payload.targetId, payload.studentProfileId, true);
+  await createReservationTransaction(payload.targetId, payload.studentProfileId, { mode: "one-off" });
   return { reservedSessions: 1 };
 }
 
@@ -772,6 +775,7 @@ export async function endStudentTemplateAssignment(actor: Actor, input: unknown)
 
 async function lockCapacitySession(tx: TransactionClient, classSessionId: string) {
   const [session] = await tx.select({
+    templateId: classSessions.templateId,
     maxCapacity: classSessions.maxCapacity,
     sessionStatus: classSessions.status,
     startsAtUtc: classSessions.startsAtUtc,
@@ -888,7 +892,8 @@ export async function createReservation(actor: Actor, input: unknown) {
     const { reservationId } = await reserveRecovery(actor, { classSessionId: payload.classSessionId }, payload.studentProfileId);
     return { reservationId };
   }
-  return createReservationTransaction(payload.classSessionId, payload.studentProfileId);
+  const { reservationId } = await createReservationTransaction(payload.classSessionId, payload.studentProfileId);
+  return { reservationId };
 }
 
 export async function createReservationForCurrentStudent(actor: Actor, classSessionId: string) {
@@ -906,56 +911,131 @@ export async function createReservationForCurrentStudent(actor: Actor, classSess
     throw new ApplicationError("Student profile not found.", "student_profile_not_found", 404, true);
   }
 
-  return createReservationTransaction(classSessionId, profile.id);
+  const { reservationId } = await createReservationTransaction(classSessionId, profile.id);
+  return { reservationId };
 }
 
-async function createReservationTransaction(classSessionId: string, studentProfileId: string, onlyUpcomingOneOff = false) {
+function confirmedSessionReservation(classSessionId: string, studentProfileId: string | SQLWrapper) {
+  return and(
+    eq(classReservations.classSessionId, classSessionId),
+    eq(classReservations.studentProfileId, studentProfileId),
+    eq(classReservations.status, "CONFIRMED"),
+  );
+}
+
+export async function searchSessionEnrollmentStudents(actor: Actor, input: unknown) {
+  requireSuperAdmin(actor);
+  const { classSessionId, query } = searchSessionEnrollmentStudentsSchema.parse(input);
+  const prefix = `${query.replace(/[\\%_]/g, "\\$&")}%`;
+  const { firstName, lastName } = studentProfiles;
+  const pageSize = 15;
+  const matches = await db.select({ id: studentProfiles.id, firstName, lastName, email: users.email })
+    .from(studentProfiles)
+    .innerJoin(users, eq(studentProfiles.userId, users.id))
+    .where(and(
+      eq(users.role, "STUDENT"),
+      eq(users.status, "ACTIVE"),
+      or(
+        ilike(firstName, prefix), ilike(lastName, prefix),
+        ilike(sql`${firstName} || ' ' || ${lastName}`, prefix),
+        ilike(sql`${lastName} || ' ' || ${firstName}`, prefix),
+        eq(users.emailNormalized, normalizeEmail(query)),
+      ),
+      notExists(db.select({ id: classReservations.id }).from(classReservations)
+        .where(confirmedSessionReservation(classSessionId, studentProfiles.id))),
+    ))
+    .orderBy(lastName, firstName, studentProfiles.id)
+    .limit(pageSize + 1);
+
+  return {
+    hasMore: matches.length > pageSize,
+    students: matches.slice(0, pageSize).map((student) => {
+      const name = `${student.firstName} ${student.lastName}`;
+      const needsEmail = matches.some((other) => other.id !== student.id
+        && `${other.firstName} ${other.lastName}`.toLowerCase() === name.toLowerCase());
+      return { id: student.id, label: needsEmail ? `${name} (${student.email})` : name };
+    }),
+  };
+}
+
+export async function enrollStudentInSession(actor: Actor, input: unknown) {
+  requireSuperAdmin(actor);
+  const { classSessionId, studentProfileId, reservationId } = enrollStudentInSessionSchema.parse(input);
+  return createReservationTransaction(classSessionId, studentProfileId, {
+    mode: "session-detail",
+    reservationId,
+    createdByUserId: actor.userId,
+  });
+}
+
+type OrdinaryReservationContext = { mode: "one-off" } | {
+  mode: "session-detail";
+  reservationId: string;
+  createdByUserId: string;
+};
+
+async function createReservationTransaction(
+  classSessionId: string,
+  studentProfileId: string,
+  context?: OrdinaryReservationContext,
+) {
   return db.transaction(async (tx) => {
     await requireActiveStudentForBooking(tx, studentProfileId);
-    const lockedSessionRows = await tx.execute(sql`
-      select id, max_capacity, status, template_id, starts_at_utc
-      from class_sessions
-      where id = ${classSessionId}
-      for update
-    `);
-    const lockedSession = lockedSessionRows.rows[0] as
-      | {
-          id: string;
-          max_capacity: number;
-          status: "SCHEDULED" | "CANCELLED" | "COMPLETED";
-          template_id: string | null;
-          starts_at_utc: Date;
+    const session = await lockCapacitySession(tx, classSessionId);
+    const detail = context?.mode === "session-detail" ? context : undefined;
+    const reservationId = detail?.reservationId ?? randomUUID();
+    if (detail) {
+      const [existing] = await tx.select().from(classReservations).where(eq(classReservations.id, reservationId));
+      if (existing) {
+        if (existing.classSessionId !== classSessionId || existing.studentProfileId !== studentProfileId
+          || existing.createdByUserId !== detail.createdByUserId || existing.origin !== "ORDINARY") {
+          throw new ApplicationError("Reservation request ID is already in use.", "enrollment_id_conflict", 409, true);
         }
-      | undefined;
-
-    if (!lockedSession) {
-      throw new ApplicationError("Class session not found.", "session_not_found", 404, true);
+        if (existing.status !== "CONFIRMED") {
+          throw new ApplicationError("This reservation has been cancelled.", "enrollment_already_cancelled", 409, true);
+        }
+        return { reservationId, created: false };
+      }
     }
-    if (onlyUpcomingOneOff && (lockedSession.template_id !== null || new Date(lockedSession.starts_at_utc).getTime() <= Date.now())) {
+
+    const now = new Date();
+    if (context?.mode === "one-off" && (session.templateId !== null || session.startsAtUtc <= now)) {
       throw new ApplicationError("Selecciona una clase única futura.", "invalid_one_off_enrollment", 409, true);
     }
-
-    if (lockedSession.status !== "SCHEDULED") {
+    if (session.sessionStatus !== "SCHEDULED" || (detail && getSessionBookingStatus(session, now) !== "UPCOMING")) {
       throw new ApplicationError("Class session is not open for reservation.", "session_not_reservable", 409, true);
     }
 
-    const regulation = await resolveCurrentAcademicRegulation(tx);
-    const { confirmedReservations, blockedSpots } = await readSessionUsage(tx, classSessionId);
-    if (confirmedReservations + blockedSpots >= Math.min(lockedSession.max_capacity, regulation.maxClassCapacity)) {
+    if (detail) {
+      const [confirmed] = await tx.select({ id: classReservations.id }).from(classReservations)
+        .where(confirmedSessionReservation(classSessionId, studentProfileId));
+      if (confirmed) {
+        throw new ApplicationError("A confirmed reservation already exists.", "reservation_already_confirmed", 409, true);
+      }
+    }
+
+    const regulation = await resolveCurrentAcademicRegulation(tx, now);
+    const usage = await readSessionUsage(tx, classSessionId);
+    if (calculateAvailableSpots({ ...usage, capacity: Math.min(session.maxCapacity, regulation.maxClassCapacity) }) === 0) {
       throw new ApplicationError("No spots available.", "no_spots_available", 409, true);
     }
 
-    const reservationId = randomUUID();
-    await tx.insert(classReservations).values({
+    const [created] = await tx.insert(classReservations).values({
       id: reservationId,
       classSessionId,
       studentProfileId,
       status: "CONFIRMED",
       origin: "ORDINARY",
       regulationVersionId: regulation.id,
-    });
+      createdByUserId: detail?.createdByUserId,
+      createdAt: detail ? now : undefined,
+      updatedAt: detail ? now : undefined,
+    }).onConflictDoNothing({ target: classReservations.id }).returning({ id: classReservations.id });
+    if (!created) {
+      throw new ApplicationError("Reservation request ID is already in use.", "enrollment_id_conflict", 409, true);
+    }
 
-    return { reservationId };
+    return { reservationId, created: true };
   });
 }
 

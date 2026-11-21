@@ -6,7 +6,7 @@ import { CENTER_TIME_ZONE } from "../../src/domain/time/timezone";
 import { withCreditsAccount } from "./credits-fixtures";
 
 async function login(page: Page, account: { email: string; password: string }) {
-  await page.goto("/login");
+  await page.goto("/login", { waitUntil: "networkidle" });
   await page.getByLabel("Email", { exact: true }).fill(account.email);
   await page.getByLabel("Contraseña", { exact: true }).fill(account.password);
   await page.getByRole("button", { name: "Iniciar sesión" }).click();
@@ -106,9 +106,13 @@ test("shows weekly capacity and excludes a voluntary cancellation from pending h
           const studentPage = await studentContext.newPage();
           await login(studentPage, student);
           await expect(studentPage).toHaveURL(/\/student$/);
-          await studentPage.goto(`/admin?week=${nextWeek.toISODate()}`);
-          await expect(studentPage).toHaveURL(/\/student$/);
-          await expect(studentPage.getByRole("region", { name: "Calendario semanal global" })).toHaveCount(0);
+          await expect(studentPage.getByRole("region", { name: "Calendario semanal", exact: true })).toBeVisible();
+          const directPage = await studentContext.newPage();
+          await directPage.goto(`/admin?week=${nextWeek.toISODate()}`, { waitUntil: "commit" });
+          await expect(directPage).toHaveURL(/\/student$/);
+          await expect(directPage.getByRole("region", { name: "Calendario semanal global" })).toHaveCount(0);
+          await directPage.close();
+          await studentPage.bringToFront();
           await studentPage.getByRole("region", { name: "Calendario semanal" }).getByRole("link", { name: "Semana siguiente" }).click();
           await studentPage.getByRole("region", { name: "Calendario semanal" }).getByRole("listitem")
             .filter({ hasText: freeName }).getByRole("button", { name: "Cancelar clase" }).click();

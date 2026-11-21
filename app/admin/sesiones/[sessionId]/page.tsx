@@ -12,6 +12,7 @@ import { submitAttendanceForm } from "./attendance-action";
 import { AttendanceForm } from "./attendance-form";
 import { SessionCapacityBlocks } from "./capacity-blocks";
 import { SessionCapacity } from "./session-capacity";
+import { SessionEnrollmentForm } from "./session-enrollment-form";
 
 type SessionEnrollmentsProps = {
   params: Promise<{ sessionId: string }>;
@@ -52,6 +53,10 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
       <SessionCapacity capacity={session.capacityOverview}>
         <SessionCapacityBlocks sessionId={sessionId} blocks={session.capacityBlocks} canBlock={session.capacityOverview.reservableSpots > 0} />
       </SessionCapacity>
+      <section aria-labelledby="session-enrollment" className="space-y-2 rounded border p-3">
+        <h2 id="session-enrollment">Inscribir a un alumno</h2>
+        <SessionEnrollmentForm sessionId={sessionId} reservableSpots={session.capacityOverview.reservableSpots} />
+      </section>
       <section aria-labelledby="attendance-control" className="space-y-2">
         <h2 id="attendance-control">Control de asistencia</h2>
         {cancelled && <p>La sesión está cancelada. Solo se pueden consultar los registros existentes.</p>}

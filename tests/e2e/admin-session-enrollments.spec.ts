@@ -475,3 +475,147 @@ test("rejects both capacity block actions from old admin pages after the session
     });
   });
 });
+
+test("enrolls one student by keyboard on mobile, preserves a block and refreshes both panels", async ({ page, browser }) => {
+  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withCreditsAccount("STUDENT", async (student) => {
+      await withCreditsAccount("STUDENT", async (other) => {
+        const profileId = await seedAttendanceProfile(student, "Inés", "Ordinaria");
+        const otherId = await seedAttendanceProfile(other, "Pablo", "Lista");
+        const startsAt = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("week").plus({ weeks: 1 }).set({ hour: 17 });
+        const session = await seedAttendanceSession(admin, startsAt, []);
+        await admin.client.query("update class_sessions set max_capacity = 2 where id = $1", [session.id]);
+        await admin.client.query(`insert into session_capacity_blocks (id, class_session_id, blocked_spots, reason, blocked_by_user_id)
+          values ($1, $2, 1, 'Material de clase', $3)`, [randomUUID(), session.id, admin.userId]);
+
+        const studentContext = await browser.newContext();
+        const stalePage = await page.context().newPage();
+        try {
+          const studentPage = await studentContext.newPage();
+          await login(studentPage, student);
+          const upcoming = studentPage.getByRole("region", { name: "Mis próximas clases" });
+          await expect(upcoming.getByRole("listitem")).toHaveCount(0);
+
+          await page.setViewportSize({ width: 360, height: 780 });
+          await login(page, admin);
+          const calendar = page.getByRole("region", { name: "Calendario semanal global" });
+          await calendar.getByRole("link", { name: "Semana siguiente" }).click();
+          const card = calendar.getByRole("listitem").filter({ has: page.locator(`a[href="${session.path}"]`) });
+          await expect(card.locator("dd")).toHaveText(["2", "0", "1", "1"]);
+          await card.getByRole("link", { name: "Ver inscritos" }).click();
+          await expect(page.getByRole("heading", { name: "Inscritos en clase única" })).toBeVisible();
+
+          await stalePage.goto(session.path);
+          const staleForm = stalePage.getByRole("region", { name: "Inscribir a un alumno" });
+          await staleForm.getByLabel("Nombre, apellido o correo del alumno").fill("Pablo");
+          await staleForm.getByRole("button", { name: "Buscar alumnos" }).click();
+          await staleForm.getByLabel("Alumno para esta sesión").selectOption(otherId);
+
+          const form = page.getByRole("region", { name: "Inscribir a un alumno" });
+          const query = form.getByLabel("Nombre, apellido o correo del alumno");
+          const select = form.getByLabel("Alumno para esta sesión");
+          const confirm = form.getByRole("button", { name: "Confirmar inscripción ordinaria" });
+          await page.bringToFront();
+          await query.fill("  ");
+          await query.press("Enter");
+          await expect(form.getByRole("alert")).toHaveText("Introduce entre 2 y 120 caracteres para buscar.");
+          await query.fill("Inés");
+          await query.press("Tab");
+          const search = form.getByRole("button", { name: "Buscar alumnos" });
+          await expect(search).toBeFocused();
+          await search.press("Enter");
+          await expect(select.getByRole("option", { name: "Inés Ordinaria" })).toHaveCount(1);
+          await expect(confirm).toBeDisabled();
+          expect(await form.evaluate((region) => region.scrollWidth <= region.clientWidth)).toBe(true);
+          await select.focus();
+          await select.press("ArrowDown");
+          await expect(select).toHaveValue(profileId);
+          await select.press("Tab");
+          await expect(confirm).toBeFocused();
+          await confirm.press("Enter");
+
+          await expect(form.getByText("Inscripción ordinaria confirmada.")).toBeVisible();
+          await expect(form.getByLabel("Nombre, apellido o correo del alumno")).toHaveCount(0);
+          const capacity = page.getByRole("region", { name: "Aforo y disponibilidad" });
+          await expect(capacity.locator("dd")).toHaveText(["2", "2", "1", "1", "0", "0"]);
+          const enrolled = page.getByRole("region", { name: "Reservas confirmadas" });
+          await expect(enrolled.getByRole("listitem")).toContainText("Inés Ordinaria");
+          await expect(enrolled.getByText("Ordinaria", { exact: true })).toBeVisible();
+          await expect(page.getByRole("region", { name: "Cancelaciones", exact: true }))
+            .toContainText("No hay cancelaciones en esta sesión.");
+          await expect(page.getByRole("region", { name: "Control de asistencia" })).toContainText("cuando finalice la clase");
+
+          await staleForm.getByRole("button", { name: "Confirmar inscripción ordinaria" }).click();
+          await expect(staleForm.getByRole("alert")).toHaveText("Ya no quedan plazas reservables. Se ha actualizado el aforo.");
+          await expect(stalePage.getByRole("region", { name: "Aforo y disponibilidad" }).locator("dd"))
+            .toHaveText(["2", "2", "1", "1", "0", "0"]);
+
+          await page.getByRole("link", { name: "Volver al calendario" }).click();
+          await expect(page).toHaveURL((url) => url.pathname === "/admin" && url.searchParams.get("week") === session.week);
+          await expect(card.locator("dd")).toHaveText(["2", "1", "1", "0"]);
+          await studentPage.reload();
+          await expect(upcoming.getByRole("listitem")).toContainText(startsAt.toJSDate().toISOString());
+          await expect(studentPage.getByText("Disponibles: 0", { exact: true })).toBeVisible();
+          const { rows } = await admin.client.query(`select student_profile_id, origin, status, created_by_user_id
+            from class_reservations where class_session_id = $1`, [session.id]);
+          expect(rows).toEqual([{
+            student_profile_id: profileId, origin: "ORDINARY", status: "CONFIRMED", created_by_user_id: admin.userId,
+          }]);
+        } finally {
+          await stalePage.close();
+          await studentContext.close();
+        }
+      });
+    });
+  });
+});
+
+test("validates submitted student data and denies both enrollment actions on stale pages for a student", async ({ page }) => {
+  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withCreditsAccount("STUDENT", async (student) => {
+      const profileId = await seedAttendanceProfile(student, "Lina", "Verificación");
+      const session = await seedAttendanceSession(admin, DateTime.now().setZone(CENTER_TIME_ZONE).plus({ weeks: 1 }), []);
+      await login(page, admin);
+      await expect(page).toHaveURL(/\/admin$/);
+      await page.goto(session.path);
+      const form = page.getByRole("region", { name: "Inscribir a un alumno" });
+      const search = form.getByLabel("Nombre, apellido o correo del alumno");
+      const select = form.getByLabel("Alumno para esta sesión");
+      const confirm = form.getByRole("button", { name: "Confirmar inscripción ordinaria" });
+      await search.fill("Lina");
+      await form.getByRole("button", { name: "Buscar alumnos" }).click();
+      await select.selectOption(profileId);
+      await form.locator('input[name="reservationId"]').evaluate((input: HTMLInputElement) => { input.value = "invalid"; });
+      await confirm.click();
+      await expect(form.getByRole("alert")).toHaveText("Selecciona un alumno válido de los resultados de la búsqueda.");
+      await form.getByRole("button", { name: "Buscar alumnos" }).click();
+      await select.selectOption(profileId);
+
+      const searchPage = await page.context().newPage();
+      const studentPage = await page.context().newPage();
+      try {
+        await searchPage.goto(session.path);
+        const staleSearch = searchPage.getByRole("region", { name: "Inscribir a un alumno" });
+        await staleSearch.getByLabel("Nombre, apellido o correo del alumno").fill("Lina");
+        await page.context().clearCookies();
+        await login(studentPage, student);
+        await expect(studentPage).toHaveURL(/\/student$/);
+        await studentPage.goto(session.path);
+        await expect(studentPage).toHaveURL(/\/student$/);
+        await expect(studentPage.getByRole("region", { name: "Inscribir a un alumno" })).toHaveCount(0);
+        await staleSearch.getByRole("button", { name: "Buscar alumnos" }).click();
+        await expect(searchPage).toHaveURL(/\/student$/);
+        await expect(staleSearch).toHaveCount(0);
+        await confirm.click();
+        await expect(page).toHaveURL(/\/student$/);
+        const { rows } = await admin.client.query("select id from class_reservations where class_session_id = $1", [session.id]);
+        expect(rows).toEqual([]);
+      } finally {
+        await searchPage.close();
+        await studentPage.close();
+      }
+    });
+  });
+});

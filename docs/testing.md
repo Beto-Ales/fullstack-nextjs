@@ -325,6 +325,14 @@ npm.cmd run test:e2e -- --workers=1
 - Para probar el 9.4, preparar una base TEST desechable por suite con el journal hasta `0008_session_capacity_block_release`. La actualización desde `0007` se verificó con un bloqueo activo y otro histórico preexistentes. Ambos conservaron estado, cantidad y motivo, y los nuevos campos quedaron vacíos.
 - Pasaron **156 pruebas de Vitest**, incluidas **15 de bloqueo y desbloqueo**, y **24 E2E de Chromium** en bases TEST desechables y separadas de PostgreSQL **15.20**, con nueve migraciones. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes. La base TEST habitual conserva sus siete migraciones.
 
+### Incremento 9.5 — Inscripción ordinaria desde el detalle de sesión
+
+- [Modelo académico](academic-model.md#inscripción-administrativa-en-una-sesión). El detalle permite buscar y confirmar la inscripción ordinaria de un alumno activo en una sesión programada y futura.
+- [Integración PostgreSQL](../src/application/academic/session-enrollment.integration.test.ts). Cubre autorización, búsqueda acotada, homónimos, estudiantes inactivos, sesiones cerradas, capacidad física y efectiva, bloqueos, habituales pendientes, reintentos, cancelaciones históricas, auditoría y ausencia de movimientos. Comprueba la exclusión con recuperaciones, bloqueos y reservas ordinarias, el reloj tras esperar el bloqueo de sesión y la equivalencia de aforo en calendario y detalle.
+- [Chromium](../tests/e2e/admin-session-enrollments.spec.ts). Comprueba búsqueda, confirmación y navegación con teclado a 360 px, aforo actualizado, conservación de bloqueos, semana administrativa, panel del alumno y rechazo de solicitudes inválidas, desactualizadas o sin el rol requerido.
+- Preparar bases TEST desechables y separadas por suite con el journal hasta `0009_admin_session_enrollment`. En PostgreSQL 15.20 se verificó también la actualización desde `0008` con una reserva confirmada y otra cancelada. Ambas conservaron sus datos y el creador quedó a nulo.
+- Pasaron **171 pruebas de Vitest**, incluidas **15 nuevas de integración**, y **26 E2E de Chromium sin reintentos**. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes. La base TEST habitual conserva sus siete migraciones.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

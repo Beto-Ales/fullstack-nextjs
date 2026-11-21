@@ -64,6 +64,13 @@
       "when": 1795293900081,
       "tag": "0008_session_capacity_block_release",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1795295850192,
+      "tag": "0009_admin_session_enrollment",
+      "breakpoints": true
     }
   ]
 }

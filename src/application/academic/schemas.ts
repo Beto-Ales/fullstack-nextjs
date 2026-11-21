@@ -79,6 +79,14 @@ export const reserveSeatSchema = z.object({
   origin: z.enum(["ORDINARY", "MAKEUP"]).default("ORDINARY"),
 });
 
+export const enrollStudentInSessionSchema = reserveSeatSchema.omit({ origin: true }).extend({
+  reservationId: z.uuid(),
+}).strict();
+
+export const searchSessionEnrollmentStudentsSchema = reserveSeatSchema.pick({ classSessionId: true }).extend({
+  query: z.string().trim().min(2).max(120),
+});
+
 export const ordinaryEnrollmentSchema = z.object({
   studentProfileId: z.string().uuid(),
   targetType: z.enum(["weekly", "one-off"]),

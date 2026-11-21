@@ -82,6 +82,7 @@ En `/admin`, el formulario **Crear clase única** solicita fecha, hora de inicio
 - Reserva de alumno en sesión.
 - Estado (`CONFIRMED`, `CANCELLED`) y origen (`ORDINARY`, `MAKEUP`).
 - Incluye trazabilidad de cancelación (`cancelled_at`, `cancelled_by_user_id`).
+- Las inscripciones desde el detalle administrativo registran el responsable en `created_by_user_id` y el instante en `created_at`.
 - Índice único parcial para impedir reservas activas duplicadas por alumno+sesión.
 
 ### `session_capacity_blocks`
@@ -187,6 +188,15 @@ Fórmula:
 - El UUID del bloqueo identifica la solicitud de alta. Reenviarla con el mismo actor, sesión, cantidad y motivo devuelve el resultado original. Un UUID reutilizado con datos diferentes se rechaza. La desactivación de un bloqueo activo conserva la fila y anota el motivo, el actor y la fecha de desbloqueo. Repetirla conserva la primera desactivación.
 - Se puede desactivar un bloqueo activo en exceso de aforo o en una sesión cerrada. La disponibilidad permanece en cero si la sesión está en curso, finalizada o cancelada. La operación solo modifica el bloqueo y el cálculo posterior de disponibilidad.
 - La migración `0008_session_capacity_block_release` añade los tres campos de auditoría de desbloqueo. Los bloqueos históricos anteriores conservan sus datos y muestran los datos de auditoría que consten. La lectura del detalle consulta aforo y bloqueos en la misma instantánea de PostgreSQL.
+
+### Inscripción administrativa en una sesión
+
+- `SUPER_ADMIN` busca por nombre, apellido o correo exacto en el detalle de una sesión futura con plazas reservables. La búsqueda devuelve hasta 15 alumnos activos con rol `STUDENT` y perfil, sin reserva confirmada para esa sesión. El resultado muestra el nombre y, para distinguir homónimos, el correo de cuenta. La baja lógica se representa con el estado `DISABLED`.
+- `enrollStudentInSession` reutiliza la transacción de reserva ordinaria. Mantiene el bloqueo compartido de la cuenta activa antes del `FOR UPDATE` de la sesión. Tras adquirir ambos comprueba la hora del servidor, el estado de sesión, los duplicados, la normativa de Copenhague y el uso de plazas. La regla de aforo comparte cálculo y recuentos con el detalle y el calendario. Los bloqueos activos consumen capacidad al igual que las reservas confirmadas. Cuando se alcanza o supera el aforo efectivo, se rechaza el alta y se conservan los compromisos existentes.
+- La inscripción puede realizarse en una clase puntual o en una sola fecha de una plantilla. Persiste una fila `ORDINARY` y conserva las asignaciones habituales y las demás fechas. Los habituales pendientes siguen visibles como incidencia y no se deducen del aforo reservable conforme a la regla vigente. Sigue pendiente definir la prioridad para una futura asignación automática. El alta no crea movimientos de crédito ni consume cupo de recuperación.
+- La reserva guarda alumno, sesión, origen, normativa, administrador, fecha y hora. Su UUID identifica también la solicitud. El reintento con el mismo administrador, alumno y sesión devuelve la reserva confirmada original. Un UUID usado para otros datos se rechaza. Una solicitud cancelada conserva su historial y una nueva inscripción requiere una nueva solicitud y una plaza disponible.
+- La migración `0009_admin_session_enrollment` añade la referencia nullable al usuario creador. Las reservas anteriores conservan sus datos y quedan con creador desconocido. La baja lógica conserva la referencia. Si se elimina físicamente el usuario creador, PostgreSQL pone la referencia a nulo, como en los bloqueos.
+- Al confirmar se revalidan el detalle, el calendario administrativo y el panel del estudiante. Se conserva la semana en la navegación. Ante una solicitud desactualizada, el detalle vuelve a consultar el aforo y muestra el motivo del rechazo.
 
 ## Concurrencia en reservas
 

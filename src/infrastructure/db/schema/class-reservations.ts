@@ -25,6 +25,7 @@ export const classReservations = pgTable(
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     regulationVersionId: text("regulation_version_id").references(() => academicRegulations.id),
     cancellationRegulationVersionId: text("cancellation_regulation_version_id").references(() => academicRegulations.id),
+    createdByUserId: text("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
     cancelledByUserId: text("cancelled_by_user_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
