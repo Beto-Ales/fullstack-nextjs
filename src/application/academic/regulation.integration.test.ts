@@ -77,7 +77,8 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic regulation (pos
   async function habitualReservation(templateId: string, localDate: string) {
     const sessionId = await createSession(localDate);
     await client.query("update class_sessions set template_id = $1 where id = $2", [templateId, sessionId]);
-    return academicService.createReservationForCurrentStudent(student, sessionId);
+    const reservation = await academicService.createReservationForCurrentStudent(student, sessionId);
+    return { ...reservation, classSessionId: sessionId };
   }
 
   it("selects the version from Copenhagen midnight, restricts publication and preserves its audit", async () => {

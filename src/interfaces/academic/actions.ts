@@ -108,9 +108,9 @@ export async function correctAttendanceAction(input: unknown) {
   return correctAttendance({ userId: actor.userId, role: actor.role }, input);
 }
 
-export async function detectAbsencesAction(input: unknown) {
+export async function detectAbsencesAction() {
   const actor = await requireRole("SUPER_ADMIN");
-  return detectAbsences({ userId: actor.userId, role: actor.role }, input);
+  return detectAbsences({ userId: actor.userId, role: actor.role }, {});
 }
 
 export async function getStudentActivityHistoryAction(input?: unknown) {

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, gt, inArray, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 
+import { assertNoActiveAttendance } from "@/src/application/academic/attendance-records";
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
 import { createRecoveryConsumption, createRecoveryRefund, lockStudentProfile, materializeExpiredCredits, readCreditBalance } from "@/src/application/credits/credit-service";
@@ -19,6 +20,7 @@ import {
   classReservations,
   classSessions,
   creditLedgerMovements,
+  reservationAttendanceRecords,
   studentProfiles,
 } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
@@ -420,6 +422,7 @@ export async function cancelRecoveryReservation(actor: Actor, input: unknown) {
         refundRestoredCredit: false,
       };
     }
+    await assertNoActiveAttendance(tx, eq(reservationAttendanceRecords.reservationId, reservation.reservationId));
     await lockStudentProfile(tx, reservation.studentProfileId);
 
     const cancelledAt = new Date();

@@ -25,6 +25,7 @@ import {
   setClassTemplateStatusSchema,
   updateClassSessionSchema,
 } from "@/src/application/academic/schemas";
+import { assertNoActiveAttendance, findActiveAttendance } from "@/src/application/academic/attendance-records";
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
 import { lockStudentProfile, tryGenerateAutoCreditFromCancellation } from "@/src/application/credits/credit-service";
@@ -466,6 +467,11 @@ export async function updateClassSession(actor: Actor, input: unknown) {
       throw new ApplicationError("Class session end time must be after start time.", "invalid_session_time_range", 400, true);
     }
 
+    if (nextStartsAtUtc.getTime() !== new Date(session.starts_at_utc).getTime()
+      || nextEndsAtUtc.getTime() !== new Date(session.ends_at_utc).getTime()) {
+      await assertNoActiveAttendance(tx, eq(reservationAttendanceRecords.classSessionId, payload.classSessionId));
+    }
+
     const usage = await readSessionUsage(tx, payload.classSessionId);
     if (usage.confirmedReservations + usage.blockedSpots > nextMaxCapacity) {
       throw new ApplicationError(
@@ -564,8 +570,11 @@ export async function cancelClassSession(actor: Actor, input: unknown) {
   return db.transaction(async (tx) => {
     const now = new Date();
     const regulation = await resolveCurrentAcademicRegulation(tx, now);
-    await tx.select({ id: classSessions.id }).from(classSessions)
+    const [session] = await tx.select({ status: classSessions.status }).from(classSessions)
       .where(eq(classSessions.id, payload.classSessionId)).for("update");
+    if (session && session.status !== "CANCELLED") {
+      await assertNoActiveAttendance(tx, eq(reservationAttendanceRecords.classSessionId, payload.classSessionId));
+    }
     const [cancelledSession] = await tx
       .update(classSessions)
       .set({
@@ -909,6 +918,7 @@ type LockedReservation = {
   classSessionId: string;
   classStatus: "SCHEDULED" | "CANCELLED" | "COMPLETED";
   classStartsAtUtc: Date;
+  classEndsAtUtc: Date;
   classLocalDate: string;
   templateId: string | null;
 };
@@ -924,6 +934,7 @@ async function lockReservationForMutation(tx: TransactionClient, reservationId: 
       r.class_session_id,
       s.status as class_status,
       s.starts_at_utc as class_starts_at_utc,
+      s.ends_at_utc as class_ends_at_utc,
       s.local_date::text as class_local_date,
       s.template_id
     from class_reservations r
@@ -941,6 +952,7 @@ async function lockReservationForMutation(tx: TransactionClient, reservationId: 
         class_session_id: string;
         class_status: "SCHEDULED" | "CANCELLED" | "COMPLETED";
         class_starts_at_utc: Date;
+        class_ends_at_utc: Date;
         class_local_date: string;
         template_id: string | null;
       }
@@ -958,6 +970,7 @@ async function lockReservationForMutation(tx: TransactionClient, reservationId: 
     classSessionId: row.class_session_id,
     classStatus: row.class_status,
     classStartsAtUtc: new Date(row.class_starts_at_utc),
+    classEndsAtUtc: new Date(row.class_ends_at_utc),
     classLocalDate: row.class_local_date,
     templateId: row.template_id,
   };
@@ -989,6 +1002,7 @@ export async function cancelReservation(actor: Actor, input: unknown) {
     if (lockedReservation.classStatus !== "SCHEDULED") {
       throw new ApplicationError("Class session does not allow cancellation.", "session_not_cancellable", 409, true);
     }
+    await assertNoActiveAttendance(tx, eq(reservationAttendanceRecords.reservationId, lockedReservation.reservationId));
 
     await lockStudentProfile(tx, lockedReservation.studentProfileId);
     const cancelledAt = new Date();
@@ -1047,51 +1061,50 @@ export async function cancelReservation(actor: Actor, input: unknown) {
   });
 }
 
+async function lockAttendanceTarget(tx: TransactionClient, payload: { reservationId: string; classSessionId: string }) {
+  const reservation = await lockReservationForMutation(tx, payload.reservationId);
+  if (reservation.classSessionId !== payload.classSessionId) {
+    throw new ApplicationError("Reservation not found in this session.", "reservation_not_found", 404, true);
+  }
+  if (reservation.classStatus === "CANCELLED") {
+    throw new ApplicationError("Cannot record attendance for a cancelled session.", "session_cancelled", 409, true);
+  }
+  if (reservation.reservationStatus !== "CONFIRMED") {
+    throw new ApplicationError("Cannot record attendance for a cancelled reservation.", "reservation_not_confirmed", 409, true);
+  }
+  await lockStudentProfile(tx, reservation.studentProfileId);
+  const recordedAt = new Date();
+  if (recordedAt < reservation.classEndsAtUtc) {
+    throw new ApplicationError("Attendance can only be recorded after the session ends.", "session_not_ended", 409, true);
+  }
+
+  const [existingCancellation] = await tx.select({ id: reservationCancellations.id })
+    .from(reservationCancellations)
+    .where(eq(reservationCancellations.reservationId, reservation.reservationId))
+    .limit(1);
+  if (existingCancellation) {
+    throw new ApplicationError("Cannot record attendance for a cancelled reservation.", "reservation_cancelled", 409, true);
+  }
+
+  return { reservation, recordedAt };
+}
+
 export async function recordAttendance(actor: Actor, input: unknown) {
   requireSuperAdmin(actor);
   const payload = recordAttendanceSchema.parse(input);
 
   return db.transaction(async (tx) => {
-    const reservation = await lockReservationForMutation(tx, payload.reservationId);
-    if (reservation.reservationStatus !== "CONFIRMED") {
-      throw new ApplicationError("Cannot register attendance for cancelled reservation.", "reservation_not_confirmed", 409, true);
-    }
-    await lockStudentProfile(tx, reservation.studentProfileId);
-
-    const [existingCancellation] = await tx
-      .select({ id: reservationCancellations.id })
-      .from(reservationCancellations)
-      .where(eq(reservationCancellations.reservationId, reservation.reservationId))
-      .limit(1);
-    if (existingCancellation) {
-      throw new ApplicationError("Cannot register attendance for cancelled reservation.", "reservation_cancelled", 409, true);
-    }
-
-    const [activeRecord] = await tx
-      .select({
-        id: reservationAttendanceRecords.id,
-        outcome: reservationAttendanceRecords.outcome,
-      })
-      .from(reservationAttendanceRecords)
-      .where(sql`${reservationAttendanceRecords.reservationId} = ${reservation.reservationId}
-        and ${reservationAttendanceRecords.supersededAt} is null`)
-      .limit(1);
+    const { reservation, recordedAt } = await lockAttendanceTarget(tx, payload);
+    const activeRecord = await findActiveAttendance(tx, eq(reservationAttendanceRecords.reservationId, reservation.reservationId));
 
     if (activeRecord && activeRecord.outcome === payload.outcome) {
       return { attendanceRecordId: activeRecord.id, updated: false };
     }
 
     if (activeRecord) {
-      await tx
-        .update(reservationAttendanceRecords)
-        .set({
-          supersededAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(reservationAttendanceRecords.id, activeRecord.id));
+      throw new ApplicationError("Use the attendance correction operation to change the outcome.", "attendance_already_recorded", 409, true);
     }
 
-    const recordedAt = new Date();
     const regulation = await resolveCurrentAcademicRegulation(tx, recordedAt);
     const attendanceRecordId = randomUUID();
     await tx.insert(reservationAttendanceRecords).values({
@@ -1105,7 +1118,7 @@ export async function recordAttendance(actor: Actor, input: unknown) {
       recordedAt,
       regulationVersionId: regulation.id,
       correctionReason: null,
-      correctedFromRecordId: activeRecord?.id ?? null,
+      correctedFromRecordId: null,
       supersededAt: null,
     });
 
@@ -1118,18 +1131,8 @@ export async function correctAttendance(actor: Actor, input: unknown) {
   const payload = correctAttendanceSchema.parse(input);
 
   return db.transaction(async (tx) => {
-    const reservation = await lockReservationForMutation(tx, payload.reservationId);
-    await lockStudentProfile(tx, reservation.studentProfileId);
-
-    const [activeRecord] = await tx
-      .select({
-        id: reservationAttendanceRecords.id,
-        outcome: reservationAttendanceRecords.outcome,
-      })
-      .from(reservationAttendanceRecords)
-      .where(sql`${reservationAttendanceRecords.reservationId} = ${reservation.reservationId}
-        and ${reservationAttendanceRecords.supersededAt} is null`)
-      .limit(1);
+    const { reservation, recordedAt } = await lockAttendanceTarget(tx, payload);
+    const activeRecord = await findActiveAttendance(tx, eq(reservationAttendanceRecords.reservationId, reservation.reservationId));
 
     if (!activeRecord) {
       throw new ApplicationError("No attendance record to correct.", "attendance_not_found", 404, true);
@@ -1141,12 +1144,11 @@ export async function correctAttendance(actor: Actor, input: unknown) {
     await tx
       .update(reservationAttendanceRecords)
       .set({
-        supersededAt: new Date(),
-        updatedAt: new Date(),
+        supersededAt: recordedAt,
+        updatedAt: recordedAt,
       })
       .where(eq(reservationAttendanceRecords.id, activeRecord.id));
 
-    const recordedAt = new Date();
     const regulation = await resolveCurrentAcademicRegulation(tx, recordedAt);
     const attendanceRecordId = randomUUID();
     await tx.insert(reservationAttendanceRecords).values({
@@ -1171,25 +1173,37 @@ export async function correctAttendance(actor: Actor, input: unknown) {
 export async function detectAbsences(actor: Actor, input: unknown) {
   requireSuperAdmin(actor);
   const payload = detectAbsencesSchema.parse(input);
-  const referenceTime = payload.referenceTimeUtc ?? new Date();
+  const now = new Date();
+  const referenceTime = payload.referenceTimeUtc && payload.referenceTimeUtc < now ? payload.referenceTimeUtc : now;
 
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(903000042)`);
 
-    const candidateRows = await tx.execute(sql`
-      select
-        r.id as reservation_id,
-        r.student_profile_id,
-        r.class_session_id
+    const pendingReservations = sql`
       from class_reservations r
-      inner join class_sessions s on s.id = r.class_session_id
       left join reservation_cancellations rc on rc.reservation_id = r.id
       left join reservation_attendance_records ar on ar.reservation_id = r.id and ar.superseded_at is null
       where r.status = 'CONFIRMED'
-        and s.status != 'CANCELLED'
-        and s.ends_at_utc < ${referenceTime}
+        and r.class_session_id = s.id
         and rc.id is null
-        and ar.id is null
+        and ar.id is null`;
+    const finishedSession = sql`s.status != 'CANCELLED' and s.ends_at_utc <= ${referenceTime}`;
+    const locked = await tx.execute(sql`
+      select s.id from class_sessions s
+      where ${finishedSession} and exists (select 1 ${pendingReservations})
+      order by s.id
+      for no key update of s
+    `);
+    if (!locked.rows.length) return { createdAbsences: 0, affectedProfiles: 0 };
+
+    // Re-read the reservations after acquiring the same session locks as manual mutations.
+    const sessionIds = locked.rows.map(({ id }) => sql`${id}`);
+    const candidateRows = await tx.execute(sql`
+      select r.id as reservation_id, r.student_profile_id, r.class_session_id
+      from class_sessions s
+      join lateral (select r.id, r.student_profile_id, r.class_session_id ${pendingReservations}) r on true
+      where ${finishedSession}
+        and s.id in (${sql.join(sessionIds, sql`, `)})
     `);
 
     const candidates = candidateRows.rows as Array<{
@@ -1318,6 +1332,9 @@ export async function listStudentClassHistory(actor: Actor, now: Date) {
     .leftJoin(reservationAttendanceRecords, and(
       eq(reservationAttendanceRecords.reservationId, classReservations.id),
       isNull(reservationAttendanceRecords.supersededAt),
+      eq(classReservations.status, "CONFIRMED"),
+      ne(classSessions.status, "CANCELLED"),
+      isNull(reservationCancellations.id),
     ))
     .where(and(reservationOwnerIsStudent(actor), or(historical, eq(classReservations.origin, "MAKEUP"))))
     .orderBy(desc(classSessions.startsAtUtc), desc(classReservations.id));

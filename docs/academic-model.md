@@ -207,9 +207,20 @@ La [especificación general](../planificacion_general.md#cancelaciones-consecuti
 
 Ambos casos se evalúan en [`evaluateCancellationSequence`](../src/domain/academic/cancellation-rules.ts). La fase 7 usa créditos ya concedidos para verificar las recuperaciones y conserva las reglas de concesión y los movimientos históricos.
 
+## Registro y corrección de asistencia
+
+- `SUPER_ADMIN` puede registrar asistencia o ausencia desde el instante exacto de `ends_at_utc`, incluida la hora de fin de una sesión reprogramada. El servidor compara ese instante con su propio reloj. Las fechas de la sesión siguen las convenciones de `Europe/Copenhagen` del modelo académico.
+- El alta y la corrección exigen `classSessionId` y `reservationId`. Bajo bloqueo se comprueba que la reserva pertenece a esa sesión, está confirmada y carece de cancelación, y que la sesión sigue sin cancelar. La API acepta `PRESENT` y su equivalente existente `ATTENDED`. PostgreSQL conserva `ATTENDED` y `ABSENT`.
+- Repetir el alta con el mismo resultado vigente devuelve el identificador original. Cambiarlo requiere una corrección con motivo de 3 a 300 caracteres después de recortar espacios. La corrección exige un resultado anterior y rechaza repetir el vigente. Cada versión guarda resultado, reserva, actor, hora, normativa aplicada, motivo y referencia a la versión sustituida cuando corresponda.
+- Las escrituras manuales bloquean sesión, reserva y perfil en ese orden. La corrección marca la versión anterior como sustituida e inserta la nueva dentro de la misma transacción. El índice parcial asegura un único resultado vigente por reserva.
+- Si la cancelación de la sesión o de la reserva se confirma primero, el alta y la corrección se rechazan. Si hay un resultado vigente, se rechazan la cancelación de esa reserva, la cancelación de su sesión y los cambios del horario de esa sesión. Las cancelaciones tardías siguen siendo cancelaciones. Ante datos históricos que combinan ambos estados, el historial de clases muestra la cancelación y los registros originales quedan disponibles para auditoría.
+- Registrar y corregir asistencia o ausencia deja intacto el ledger. La racha conserva su lógica actual. Cambiar entre `ATTENDED` y `ABSENT` puede influir en futuras evaluaciones de la racha, según se explica en [Cancelaciones y secuencias](#cancelaciones-y-secuencias).
+- El detalle administrativo incluye **Control de asistencia**. La consulta trae el resultado vigente junto con cada reserva y conserva las cancelaciones en su historial. El formulario aparece al consultar una sesión elegible y vuelve a cargar sus resultados tras guardar. La corrección ofrece el resultado alternativo y usa las mismas garantías del servicio. [Cobertura y pruebas](testing.md#incremento-92--control-de-asistencia-en-el-detalle-de-sesión)
+
 ## Detección de ausencias
 
-- Para sesiones finalizadas sin registro vigente de asistencia/corrección, se inserta `ABSENT`.
+- Para reservas confirmadas sin cancelación ni resultado vigente de sesiones finalizadas, la operación existente inserta `ABSENT`. La acción de servidor usa su propio reloj. El servicio admite un corte anterior y limita los cortes futuros al instante actual.
+- La detección bloquea en orden de identificador las sesiones con candidatas y vuelve a leer las reservas después de adquirir los bloqueos. Así comparte la exclusión con las cancelaciones y el registro manual. Su activación automática queda pendiente.
 - La operación es idempotente por reserva y evita duplicados bajo reintentos.
 - La generación de identificadores de asistencia automática se hace en aplicación (sin dependencia de extensiones PostgreSQL como `pgcrypto`).
 

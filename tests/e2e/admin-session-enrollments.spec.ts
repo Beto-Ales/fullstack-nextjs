@@ -112,6 +112,10 @@ test("shows confirmed enrollments and cancellation history for one session and p
 
         await selectedCard.getByRole("link", { name: "Ver inscritos" }).click();
         await expect(page.getByRole("heading", { name: `Inscritos en ${selectedName}` })).toBeVisible();
+        const attendance = page.getByRole("region", { name: "Control de asistencia" });
+        await expect(attendance.getByText("El registro y la corrección estarán disponibles cuando finalice la clase.")).toBeVisible();
+        await expect(attendance.getByText("Sin registrar", { exact: true })).toHaveCount(2);
+        await expect(attendance.getByRole("combobox")).toHaveCount(0);
         const details = page.getByRole("region", { name: "Reservas confirmadas" });
         await expect(details.getByText(`Total de inscritos: ${calendarTotal}`)).toBeVisible();
         await expect(details.getByRole("listitem")).toHaveCount(2);
@@ -162,6 +166,203 @@ test("shows confirmed enrollments and cancellation history for one session and p
         await studentContext.close();
         await admin.client.query("delete from users where id=any($1::text[])", [users]);
       }
+    });
+  });
+});
+
+type AccountFixture = Parameters<Parameters<typeof withCreditsAccount>[1]>[0];
+
+async function seedAttendanceProfile({ client, userId }: AccountFixture, firstName: string, lastName: string) {
+  const id = randomUUID();
+  await client.query(`insert into student_profiles (id, user_id, first_name, last_name) values ($1, $2, $3, $4)`,
+    [id, userId, firstName, lastName]);
+  return id;
+}
+
+async function seedAttendanceSession(
+  admin: AccountFixture,
+  startsAt: DateTime,
+  profiles: { id: string; origin: "ORDINARY" | "MAKEUP" }[],
+  cancelled = false,
+) {
+  const id = randomUUID();
+  admin.sessionIds.push(id);
+  const endsAt = startsAt.plus({ hours: 1 });
+  await admin.client.query(`insert into class_sessions (id, local_date, starts_at_utc, ends_at_utc, status, max_capacity)
+    values ($1, $2, $3, $4, $5, 12)`, [id, startsAt.toISODate(), startsAt.toJSDate(), endsAt.toJSDate(),
+    cancelled ? "CANCELLED" : "SCHEDULED"]);
+  const reservations = [];
+  for (const profile of profiles) {
+    const reservationId = randomUUID();
+    await admin.client.query(`insert into class_reservations (id, class_session_id, student_profile_id, origin, status, cancelled_at)
+      values ($1, $2, $3, $4, $5, $6)`, [reservationId, id, profile.id, profile.origin,
+      cancelled ? "CANCELLED" : "CONFIRMED", cancelled ? startsAt.toJSDate() : null]);
+    reservations.push(reservationId);
+  }
+  const week = startsAt.startOf("week").toISODate();
+  return { id, reservations, week, path: `/admin/sesiones/${id}?week=${week}` };
+}
+
+test("registers and corrects attendance on mobile and keeps historical and in-progress sessions read-only", async ({ page }) => {
+  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withCreditsAccount("STUDENT", async (first) => {
+      await withCreditsAccount("STUDENT", async (second) => {
+        const ordinaryId = await seedAttendanceProfile(first, "Lola", "Habitual");
+        const makeupId = await seedAttendanceProfile(second, "Mara", "Recuperación");
+        const ordinary = { id: ordinaryId, origin: "ORDINARY" } as const;
+        const makeup = { id: makeupId, origin: "MAKEUP" } as const;
+        const now = DateTime.now().setZone(CENTER_TIME_ZONE);
+        const active = await seedAttendanceSession(admin, now.minus({ minutes: 15 }), [ordinary]);
+        const ended = await seedAttendanceSession(admin, now.minus({ days: 2 }), [ordinary, makeup]);
+        const cancelled = await seedAttendanceSession(admin, now.minus({ days: 3 }), [ordinary], true);
+        await admin.client.query(`insert into reservation_attendance_records
+          (id, reservation_id, student_profile_id, class_session_id, outcome, source, recorded_at)
+          values ($1, $2, $3, $4, 'ATTENDED', 'MANUAL', $5)`,
+        [randomUUID(), cancelled.reservations[0], ordinaryId, cancelled.id, now.minus({ days: 3 }).plus({ hours: 1 }).toJSDate()]);
+
+        await login(page, admin);
+        await expect(page).toHaveURL(/\/admin$/);
+        await page.goto(active.path);
+        const attendance = page.getByRole("region", { name: "Control de asistencia" });
+        await expect(attendance.getByText("Lola Habitual")).toBeVisible();
+        await expect(attendance.getByText("Sin registrar", { exact: true })).toBeVisible();
+        await expect(attendance.getByText(/cuando finalice la clase/)).toBeVisible();
+        await expect(attendance.getByRole("combobox")).toHaveCount(0);
+
+        await page.goto(cancelled.path);
+        await expect(attendance.getByText(/La sesión está cancelada/)).toBeVisible();
+        await expect(attendance.getByRole("combobox")).toHaveCount(0);
+        const history = page.getByRole("region", { name: "Cancelaciones" });
+        await expect(history.getByText("Lola Habitual")).toBeVisible();
+        await expect(history.getByText("Asistencia histórica: Asistió")).toBeVisible();
+
+        await page.setViewportSize({ width: 360, height: 780 });
+        await page.goto(ended.path);
+        const habitualRow = attendance.getByRole("listitem").filter({ hasText: "Lola Habitual" });
+        const makeupRow = attendance.getByRole("listitem").filter({ hasText: "Mara Recuperación" });
+        await expect(habitualRow.getByText("Ordinaria", { exact: true })).toBeVisible();
+        await expect(makeupRow.getByText("Recuperación", { exact: true })).toBeVisible();
+        await expect(attendance.getByText("Sin registrar", { exact: true })).toHaveCount(2);
+        expect(await attendance.evaluate((region) => region.scrollWidth <= region.clientWidth)).toBe(true);
+
+        const firstOutcome = habitualRow.getByLabel("Resultado", { exact: true });
+        await firstOutcome.focus();
+        await firstOutcome.press("ArrowDown");
+        await expect(firstOutcome).toHaveValue("ATTENDED");
+        const register = habitualRow.getByRole("button", { name: "Registrar asistencia" });
+        await register.focus();
+        await register.press("Enter");
+        await expect(habitualRow.getByText("Asistió", { exact: true })).toBeVisible();
+        await expect(habitualRow.getByRole("status")).toHaveText("Asistencia registrada.");
+        await expect(habitualRow.getByRole("button", { name: "Registrar asistencia" })).toHaveCount(0);
+
+        await makeupRow.getByLabel("Resultado", { exact: true }).selectOption("ABSENT");
+        await makeupRow.getByRole("button", { name: "Registrar asistencia" }).click();
+        await expect(makeupRow.getByText("Ausente", { exact: true })).toBeVisible();
+        await expect(makeupRow.getByRole("status")).toHaveText("Asistencia registrada.");
+
+        const correction = habitualRow.getByText("Corregir asistencia", { exact: true });
+        await correction.focus();
+        await correction.press("Enter");
+        const newOutcome = habitualRow.getByLabel("Nuevo resultado");
+        await expect(newOutcome.locator("option")).toHaveCount(1);
+        await expect(newOutcome).toHaveValue("ABSENT");
+        const reason = habitualRow.getByLabel("Motivo de la corrección");
+        const save = habitualRow.getByRole("button", { name: "Guardar corrección" });
+        await save.click();
+        expect(await reason.evaluate((field: HTMLTextAreaElement) => field.validity.valueMissing)).toBe(true);
+        await reason.fill("   ");
+        await save.click();
+        await expect(habitualRow.getByRole("alert")).toContainText("Escribe un motivo de entre 3 y 300 caracteres");
+        await expect(habitualRow.locator("strong")).toHaveText("Asistió");
+
+        const stalePage = await page.context().newPage();
+        try {
+          await stalePage.goto(ended.path);
+          const staleRow = stalePage.getByRole("region", { name: "Control de asistencia" }).getByRole("listitem")
+            .filter({ hasText: "Lola Habitual" });
+          await expect(staleRow.locator("strong")).toHaveText("Asistió");
+          await staleRow.getByText("Corregir asistencia", { exact: true }).click();
+          await staleRow.getByLabel("Motivo de la corrección").fill("Motivo de la vista anterior");
+
+          await reason.fill("Se verificó la lista de asistencia");
+          await save.click();
+          await expect(habitualRow.getByRole("status")).toHaveText("Corrección guardada.");
+          await expect(habitualRow.locator("strong")).toHaveText("Ausente");
+
+          await staleRow.getByRole("button", { name: "Guardar corrección" }).click();
+          await expect(staleRow.getByRole("alert")).toContainText("El resultado guardado ya coincide");
+          await expect(staleRow.locator("strong")).toHaveText("Ausente");
+        } finally {
+          await stalePage.close();
+        }
+
+        await makeupRow.getByText("Corregir asistencia", { exact: true }).click();
+        await expect(makeupRow.getByLabel("Nuevo resultado")).toHaveValue("ATTENDED");
+        await makeupRow.getByLabel("Motivo de la corrección").fill("Confirmado por la profesora");
+        await makeupRow.getByRole("button", { name: "Guardar corrección" }).click();
+        await expect(makeupRow.getByRole("status")).toHaveText("Corrección guardada.");
+        await expect(makeupRow.locator("strong")).toHaveText("Asistió");
+
+        const { rows } = await admin.client.query(`select r.origin, r.status, a.outcome, a.correction_reason,
+          a.recorded_by_user_id, a.corrected_from_record_id is not null as corrected
+          from class_reservations r join reservation_attendance_records a on a.reservation_id = r.id
+          where r.class_session_id = $1 and a.superseded_at is null order by r.origin`, [ended.id]);
+        expect(rows).toEqual([
+          { origin: "ORDINARY", status: "CONFIRMED", outcome: "ABSENT", correction_reason: "Se verificó la lista de asistencia",
+            recorded_by_user_id: admin.userId, corrected: true },
+          { origin: "MAKEUP", status: "CONFIRMED", outcome: "ATTENDED", correction_reason: "Confirmado por la profesora",
+            recorded_by_user_id: admin.userId, corrected: true },
+        ]);
+        const movements = await admin.client.query("select id from credit_ledger_movements where class_session_id = $1", [ended.id]);
+        expect(movements.rows).toEqual([]);
+        await expect(page).toHaveURL(new RegExp(`${ended.id}\\?week=${ended.week}$`));
+        const back = page.getByRole("link", { name: "Volver al calendario" });
+        await expect(back).toHaveAttribute("href", `/admin?week=${ended.week}#calendario-semanal`);
+        await back.click();
+        await expect(page.getByRole("region", { name: "Calendario semanal global" })).toBeVisible();
+      });
+    });
+  });
+});
+
+test("rejects attendance submissions from a stale admin page after role change or session expiry", async ({ page }) => {
+  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withCreditsAccount("STUDENT", async (student) => {
+      const id = await seedAttendanceProfile(student, "Nerea", "Asistente");
+      const ended = await seedAttendanceSession(admin, DateTime.now().setZone(CENTER_TIME_ZONE).minus({ days: 1 }),
+        [{ id, origin: "ORDINARY" }]);
+      const attendance = page.getByRole("region", { name: "Control de asistencia" });
+
+      await login(page, admin);
+      await expect(page).toHaveURL(/\/admin$/);
+      await page.goto(ended.path);
+      await attendance.getByLabel("Resultado", { exact: true }).selectOption("ATTENDED");
+
+      await page.context().clearCookies();
+      const studentTab = await page.context().newPage();
+      try {
+        await login(studentTab, student);
+        await expect(studentTab).toHaveURL(/\/student$/);
+        await attendance.getByRole("button", { name: "Registrar asistencia" }).click();
+        await expect(page).toHaveURL(/\/student$/);
+        await expect(attendance).toHaveCount(0);
+      } finally {
+        await studentTab.close();
+      }
+
+      await page.context().clearCookies();
+      await login(page, admin);
+      await expect(page).toHaveURL(/\/admin$/);
+      await page.goto(ended.path);
+      await attendance.getByLabel("Resultado", { exact: true }).selectOption("ABSENT");
+      await admin.client.query("update sessions set expires_at = now() - interval '1 minute' where user_id = $1", [admin.userId]);
+      await attendance.getByRole("button", { name: "Registrar asistencia" }).click();
+      await expect(page).toHaveURL(/\/login$/);
+      const records = await admin.client.query("select id from reservation_attendance_records where class_session_id = $1", [ended.id]);
+      expect(records.rows).toEqual([]);
     });
   });
 });

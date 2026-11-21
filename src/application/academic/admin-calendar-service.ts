@@ -1,13 +1,13 @@
 import "server-only";
 
-import { and, eq, gte, lt, sql } from "drizzle-orm";
+import { and, eq, gte, isNull, lt, sql } from "drizzle-orm";
 
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import { calculateAvailableSpots } from "@/src/domain/academic/availability";
 import type { UserRole } from "@/src/domain/auth/roles";
 import { db } from "@/src/infrastructure/db/client";
 import { activeHabitualStudents, sessionUsageCounts } from "@/src/infrastructure/db/habitual-reservations.mjs";
-import { classReservations, classSessions, classTemplates, reservationCancellations, studentProfiles, users } from "@/src/infrastructure/db/schema";
+import { classReservations, classSessions, classTemplates, reservationAttendanceRecords, reservationCancellations, studentProfiles, users } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
 
 function requireCalendarAdmin(actor: { role: UserRole }) {
@@ -67,11 +67,14 @@ export async function getAdminCalendarSessionDetails(actor: { role: UserRole }, 
     name: classTemplates.name,
     startsAtUtc: classSessions.startsAtUtc,
     endsAtUtc: classSessions.endsAtUtc,
+    sessionStatus: classSessions.status,
     reservationId: classReservations.id,
     status: classReservations.status,
     origin: classReservations.origin,
     firstName: studentProfiles.firstName,
     lastName: studentProfiles.lastName,
+    attendanceOutcome: reservationAttendanceRecords.outcome,
+    cancellationId: reservationCancellations.id,
     cancelledAt,
     cancelledByRole: users.role,
     cancellationType: reservationCancellations.cancellationType,
@@ -81,18 +84,25 @@ export async function getAdminCalendarSessionDetails(actor: { role: UserRole }, 
     .leftJoin(classReservations, eq(classReservations.classSessionId, classSessions.id))
     .leftJoin(studentProfiles, eq(studentProfiles.id, classReservations.studentProfileId))
     .leftJoin(reservationCancellations, eq(reservationCancellations.reservationId, classReservations.id))
+    .leftJoin(reservationAttendanceRecords, and(
+      eq(reservationAttendanceRecords.reservationId, classReservations.id),
+      eq(reservationAttendanceRecords.classSessionId, classSessions.id),
+      isNull(reservationAttendanceRecords.supersededAt),
+    ))
     .leftJoin(users, eq(users.id, sql`coalesce(${reservationCancellations.cancelledByUserId}, ${classReservations.cancelledByUserId})`))
     .where(eq(classSessions.id, sessionId))
-    .orderBy(sql`case when ${classReservations.status} = 'CANCELLED' then ${cancelledAt} end desc nulls last`,
+    .orderBy(sql`case when ${classReservations.status} = 'CANCELLED' or ${reservationCancellations.id} is not null
+      then ${cancelledAt} end desc nulls last`,
       studentProfiles.lastName, studentProfiles.firstName, classReservations.id);
 
   if (!rows.length) return null;
-  const { name, startsAtUtc, endsAtUtc } = rows[0];
+  const { name, startsAtUtc, endsAtUtc, sessionStatus } = rows[0];
   return {
     name,
     startsAtUtc,
     endsAtUtc,
-    enrollments: rows.filter((row) => row.status === "CONFIRMED"),
-    cancellations: rows.filter((row) => row.status === "CANCELLED"),
+    sessionStatus,
+    enrollments: rows.filter((row) => row.status === "CONFIRMED" && row.cancellationId === null),
+    cancellations: rows.filter((row) => row.status === "CANCELLED" || row.cancellationId !== null),
   };
 }

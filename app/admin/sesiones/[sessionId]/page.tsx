@@ -8,6 +8,9 @@ import { resolveCenterWeek } from "@/src/domain/time/center-week";
 import { formatInCenterTimeZone } from "@/src/domain/time/timezone";
 import { requireRole } from "@/src/interfaces/auth/session";
 
+import { submitAttendanceForm } from "./attendance-action";
+import { AttendanceForm } from "./attendance-form";
+
 type SessionEnrollmentsProps = {
   params: Promise<{ sessionId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -19,6 +22,8 @@ const nonEligibilityLabels = {
   NON_HABITUAL: "Reserva no habitual",
 };
 
+const attendanceLabels = { ATTENDED: "Asistió", ABSENT: "Ausente" };
+
 export default async function SessionEnrollmentsPage({ params, searchParams }: SessionEnrollmentsProps) {
   const user = await requireRole("SUPER_ADMIN");
   const [{ sessionId }, query] = await Promise.all([params, searchParams]);
@@ -26,6 +31,8 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
   if (!session) notFound();
 
   const { week } = resolveCenterWeek(query.week, DateTime.fromJSDate(session.startsAtUtc));
+  const cancelled = session.sessionStatus === "CANCELLED";
+  const ended = session.endsAtUtc <= new Date();
 
   return (
     <main className="space-y-3">
@@ -39,19 +46,32 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
         <CalendarTimeRange start={session.startsAtUtc} end={session.endsAtUtc} />
         {" · Hora de Copenhague"}
       </p>
-      <section aria-labelledby="confirmed-enrollments" className="space-y-2">
-        <h2 id="confirmed-enrollments">Reservas confirmadas</h2>
-        <p>Total de inscritos: {session.enrollments.length}</p>
-        {session.enrollments.length === 0 ? <p>No hay inscritos en esta sesión.</p> : (
-          <ul className="space-y-2">
-            {session.enrollments.map(({ reservationId, origin, firstName, lastName }) => (
-              <li key={reservationId} className="rounded border p-2 wrap-break-word">
-                <p>{firstName} {lastName}</p>
-                <p>{origin === "MAKEUP" ? "Recuperación" : "Ordinaria"}</p>
-              </li>
-            ))}
-          </ul>
-        )}
+      <section aria-labelledby="attendance-control" className="space-y-2">
+        <h2 id="attendance-control">Control de asistencia</h2>
+        {cancelled && <p>La sesión está cancelada. Solo se pueden consultar los registros existentes.</p>}
+        {!cancelled && !ended && <p>El registro y la corrección estarán disponibles cuando finalice la clase.</p>}
+        <section aria-labelledby="confirmed-enrollments" className="space-y-2">
+          <h3 id="confirmed-enrollments">Reservas confirmadas</h3>
+          <p>Total de inscritos: {session.enrollments.length}</p>
+          {session.enrollments.length === 0 ? <p>No hay inscritos en esta sesión.</p> : (
+            <ul className="space-y-2">
+              {session.enrollments.map(({ reservationId, origin, firstName, lastName, attendanceOutcome }) => {
+                const studentName = `${firstName} ${lastName}`;
+                return (
+                  <li key={reservationId} className="rounded border p-3 wrap-break-word">
+                    <p className="font-medium">{studentName}</p>
+                    <p>{origin === "MAKEUP" ? "Recuperación" : "Ordinaria"}</p>
+                    <p>Estado: <strong>{attendanceOutcome ? attendanceLabels[attendanceOutcome] : "Sin registrar"}</strong></p>
+                    {!cancelled && ended && reservationId && (
+                      <AttendanceForm outcome={attendanceOutcome} studentName={studentName}
+                        action={submitAttendanceForm.bind(null, sessionId, reservationId, attendanceOutcome !== null)} />
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
       </section>
       <section aria-labelledby="session-cancellations" className="space-y-2">
         <h2 id="session-cancellations">Cancelaciones</h2>
@@ -74,6 +94,9 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
                 )}
                 {cancellation.nonEligibilityReason && (
                   <p>Motivo de no elegibilidad para crédito: {nonEligibilityLabels[cancellation.nonEligibilityReason]}</p>
+                )}
+                {cancellation.attendanceOutcome && (
+                  <p>Asistencia histórica: {attendanceLabels[cancellation.attendanceOutcome]}</p>
                 )}
               </li>
             ))}

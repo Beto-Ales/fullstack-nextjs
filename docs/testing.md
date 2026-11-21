@@ -283,7 +283,32 @@ Se incluyen pruebas de:
 - El detalle de sesión incluye un historial de solo lectura ordenado por fecha de cancelación, de la más reciente a la más antigua. Muestra la hora de Copenhague, el tipo de reserva y, cuando constan, el rol de quien canceló, la clasificación temporal y el motivo de no elegibilidad para crédito. Las cancelaciones siguen visibles cuando se vuelve a ocupar la plaza.
 - El E2E de inscritos cubre también la coexistencia con reservas confirmadas, los dos tipos de cancelación, la hora local, el orden, el estado vacío, la exclusión de otras sesiones y la protección de la URL directa.
 - Pasaron los dos E2E focalizados en Chromium con PostgreSQL TEST aislado, el detalle de inscritos y cancelaciones y el calendario administrativo. TypeScript y el lint focalizado pasaron. La fixture de 2099 se verificó en solo lectura.
-- El siguiente pendiente del [apartado 11](../planificacion_general.md#11-panel-administrativo) es incorporar la asistencia al detalle de sesión. Los desempates, las discrepancias sobre la racha y la revisión visual transversal siguen pendientes por separado.
+- El detalle conserva este flujo de consulta. La gestión de asistencia desde la interfaz corresponde al incremento 9.2 del [apartado 11](../planificacion_general.md#11-panel-administrativo).
+
+### Incremento 9.1 — Garantías del servidor para asistencia
+
+- [`attendance.integration.test.ts`](../src/application/academic/attendance.integration.test.ts) cubre los dos resultados, las acciones por rol, sesión y reserva, el instante exacto de fin, reprogramaciones, idempotencia y correcciones con auditoría. Las pruebas concurrentes comparten PostgreSQL y comprueban la exclusión con el alta, la corrección, la cancelación y el detector existente. También verifican el historial y que `ABSENT` deja intacto el ledger.
+- Pasaron **126 pruebas de Vitest**, incluidas **20 nuevas de asistencia**, y **21 E2E de Chromium** en dos bases desechables de PostgreSQL 17.12, cada una con las ocho migraciones del journal. TypeScript pasó y ESLint registró tres avisos preexistentes, sin errores. La primera pasada E2E compartió base con Vitest y falló en la paginación por sesiones residuales. La repetición completa en una base E2E vacía pasó.
+- Las suites de integración reinician tablas. Para repetirlas, usar una base TEST desechable, inequívocamente distinta de DEV, con las migraciones hasta `0007`. En Windows, usar `npm.cmd` si PowerShell bloquea `npm.ps1`.
+
+```powershell
+npm.cmd run test -- --configLoader runner --no-file-parallelism
+```
+
+- Ejecutar Playwright con `TEST_DATABASE_URL` apuntando a otra base TEST recién migrada o en una base TEST vacía antes de correr Vitest. El E2E de paginación necesita que el conjunto inicial de sesiones pertenezca a sus propias fixtures.
+
+```powershell
+npm.cmd run test:e2e -- --workers=1
+```
+
+- Los datos históricos con asistencia y cancelación se conservan. El historial de clases da prioridad a la cancelación. La política de la racha y la revisión visual transversal siguen en incrementos posteriores.
+
+### Incremento 9.2 — Control de asistencia en el detalle de sesión
+
+- `Control de asistencia` muestra en un solo listado las reservas confirmadas ordinarias y de recuperación, con el resultado vigente. El servidor calcula la elegibilidad al cargar o actualizar el detalle. Las sesiones futuras, en curso o canceladas se consultan en modo lectura. Las cancelaciones y sus resultados históricos excepcionales siguen visibles.
+- El formulario registra `Asistió` o `Ausente`. La corrección ofrece el resultado alternativo y exige un motivo. Cada envío verifica `SUPER_ADMIN` y usa las acciones del incremento 9.1. La interfaz muestra el estado de envío, confirma tras la respuesta del servidor y vuelve a consultar el detalle manteniendo la semana. Un conflicto por un resultado que ya cambió muestra un aviso y actualiza el estado visible.
+- [`admin-calendar.integration.test.ts`](../src/application/academic/admin-calendar.integration.test.ts) verifica la consulta agrupada, la autorización, la asociación por reserva, el resultado vigente tras corregir y la separación de cancelaciones. [`admin-session-enrollments.spec.ts`](../tests/e2e/admin-session-enrollments.spec.ts) cubre los estados, la edición en móvil y mediante teclado, un formulario desactualizado, motivos inválidos, revalidación de permisos y la navegación de vuelta.
+- Pasaron **127 pruebas de Vitest**, incluidas las 20 de asistencia del 9.1, y **23 E2E de Chromium**. Ambas suites usaron bases desechables separadas en el contenedor TEST de Compose con **PostgreSQL 15.20** y las ocho migraciones del journal. La base TEST habitual tenía siete migraciones. TypeScript pasó y ESLint registró cero errores y tres avisos preexistentes.
 
 ## Matriz de pruebas (Fase 06.2)
 
@@ -311,7 +336,7 @@ Estado:
 | ADMIN-CANCEL-001 | Cancelación administrativa con múltiples recuperaciones, enlaces correctos consumo↔devolución | Integración | `src/application/recovery/recovery.integration.test.ts` | Pendiente de infraestructura | `npm run test -- src/application/recovery/recovery.integration.test.ts` |
 | ADMIN-CANCEL-002 | Reintento de cancelación administrativa no duplica devoluciones | Integración | `src/application/recovery/recovery.integration.test.ts` | Pendiente de infraestructura | `npm run test -- src/application/recovery/recovery.integration.test.ts` |
 | ADMIN-CANCEL-003 | Atomicidad: fallo intermedio revierte cancelación de sesión/devoluciones | Integración | `src/application/recovery/recovery.integration.test.ts` | Pendiente de infraestructura | `npm run test -- src/application/recovery/recovery.integration.test.ts` |
-| ATTEND-001 | Corrección de asistencia mantiene trazabilidad superseded | Unitaria/Integración de flujo | `src/domain/academic/cancellation-rules.test.ts` + servicios académicos | Ejecutada correctamente (parte unitaria) / Integración pendiente de infraestructura | `npm run test -- src/domain/academic/cancellation-rules.test.ts src/application/academic/academic.integration.test.ts` |
+| ATTEND-001 | Corrección de asistencia conserva trazabilidad y un único resultado vigente | Integración | `src/application/academic/attendance.integration.test.ts` | Ejecutada correctamente en PostgreSQL TEST aislado | `npm run test -- src/application/academic/attendance.integration.test.ts` |
 | ABSENCE-001 | Detección de ausencias idempotente y sin dependencia UUID extension | Integración | `src/application/academic/academic.integration.test.ts` | Pendiente de infraestructura | `npm run test -- src/application/academic/academic.integration.test.ts` |
 | HABITUAL-001 | Asignación habitual reserva sesiones futuras, evita duplicados y respeta capacidad | Integración | `src/application/academic/habitual-assignment.integration.test.ts` | Ejecutada correctamente | `npm run test -- src/application/academic/habitual-assignment.integration.test.ts` |
 | LEDGER-INT-001 | Integridad ledger: detección de consumos/devoluciones huérfanos y auditoría manual incompleta | Integración | `src/application/credits/credit-service.integration.test.ts` | Pendiente de infraestructura | `npm run test -- src/application/credits/credit-service.integration.test.ts` |

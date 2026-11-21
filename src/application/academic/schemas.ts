@@ -90,14 +90,14 @@ export const cancelReservationSchema = z.object({
 });
 
 export const recordAttendanceSchema = z.object({
+  classSessionId: z.string().uuid("Invalid class session id."),
   reservationId: z.string().uuid("Invalid reservation id."),
-  outcome: z.enum(["ATTENDED", "ABSENT"]),
+  outcome: z.enum(["PRESENT", "ATTENDED", "ABSENT"])
+    .transform((outcome) => outcome === "PRESENT" ? "ATTENDED" : outcome),
 });
 
-export const correctAttendanceSchema = z.object({
-  reservationId: z.string().uuid("Invalid reservation id."),
-  outcome: z.enum(["ATTENDED", "ABSENT"]),
-  reason: z.string().min(3).max(300),
+export const correctAttendanceSchema = recordAttendanceSchema.extend({
+  reason: z.string().trim().min(3).max(300),
 });
 
 export const blockCapacitySchema = z.object({
