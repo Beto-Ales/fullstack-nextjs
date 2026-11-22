@@ -328,7 +328,15 @@ Ambos casos se evalúan en [`evaluateCancellationSequence`](../src/domain/academ
 - Los créditos comparten el saldo FIFO, las fechas de vencimiento y el cálculo de caducidad del servicio de créditos. La consulta proyecta los vencimientos pendientes y muestra los movimientos persistidos del ledger. El total de utilizados representa el consumo bruto en recuperaciones. Las devoluciones se leen del ledger y muestran si hubo abono.
 - Las recuperaciones comparten el criterio de reserva `MAKEUP` y la consulta de movimientos de consumo y devolución. Una recuperación figura como realizada si tiene asistencia vigente. Las sesiones pasadas sin registro y las ausencias se identifican por separado.
 - El servicio usa una transacción PostgreSQL de solo lectura con una instantánea consistente para todos los datos de la ficha. Los totales académicos se calculan en PostgreSQL sobre el historial completo. Horarios, próximas clases, historial, movimientos y recuperaciones tienen paginación independiente de 20 filas y orden estable con el identificador como desempate. Créditos muestra hasta cinco fechas de vencimiento próximas.
-- La edición y las estadísticas avanzadas quedan pendientes. La discrepancia ya identificada en la racha de cancelaciones queda pendiente de un incremento propio y la ficha omite ese indicador. [Cobertura de pruebas](testing.md#incremento-97--perfil-administrativo-del-alumno)
+- Las estadísticas avanzadas y la discrepancia en la racha de cancelaciones quedan pendientes. La ficha omite el indicador de racha. [Cobertura de pruebas de consulta](testing.md#incremento-97--perfil-administrativo-del-alumno)
+
+### Edición auditada de datos
+
+`SUPER_ADMIN` puede editar nombre, apellidos, correo de acceso, correo de contacto y teléfono en la ficha de un alumno activo. Los nombres se recortan y sus espacios consecutivos se reducen a uno. Admiten entre 1 y 120 caracteres. Los correos se normalizan como en autenticación y admiten hasta 255 caracteres. El teléfono admite de 7 a 15 dígitos y un prefijo internacional opcional. Se eliminan espacios y separadores de formato. El correo de contacto y el teléfono se pueden vaciar. La ficha de una cuenta desactivada sigue disponible para consulta.
+
+El servidor verifica el rol y el estado de ambas cuentas dentro de la transacción. Bloquea el alumno y el perfil, y comprueba la versión del formulario antes de escribir. Un conflicto invita a recargar. Un reenvío cuyos datos ya coinciden con los actuales devuelve una confirmación sin generar otro evento.
+
+La migración `0011` añade `student_profile_edits`. Cada modificación efectiva y su auditoría se confirman juntas. El evento conserva el administrador, el perfil, el instante, el tipo de operación y los valores anteriores y nuevos de los campos modificados. El acceso a estos datos personales de auditoría se limita a la base de datos. La identidad del alumno y sus referencias académicas se conservan. [Pruebas de edición](testing.md#incremento-98--edición-auditada-del-alumno)
 
 ## Siguiente tarea de generación de sesiones
 

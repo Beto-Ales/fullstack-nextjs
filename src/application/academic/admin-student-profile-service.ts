@@ -5,6 +5,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
 import { regulationDate } from "@/src/application/academic/regulation-service";
+import { studentEditVersion } from "@/src/application/academic/student-edit-service";
 import {
   currentClassAttendance, historicalClass, reservationHasHabitualAssignment, selectHabitualSchedules, studentClassDetails,
 } from "@/src/application/academic/student-class-queries";
@@ -111,7 +112,8 @@ export async function getAdminStudentProfile(
   }
 
   return db.transaction(async (tx) => {
-    const [student] = await tx.select({
+    const [account] = await tx.select({
+      editVersion: studentEditVersion,
       id: studentProfiles.id,
       firstName: studentProfiles.firstName,
       lastName: studentProfiles.lastName,
@@ -125,7 +127,8 @@ export async function getAdminStudentProfile(
       .innerJoin(users, eq(users.id, studentProfiles.userId))
       .where(and(eq(studentProfiles.id, id.data), eq(users.role, "STUDENT")))
       .limit(1);
-    if (!student) return null;
+    if (!account) return null;
+    const { editVersion, ...student } = account;
 
     const limit = PAGE_SIZE + 1;
     const scope = eq(classReservations.studentProfileId, student.id);
@@ -158,6 +161,7 @@ export async function getAdminStudentProfile(
 
     return {
       student,
+      editVersion,
       totals,
       schedules: page("horarios", schedules),
       upcoming: page("proximas", upcoming),

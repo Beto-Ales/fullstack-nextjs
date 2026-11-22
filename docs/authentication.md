@@ -79,6 +79,7 @@ Protecciones:
 - `STUDENT` consulta su calendario, cancela y reserva recuperaciones según la normativa y puede cambiar su propia contraseña.
 - **Dar de alta a un alumno** crea la cuenta `STUDENT` y su perfil académico en una sola transacción. Usa el email normalizado para detectar duplicados y el perfil queda disponible para inscripciones.
 - **Cambiar contraseña** usa la identidad de la sesión del alumno y requiere la contraseña actual.
+- **Editar el correo de acceso** actualiza `email` y `email_normalized` en una transacción con los cambios de perfil y la auditoría. El índice único de PostgreSQL rechaza duplicados del correo normalizado, incluso en dos operaciones concurrentes. El nuevo correo identifica la misma cuenta y las sesiones existentes siguen vinculadas a su `user_id`. Un login en curso comprueba bajo bloqueo que el correo normalizado y el hash que verificó siguen vigentes antes de crear una sesión. El correo de contacto es independiente del de acceso. [Edición auditada](academic-model.md#edición-auditada-de-datos)
 
 ## Rate limiting de login
 

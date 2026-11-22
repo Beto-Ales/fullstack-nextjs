@@ -10,6 +10,7 @@ export * from "@/src/infrastructure/db/schema/reservation-cancellations";
 export * from "@/src/infrastructure/db/schema/session-capacity-blocks";
 export * from "@/src/infrastructure/db/schema/sessions";
 export * from "@/src/infrastructure/db/schema/student-profiles";
+export * from "@/src/infrastructure/db/schema/student-profile-edits";
 export * from "@/src/infrastructure/db/schema/student-template-assignments";
 export * from "@/src/infrastructure/db/schema/student-withdrawals";
 export * from "@/src/infrastructure/db/schema/users";

@@ -79,7 +79,7 @@ export async function authenticateUser(input: AuthenticateInput): Promise<{
     tokenHash,
     expiresAt: sessionExpiresAt,
     userAgent: input.userAgent,
-  }, user.passwordHash);
+  }, user.passwordHash, parsed.data.email);
   if (!created) {
     registerLoginFailure(rateLimitKey);
     throw new AuthServiceError("invalid_credentials", INVALID_CREDENTIALS_MESSAGE);

@@ -50,11 +50,12 @@ export async function createSession(input: {
   tokenHash: string;
   expiresAt: Date;
   userAgent?: string;
-}, verifiedPasswordHash: string): Promise<boolean> {
+}, verifiedPasswordHash: string, verifiedEmail: string): Promise<boolean> {
   return db.transaction(async (tx) => {
-    // Serialize login with password changes so stale credentials cannot create a new session.
+    // Recheck the credentials under the same lock as account updates.
     const [user] = await tx.select({ id: users.id }).from(users).where(and(
       eq(users.id, input.userId), eq(users.status, "ACTIVE"), eq(users.passwordHash, verifiedPasswordHash),
+      eq(users.emailNormalized, verifiedEmail),
     )).for("update");
     if (!user) return false;
 

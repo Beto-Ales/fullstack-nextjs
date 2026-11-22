@@ -349,6 +349,13 @@ npm.cmd run test:e2e -- --workers=1
 - Ejecutar Vitest con `--maxWorkers=1` por la limpieza de tablas entre casos. Usar bases desechables independientes para Vitest y Playwright con `TEST_DATABASE_URL` y el journal hasta `0010_admin_reservation_cancellation`. La ficha usa el esquema existente.
 - El 22 de noviembre de 2026 pasaron **183 pruebas de Vitest**, incluidas **6 nuevas de integración**, y **31 E2E de Chromium sin reintentos**, incluidos los **3 nuevos**. Cada base desechable de PostgreSQL **15.20** tenía las once migraciones aplicadas. TypeScript y `drizzle-kit check` pasaron. ESLint registró cero errores y tres avisos preexistentes.
 
+### Incremento 9.8 — Edición auditada del alumno
+
+- [Integración PostgreSQL](../src/application/academic/student-edit.integration.test.ts). Verifica validación y normalización, autorización, inactivación concurrente, reenvíos, conflictos de versión, unicidad concurrente de correo, reversión íntegra ante un fallo de auditoría y conservación de los registros académicos. Comprueba el acceso con el correo nuevo, el rechazo del anterior, el login en curso y la continuidad de sesiones existentes.
+- [Chromium](../tests/e2e/admin-student-edit.spec.ts). Verifica edición y cancelación por teclado a 360 px, persistencia al recargar, conservación del historial y el contexto, mensajes de campo, conflictos, rechazo de campos adicionales y protección de una acción abierta al cambiar a una sesión de alumno.
+- Usar bases desechables independientes con el journal hasta `0011_student_profile_edit_audit`. Ejecutar Vitest con `--maxWorkers=1` por la limpieza de tablas entre casos.
+- El 22 de noviembre de 2026 pasaron **190 pruebas de Vitest**, incluidas **7 nuevas de integración**, y **34 E2E de Chromium sin reintentos**, incluidos **3 nuevos**. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes. Las suites usaron bases desechables separadas de PostgreSQL **15.20**. Una tercera base confirmó que la actualización de `0010` a `0011` conserva un usuario y un perfil existentes y crea la tabla de auditoría vacía.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

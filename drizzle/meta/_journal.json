@@ -78,6 +78,13 @@
       "when": 1795296982443,
       "tag": "0010_admin_reservation_cancellation",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795355884916,
+      "tag": "0011_student_profile_edit_audit",
+      "breakpoints": true
     }
   ]
 }

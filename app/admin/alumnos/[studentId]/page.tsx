@@ -12,6 +12,8 @@ import { formatInCenterTimeZone } from "@/src/domain/time/timezone";
 import { requireRole } from "@/src/interfaces/auth/session";
 
 import styles from "./profile.module.css";
+import { submitStudentEdit } from "./student-edit-action";
+import { StudentEditForm } from "./student-edit-form";
 
 type StudentProfilePageProps = {
   params: Promise<{ studentId: string }>;
@@ -149,6 +151,10 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
   for (const [key, number] of Object.entries(pages)) {
     if (number > 1) context.set(key, String(number));
   }
+  const profilePath = `/admin/alumnos/${student.id}`;
+  const editContext = new URLSearchParams(context);
+  editContext.set("editar", "1");
+  const editing = query.editar === "1" && student.status === "ACTIVE";
   function pageHref(key: ProfilePageKey, number: number) {
     const next = new URLSearchParams(context);
     if (number > 1) next.set(key, String(number));
@@ -176,7 +182,17 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
           {student.contactPhone && <div><dt>Teléfono de contacto</dt><dd>{student.contactPhone}</dd></div>}
         </dl>
         <p>Fechas y horas de Copenhague</p>
+        {student.status === "ACTIVE" && !editing && (
+          <Link href={`${profilePath}?${editContext}#editar-datos`} prefetch={false}>Editar datos</Link>
+        )}
       </header>
+
+      {editing && <StudentEditForm
+        initial={{ firstName: student.firstName, lastName: student.lastName, email: student.email,
+          contactEmail: student.contactEmail, contactPhone: student.contactPhone }}
+        action={submitStudentEdit.bind(null, student.id, profile.editVersion)}
+        cancelHref={`${profilePath}${context.size ? `?${context}` : ""}`}
+      />}
 
       <section aria-labelledby="resumen">
         <h2 id="resumen">Resumen académico</h2>
