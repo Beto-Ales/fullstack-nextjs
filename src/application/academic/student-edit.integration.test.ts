@@ -7,6 +7,7 @@ import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/
 describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("audited student details edit (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let update: typeof import("./student-edit-service").updateStudentDetails;
+  let readProfile: typeof import("./admin-student-profile-service").getAdminStudentProfile;
   let auth: typeof import("../auth/auth-service");
   let repository: typeof import("@/src/infrastructure/auth/auth-repository");
   const admin = { userId: randomUUID(), role: "SUPER_ADMIN" } as const;
@@ -30,6 +31,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("audited student details 
   beforeAll(async () => {
     client = await createVerifiedTestClient();
     ({ updateStudentDetails: update } = await import("./student-edit-service"));
+    ({ getAdminStudentProfile: readProfile } = await import("./admin-student-profile-service"));
     auth = await import("../auth/auth-service");
     repository = await import("@/src/infrastructure/auth/auth-repository");
     hash = await hashPassword(password);
@@ -172,5 +174,78 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("audited student details 
     await expect(repository.createSession({
       id: randomUUID(), userId: student.userId, tokenHash: randomUUID(), expiresAt: new Date(Date.now() + 600_000),
     }, hash, initial.email)).resolves.toBe(false);
+  });
+
+  it("queries one persisted event per effective edit and omits events for identical submissions", async () => {
+    expect((await readProfile(admin, id))?.edits).toEqual({ items: [], number: 1, hasNext: false });
+    await update(admin, request());
+    expect((await readProfile(admin, id))?.edits.items).toEqual([]);
+    const edit = request({ ...initial, firstName: "Ana María", contactPhone: "+4512345678" });
+    await update(admin, edit);
+    await update(admin, edit);
+    expect((await readProfile(admin, id))?.edits.items).toEqual([{
+      id: expect.any(String), editedAt: expect.any(Date), actorId: admin.userId, actorEmail: "admin@example.com",
+      operation: "UPDATE_STUDENT_DETAILS",
+      changes: [
+        { field: "firstName", before: "Ana", after: "Ana María" },
+        { field: "contactPhone", before: null, after: "+4512345678" },
+      ],
+    }]);
+    await expect(readProfile(student, id, { modificaciones: "2" })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(readProfile(admin, "invalid")).resolves.toBeNull();
+    await expect(readProfile(admin, randomUUID())).resolves.toBeNull();
+  });
+
+  it("paginates deterministically by date and id for the requested student, independently of other sections", async () => {
+    const ids = Array.from({ length: 23 }, () => randomUUID());
+    const newer = ids.pop()!;
+    const foreign = randomUUID();
+    await client.query(`insert into student_profile_edits (id, student_profile_id, edited_by_user_id, edited_at, operation, changes)
+      select id, $2, $3, '2020-01-15 15:00Z', 'UPDATE_STUDENT_DETAILS', '{"firstName":{"before":"Ana","after":"Otra"}}'
+      from unnest($1::text[]) as event(id)`, [ids, id, admin.userId]);
+    await client.query(`insert into student_profile_edits (id, student_profile_id, edited_by_user_id, edited_at, operation, changes)
+      values ($1, $2, $3, '2020-01-16 15:00Z', 'UPDATE_STUDENT_DETAILS', '{"lastName":{"before":"Vilá","after":"Torres"}}'),
+             ($4, $5, $3, '2020-01-17 15:00Z', 'UPDATE_STUDENT_DETAILS', '{"firstName":{"before":"Otra","after":"Exclusivo"}}')`,
+    [newer, id, otherAdmin.userId, foreign, otherId]);
+
+    const first = await readProfile(admin, id, { modificaciones: ["2"], movimientos: "3" });
+    const second = await readProfile(admin, id, { modificaciones: "2", movimientos: "3" });
+    expect(first?.edits).toMatchObject({ number: 1, hasNext: true });
+    expect(first?.edits.items[0]).toMatchObject({ id: newer, actorEmail: "other-admin@example.com" });
+    expect(second?.edits).toMatchObject({ number: 2, hasNext: false });
+    expect(first?.edits.items).toHaveLength(20);
+    expect(second?.edits.items).toHaveLength(3);
+    expect([...first!.edits.items, ...second!.edits.items].map(({ id }) => id)).toEqual([newer, ...ids.sort().reverse()]);
+    expect(second?.movements).toEqual(first?.movements);
+    expect(second?.movements.number).toBe(3);
+    expect((await readProfile(admin, otherId))?.edits.items.map(({ id }) => id)).toEqual([foreign]);
+    expect((await readProfile(admin, id, { modificaciones: "999999" }))?.edits).toEqual(first?.edits);
+    expect((await readProfile(admin, id, { modificaciones: "0" }))?.edits).toEqual(first?.edits);
+  });
+
+  it("preserves audit evidence after withdrawal and projects only supported historical fields", async () => {
+    await client.query("update users set email = '' where id = $1", [otherAdmin.userId]);
+    const event = randomUUID();
+    await client.query(`insert into student_profile_edits (id, student_profile_id, edited_by_user_id, operation, changes)
+      values ($1, $2, $3, 'OLD_UPDATE', $4)`, [event, id, otherAdmin.userId, {
+      firstName: { before: null, after: "" },
+      lastName: { after: "<b>Texto</b>" },
+      contactEmail: { before: { token: "private-token-fixture" }, after: null },
+      email: { before: "same@example.com", after: "same@example.com" },
+      passwordHash: { before: "private-hash-fixture", after: "private-hash-fixture-2" },
+    }]);
+    const { withdrawStudent } = await import("./student-withdrawal");
+    await withdrawStudent(admin, { studentProfileId: id });
+    const profile = await readProfile(admin, id);
+    expect(profile?.student.status).toBe("DISABLED");
+    expect(profile?.edits.items).toEqual([{
+      id: event, editedAt: expect.any(Date), actorId: otherAdmin.userId, actorEmail: null, operation: null,
+      changes: [
+        { field: "firstName", before: null, after: "" },
+        { field: "lastName", before: undefined, after: "<b>Texto</b>" },
+        { field: "contactEmail", before: undefined, after: null },
+      ],
+    }]);
+    expect(JSON.stringify(profile?.edits)).not.toMatch(/private-|passwordHash|OLD_UPDATE|email_normalized/);
   });
 });

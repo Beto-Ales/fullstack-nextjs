@@ -40,6 +40,8 @@ test("edits, cancels and saves on mobile with keyboard while retaining the acade
       await page.setViewportSize({ width: 360, height: 800 });
       await login(page, admin);
       await page.goto(`/admin/alumnos/${id}?week=2026-11-16&movimientos=2`);
+      const edits = page.getByRole("region", { name: "Historial de modificaciones" });
+      await expect(edits).toContainText("El alumno no tiene modificaciones registradas.");
       const edit = page.getByRole("link", { name: "Editar datos" });
       await edit.press("Enter");
       await expect(page.getByLabel("Correo de acceso")).toHaveValue(student.email);
@@ -58,6 +60,10 @@ test("edits, cancels and saves on mobile with keyboard while retaining the acade
       await page.getByRole("button", { name: "Guardar cambios" }).press("Enter");
       await expect(page.getByRole("status")).toHaveText("Cambios guardados.");
       await expect(page.getByRole("heading", { name: "Ana María Soler Díaz" })).toBeVisible();
+      await expect(edits.getByRole("listitem")).toHaveCount(1);
+      await expect(edits).toContainText(admin.email);
+      await expect(edits).toContainText("Anterior · Ana");
+      await expect(edits).toContainText("Nuevo · Ana María");
       const history = page.getByRole("region", { name: "Historial académico" });
       await expect(history).toContainText("Clase única");
       await expect(page).toHaveURL(/movimientos=2/);
@@ -128,6 +134,7 @@ test("protects an open edit action after switching to a student session and hide
         await login(studentPage, student);
         await studentPage.goto(url);
         await expect(studentPage).toHaveURL(/\/student$/);
+        await expect(studentPage.getByRole("heading", { name: "Historial de modificaciones" })).toHaveCount(0);
         const adminCookies = await context.cookies();
         await context.addCookies(await studentContext.cookies());
         await page.getByRole("button", { name: "Guardar cambios" }).click();
@@ -143,6 +150,61 @@ test("protects an open edit action after switching to a student session and hide
       await expect(page.getByText("Desactivada", { exact: true })).toBeVisible();
       await expect(page.getByRole("link", { name: "Editar datos" })).toHaveCount(0);
       await expect(page.getByRole("button", { name: "Guardar cambios" })).toHaveCount(0);
+    });
+  });
+});
+
+test("pages the audit of a disabled student by keyboard and keeps other audit records private", async ({ page }) => {
+  test.skip(!process.env.TEST_DATABASE_URL, "Requires an isolated PostgreSQL TEST database");
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withStudentProfile(async (student, id) => {
+      await withStudentProfile(async (other, otherId) => {
+        const ids = Array.from({ length: 21 }, () => randomUUID()).sort().reverse();
+        await student.client.query(`insert into student_profile_edits (id, student_profile_id, edited_by_user_id, edited_at, operation, changes)
+          select id, $2, $3, '2026-01-15 14:30Z', 'UPDATE_STUDENT_DETAILS', $4::jsonb
+          from unnest($1::text[]) as event(id)`, [ids, id, admin.userId, {
+          firstName: { before: "", after: "<b>Texto literal</b>" },
+          contactEmail: { after: null },
+          passwordHash: { before: "private-hash-fixture", after: null },
+        }]);
+        await other.client.query(`insert into student_profile_edits (id, student_profile_id, edited_by_user_id, operation, changes)
+          values ($1, $2, $3, 'UPDATE_STUDENT_DETAILS', '{"email":{"before":null,"after":"exclusivo-otro@example.com"}}')`,
+        [randomUUID(), otherId, admin.userId]);
+        await student.client.query("update users set status = 'DISABLED' where id = $1", [student.userId]);
+
+        await page.setViewportSize({ width: 360, height: 800 });
+        await login(page, admin);
+        await page.goto(`/admin/alumnos/${id}?week=2026-11-16&movimientos=2&recuperaciones=3`);
+        await page.getByRole("link", { name: "Ver historial de modificaciones" }).press("Enter");
+        await expect(page).toHaveURL(/#modificaciones$/);
+        await expect(page.getByText("Desactivada", { exact: true })).toBeVisible();
+        const audit = page.getByRole("region", { name: "Historial de modificaciones" });
+        const event = audit.getByRole("listitem").first();
+        await expect(audit.getByRole("listitem")).toHaveCount(20);
+        await expect(event).toContainText(admin.email);
+        await expect(event.locator("time")).toContainText("15:30");
+        await expect(event).toContainText("Actualización del perfil");
+        await expect(event).toContainText("Anterior · Campo vacío");
+        await expect(event).toContainText("Nuevo · <b>Texto literal</b>");
+        await expect(event.locator("b")).toHaveCount(0);
+        await expect(event).toContainText("Anterior · Valor histórico no disponible");
+        await expect(event).toContainText("Nuevo · Sin informar");
+        await expect(audit).not.toContainText("private-hash-fixture");
+        await expect(audit).not.toContainText("exclusivo-otro@example.com");
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+
+        const navigation = audit.getByRole("navigation", { name: "Paginación de historial de modificaciones" });
+        await navigation.getByRole("link", { name: "Siguiente" }).press("Enter");
+        await expect(audit.getByRole("listitem")).toHaveCount(1);
+        await expect(navigation).toContainText("Página 2");
+        const url = new URL(page.url());
+        expect(Object.fromEntries(url.searchParams)).toMatchObject({
+          week: "2026-11-16", movimientos: "2", recuperaciones: "3", modificaciones: "2",
+        });
+        await navigation.getByRole("link", { name: "Anterior" }).press("Enter");
+        await expect(audit.getByRole("listitem")).toHaveCount(20);
+        await expect(navigation).toContainText("Página 1");
+      });
     });
   });
 });

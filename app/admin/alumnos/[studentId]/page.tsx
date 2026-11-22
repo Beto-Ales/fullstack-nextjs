@@ -29,6 +29,20 @@ const movementLabels = {
   RECOVERY_CONSUMPTION: "Consumo por recuperación",
   RECOVERY_REFUND: "Devolución de recuperación",
 };
+const editFieldLabels = {
+  firstName: "Nombre",
+  lastName: "Apellidos",
+  email: "Correo de acceso",
+  contactEmail: "Correo de contacto",
+  contactPhone: "Teléfono de contacto",
+};
+
+function auditValueLabel(value: string | null | undefined) {
+  if (value === undefined) return "Valor histórico no disponible";
+  if (value === null) return "Sin informar";
+  if (value === "") return "Campo vacío";
+  return value;
+}
 
 function Timestamp({ value, dateOnly = false }: { value: Date; dateOnly?: boolean }) {
   return <time dateTime={value.toISOString()}>{formatInCenterTimeZone(value, "es-ES", {
@@ -134,7 +148,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
   const profile = await getAdminStudentProfile(actor, studentId, query, now);
   if (!profile) notFound();
 
-  const { student, totals, schedules, upcoming, history, recoveries, credits, movements } = profile;
+  const { student, totals, schedules, upcoming, history, recoveries, credits, movements, edits } = profile;
   const session = z.uuid().safeParse(query.sesion);
   const week = z.iso.date().safeParse(query.week);
   const normalizedWeek = week.success ? resolveCenterWeek(week.data, DateTime.fromJSDate(now)).week.toISODate() : null;
@@ -147,7 +161,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
   if (session.success) context.set("sesion", session.data);
 
   const pages = { horarios: schedules.number, proximas: upcoming.number, historial: history.number,
-    movimientos: movements.number, recuperaciones: recoveries.number };
+    movimientos: movements.number, recuperaciones: recoveries.number, modificaciones: edits.number };
   for (const [key, number] of Object.entries(pages)) {
     if (number > 1) context.set(key, String(number));
   }
@@ -157,6 +171,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
   const editing = query.editar === "1" && student.status === "ACTIVE";
   function pageHref(key: ProfilePageKey, number: number) {
     const next = new URLSearchParams(context);
+    if (editing) next.set("editar", "1");
     if (number > 1) next.set(key, String(number));
     else next.delete(key);
     return `/admin/alumnos/${student.id}${next.size ? `?${next}` : ""}#${key}`;
@@ -185,6 +200,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
         {student.status === "ACTIVE" && !editing && (
           <Link href={`${profilePath}?${editContext}#editar-datos`} prefetch={false}>Editar datos</Link>
         )}
+        <p><a href="#modificaciones">Ver historial de modificaciones</a></p>
       </header>
 
       {editing && <StudentEditForm
@@ -292,6 +308,29 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
           </li>
         )} />
         <Pagination label="recuperaciones" {...recoveries} href={(number) => pageHref("recuperaciones", number)} />
+      </section>
+
+      <section aria-labelledby="modificaciones">
+        <h2 id="modificaciones">Historial de modificaciones</h2>
+        <ProfileList page={edits} empty="El alumno no tiene modificaciones registradas." render={(event) => (
+          <li key={event.id} className={styles.card}>
+            <h3>{event.operation === "UPDATE_STUDENT_DETAILS" ? "Actualización del perfil" : "Operación no disponible"}</h3>
+            <p><Timestamp value={event.editedAt} /></p>
+            <p>Administrador · {event.actorEmail ?? `No disponible (ID ${event.actorId})`}</p>
+            {event.changes.length > 0 ? (
+              <dl className={styles.account}>
+                {event.changes.map(({ field, before, after }) => (
+                  <div key={field}>
+                    <dt>{editFieldLabels[field]}</dt>
+                    <dd>Anterior · {auditValueLabel(before)}</dd>
+                    <dd>Nuevo · {auditValueLabel(after)}</dd>
+                  </div>
+                ))}
+              </dl>
+            ) : <p>Detalle de los cambios no disponible.</p>}
+          </li>
+        )} />
+        <Pagination label="historial de modificaciones" {...edits} href={(number) => pageHref("modificaciones", number)} />
       </section>
     </main>
   );

@@ -15,12 +15,13 @@ import type { UserRole } from "@/src/domain/auth/roles";
 import { db } from "@/src/infrastructure/db/client";
 import {
   classReservations, classSessionEdits, classSessions, classTemplates, reservationAttendanceRecords, reservationCancellations,
-  studentProfiles, studentWithdrawals, users,
+  studentProfileEdits, studentProfiles, studentWithdrawals, users,
 } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
 
 const PAGE_SIZE = 20;
-export type ProfilePageKey = "horarios" | "proximas" | "historial" | "movimientos" | "recuperaciones";
+export type ProfilePageKey = "horarios" | "proximas" | "historial" | "movimientos" | "recuperaciones" | "modificaciones";
+const editFields = ["firstName", "lastName", "email", "contactEmail", "contactPhone"] as const;
 const cancellationActorId = sql`coalesce(${reservationCancellations.cancelledByUserId}, ${classReservations.cancelledByUserId})`;
 const cancelled = or(eq(classReservations.status, "CANCELLED"), isNotNull(reservationCancellations.id))!;
 const cancellationSource = sql<"STUDENT_REQUEST" | "ADMIN_DECISION" | null>`case when ${cancelled}
@@ -31,6 +32,55 @@ const cancellationSource = sql<"STUDENT_REQUEST" | "ADMIN_DECISION" | null>`case
 function readPage(value: unknown) {
   if (typeof value !== "string" || !/^[1-9]\d{0,5}$/.test(value)) return 1;
   return Number(value);
+}
+
+function auditValue(change: unknown, key: "before" | "after") {
+  if (!change || typeof change !== "object" || !Object.hasOwn(change, key)) return undefined;
+  const value: unknown = (change as Record<string, unknown>)[key];
+  return typeof value === "string" || value === null ? value : undefined;
+}
+
+function profileEditChanges(changes: unknown) {
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) return [];
+  return editFields.flatMap((field) => {
+    if (!Object.hasOwn(changes, field)) return [];
+    const change = (changes as Record<string, unknown>)[field];
+    const before = auditValue(change, "before");
+    const after = auditValue(change, "after");
+    return before !== undefined && before === after ? [] : [{ field, before, after }];
+  });
+}
+
+async function readProfileEdits(reader: TransactionClient, studentProfileId: string, number: number) {
+  const query = (page: number) => reader.select({
+    id: studentProfileEdits.id,
+    editedAt: studentProfileEdits.editedAt,
+    actorId: studentProfileEdits.editedByUserId,
+    actorEmail: users.email,
+    operation: studentProfileEdits.operation,
+    changes: studentProfileEdits.changes,
+  }).from(studentProfileEdits)
+    .leftJoin(users, eq(users.id, studentProfileEdits.editedByUserId))
+    .where(eq(studentProfileEdits.studentProfileId, studentProfileId))
+    .orderBy(desc(studentProfileEdits.editedAt), desc(studentProfileEdits.id))
+    .limit(PAGE_SIZE + 1)
+    .offset((page - 1) * PAGE_SIZE);
+
+  let rows = await query(number);
+  if (!rows.length && number > 1) {
+    number = 1;
+    rows = await query(number);
+  }
+  return {
+    number,
+    hasNext: rows.length > PAGE_SIZE,
+    items: rows.slice(0, PAGE_SIZE).map(({ operation, changes, actorEmail, ...row }) => ({
+      ...row,
+      operation: operation === "UPDATE_STUDENT_DETAILS" ? operation : null,
+      actorEmail: actorEmail?.trim() || null,
+      changes: profileEditChanges(changes),
+    })),
+  };
 }
 
 function selectClassActivity(reader: TransactionClient) {
@@ -158,10 +208,12 @@ export async function getAdminStudentProfile(
       actor, tx, student.id, now, limit, offset("movimientos"),
     );
     const datedExpirations = availableExpirations.filter(({ expiresAt }) => expiresAt !== null);
+    const edits = await readProfileEdits(tx, student.id, readPage(query.modificaciones));
 
     return {
       student,
       editVersion,
+      edits,
       totals,
       schedules: page("horarios", schedules),
       upcoming: page("proximas", upcoming),

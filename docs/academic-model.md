@@ -336,7 +336,15 @@ Ambos casos se evalúan en [`evaluateCancellationSequence`](../src/domain/academ
 
 El servidor verifica el rol y el estado de ambas cuentas dentro de la transacción. Bloquea el alumno y el perfil, y comprueba la versión del formulario antes de escribir. Un conflicto invita a recargar. Un reenvío cuyos datos ya coinciden con los actuales devuelve una confirmación sin generar otro evento.
 
-La migración `0011` añade `student_profile_edits`. Cada modificación efectiva y su auditoría se confirman juntas. El evento conserva el administrador, el perfil, el instante, el tipo de operación y los valores anteriores y nuevos de los campos modificados. El acceso a estos datos personales de auditoría se limita a la base de datos. La identidad del alumno y sus referencias académicas se conservan. [Pruebas de edición](testing.md#incremento-98--edición-auditada-del-alumno)
+La migración `0011` añade `student_profile_edits`. Cada modificación efectiva y su auditoría se confirman juntas. El evento conserva el administrador, el perfil, el instante, el tipo de operación y los valores anteriores y nuevos de los campos modificados. La identidad del alumno y sus referencias académicas se conservan. [Pruebas de edición](testing.md#incremento-98--edición-auditada-del-alumno)
+
+### Historial de modificaciones
+
+La sección de solo lectura de `/admin/alumnos/[studentId]` usa los eventos de `student_profile_edits` del alumno solicitado, incluidas las cuentas desactivadas. La página y el servicio exigen `SUPER_ADMIN`. La consulta forma parte de la instantánea de solo lectura de la ficha y se ejecuta por solicitud.
+
+Cada operación muestra el instante en hora de Copenhague, el correo actual del administrador responsable y los valores anterior y nuevo de los campos autorizados en el 9.8. Si falta el correo del responsable, se muestra el identificador persistido. Un valor nulo figura como «Sin informar», una cadena vacía como «Campo vacío» y un lado ausente o inválido como «Valor histórico no disponible». La ficha muestra los valores como texto y omite los campos desconocidos o con valores iguales.
+
+PostgreSQL devuelve páginas independientes de 20 eventos, en orden descendente por fecha e identificador. Los parámetros inválidos o las páginas sin registros muestran la primera página. Los cambios recién guardados aparecen al actualizar la primera página. La vista reutiliza el esquema y el formulario existentes. [Pruebas del historial](testing.md#incremento-99--historial-de-modificaciones-del-alumno)
 
 ## Siguiente tarea de generación de sesiones
 

@@ -356,6 +356,13 @@ npm.cmd run test:e2e -- --workers=1
 - Usar bases desechables independientes con el journal hasta `0011_student_profile_edit_audit`. Ejecutar Vitest con `--maxWorkers=1` por la limpieza de tablas entre casos.
 - El 22 de noviembre de 2026 pasaron **190 pruebas de Vitest**, incluidas **7 nuevas de integración**, y **34 E2E de Chromium sin reintentos**, incluidos **3 nuevos**. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes. Las suites usaron bases desechables separadas de PostgreSQL **15.20**. Una tercera base confirmó que la actualización de `0010` a `0011` conserva un usuario y un perfil existentes y crea la tabla de auditoría vacía.
 
+### Incremento 9.9 — Historial de modificaciones del alumno
+
+- [Integración PostgreSQL](../src/application/academic/student-edit.integration.test.ts). Cubre autorización y UUID inválidos, aislamiento entre alumnos, valores persistidos y reenvíos, auditoría tras baja lógica, filtrado de datos históricos, orden con empates y paginación independiente.
+- [Chromium](../tests/e2e/admin-student-edit.spec.ts). Verifica el historial vacío, la aparición de una edición del 9.8, la consulta de cuentas desactivadas, los valores anteriores y nuevos, el escape de HTML, el aislamiento, la navegación por teclado a 360 px y el rechazo de `STUDENT`.
+- Usar bases TEST desechables independientes con el journal hasta `0011_student_profile_edit_audit`. Ejecutar Vitest con `--maxWorkers=1`.
+- El 22 de noviembre de 2026 pasaron **193 pruebas de Vitest**, incluidas **3 nuevas de integración**, y **35 E2E de Chromium sin reintentos**, incluido **1 nuevo**. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes. Ambas suites usaron bases desechables de PostgreSQL **15.20** con las doce migraciones aplicadas.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:
