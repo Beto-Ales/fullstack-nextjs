@@ -26,6 +26,34 @@ async function withStudentProfile(run: (account: Account, profileId: string) => 
   });
 }
 
+test("accepts the administratively changed login email and rejects the previous email", async ({ page, browser, baseURL }) => {
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withStudentProfile(async (student, id) => {
+      await login(page, admin);
+      await page.goto(`/admin/alumnos/${id}?editar=1`);
+      const updatedEmail = `updated-${id}@example.com`;
+      await page.getByLabel("Correo de acceso").fill(updatedEmail.toUpperCase());
+      await page.getByRole("button", { name: "Guardar cambios" }).click();
+      await expect(page.getByRole("status")).toHaveText("Cambios guardados.");
+
+      const studentContext = await browser.newContext({ baseURL });
+      try {
+        const studentPage = await studentContext.newPage();
+        await studentPage.goto("/login");
+        await studentPage.getByLabel("Email", { exact: true }).fill(student.email);
+        await studentPage.getByLabel("Contraseña", { exact: true }).fill(student.password);
+        await studentPage.getByRole("button", { name: "Iniciar sesión" }).click();
+        await expect(studentPage.locator("form").getByRole("alert")).toHaveText("Credenciales inválidas.");
+        await login(studentPage, { ...student, email: updatedEmail });
+        await expect(studentPage).toHaveURL(/\/student$/);
+        await expect(studentPage.getByRole("heading", { name: "Área de alumno" })).toBeVisible();
+      } finally {
+        await studentContext.close();
+      }
+    });
+  });
+});
+
 test("edits, cancels and saves on mobile with keyboard while retaining the academic history", async ({ page }) => {
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withStudentProfile(async (student, id) => {

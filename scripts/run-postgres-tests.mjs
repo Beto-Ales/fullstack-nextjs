@@ -137,6 +137,9 @@ export async function runPostgresTests(mode, args = [], inheritedEnv = process.e
     await migrateTestDatabase(env);
     delete env.DATABASE_URL;
     delete env.POSTGRES_TEST_SCOPE;
+    env.AUTH_RATE_LIMIT_HMAC_KEY = randomBytes(32).toString("hex");
+    env.AUTH_RATE_LIMIT_MAX_ATTEMPTS = "5";
+    env.AUTH_RATE_LIMIT_WINDOW_MINUTES = "15";
     if (mode === "integration") env.POSTGRES_TEST_SCOPE = "integration";
     checkInterrupted();
     console.log(`[postgres-test:${run.purpose}] PostgreSQL 15 desechable verificado y migrado (${runId}).`);

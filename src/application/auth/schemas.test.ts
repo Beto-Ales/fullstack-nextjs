@@ -21,5 +21,18 @@ describe("loginInputSchema", () => {
       }),
     ).toThrowError();
   });
+
+  it.each([
+    { email: "test@example.com".padStart(1025), password: "existing-password" },
+    { email: "test@example", password: "existing-password" },
+    { email: "test@example.com", password: "x".repeat(129) },
+  ])("rejects oversized or malformed credentials", (input) => {
+    expect(loginInputSchema.safeParse(input).success).toBe(false);
+  });
+
+  it("preserves the login format used by existing bcrypt passwords", () => {
+    const password = "  " + "ø".repeat(40);
+    expect(loginInputSchema.parse({ email: "test@example.com", password }).password).toBe(password);
+  });
 });
 

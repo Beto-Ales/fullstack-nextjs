@@ -17,20 +17,14 @@ import {
 import { db } from "@/src/infrastructure/db/client";
 import { sessions, studentProfiles, users } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
-import { hashPassword, verifyPassword } from "@/src/infrastructure/security/password";
-import {
-  buildRateLimitKey,
-  clearLoginFailures,
-  isLoginBlocked,
-  registerLoginFailure,
-} from "@/src/infrastructure/security/auth-rate-limit";
+import { releaseLoginIdentityAttempt, reserveLoginAttempt } from "@/src/infrastructure/security/auth-rate-limit";
+import { DUMMY_PASSWORD_HASH, hashPassword, verifyPassword } from "@/src/infrastructure/security/password";
 import { createSessionToken, hashSessionToken } from "@/src/infrastructure/security/session-token";
 
 type AuthenticateInput = {
   email: string;
   password: string;
   returnTo?: string;
-  sourceKey: string;
   userAgent?: string;
 };
 
@@ -49,50 +43,44 @@ export async function authenticateUser(input: AuthenticateInput): Promise<{
   });
 
   if (!parsed.success) {
-    throw new Error(INVALID_CREDENTIALS_MESSAGE);
+    throw new AuthServiceError("invalid_credentials", INVALID_CREDENTIALS_MESSAGE);
   }
 
-  const rateLimitKey = buildRateLimitKey(parsed.data.email, input.sourceKey);
-  if (isLoginBlocked(rateLimitKey)) {
+  const reservation = await reserveLoginAttempt(db, parsed.data.email);
+  if (!reservation) {
     throw new AuthServiceError("too_many_attempts", TOO_MANY_ATTEMPTS_MESSAGE);
   }
 
   const user = await findUserByNormalizedEmail(parsed.data.email);
-  if (!user || user.status !== "ACTIVE") {
-    registerLoginFailure(rateLimitKey);
+  const activeUser = user?.status === "ACTIVE" ? user : null;
+  const passwordMatches = await verifyPassword(parsed.data.password, activeUser?.passwordHash ?? DUMMY_PASSWORD_HASH);
+  if (!activeUser || !passwordMatches) {
     throw new AuthServiceError("invalid_credentials", INVALID_CREDENTIALS_MESSAGE);
   }
 
-  const passwordMatches = await verifyPassword(parsed.data.password, user.passwordHash);
-  if (!passwordMatches) {
-    registerLoginFailure(rateLimitKey);
-    throw new AuthServiceError("invalid_credentials", INVALID_CREDENTIALS_MESSAGE);
-  }
-
+  await releaseLoginIdentityAttempt(db, reservation);
   const sessionToken = createSessionToken();
   const tokenHash = hashSessionToken(sessionToken);
   const sessionExpiresAt = new Date(Date.now() + SESSION_DURATION_MS);
 
   const created = await createSession({
     id: randomUUID(),
-    userId: user.id,
+    userId: activeUser.id,
     tokenHash,
     expiresAt: sessionExpiresAt,
     userAgent: input.userAgent,
-  }, user.passwordHash, parsed.data.email);
+  }, activeUser.passwordHash, parsed.data.email);
   if (!created) {
-    registerLoginFailure(rateLimitKey);
     throw new AuthServiceError("invalid_credentials", INVALID_CREDENTIALS_MESSAGE);
   }
-  clearLoginFailures(rateLimitKey);
 
   return {
-    userId: user.id,
-    role: user.role,
-    email: user.email,
+    userId: activeUser.id,
+    role: activeUser.role,
+    email: activeUser.email,
     sessionToken,
     sessionExpiresAt,
-    redirectTo: resolvePostLoginPath(user.role, parsed.data.returnTo),
+    redirectTo: resolvePostLoginPath(activeUser.role, parsed.data.returnTo),
   };
 }
 

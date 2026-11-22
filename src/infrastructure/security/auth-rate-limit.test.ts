@@ -1,25 +1,25 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { createHmac } from "node:crypto";
+import { describe, expect, it } from "vitest";
 
-import { buildRateLimitKey, clearLoginFailures, isLoginBlocked, registerLoginFailure } from "@/src/infrastructure/security/auth-rate-limit";
+import { buildLoginBudgetKey } from "@/src/infrastructure/security/auth-rate-limit";
 
-describe("auth rate limit", () => {
-  beforeEach(() => {
-    process.env.DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/fullstack_nextjs";
-    process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS = "2";
-    process.env.AUTH_RATE_LIMIT_WINDOW_MINUTES = "1";
+describe("login budget identity", () => {
+  const secret = "af".repeat(32);
+
+  it("derives a stable HMAC over the normalized email", () => {
+    const email = "test@example.com";
+    const expected = createHmac("sha256", Buffer.from(secret, "hex")).update(`login:${email}`).digest("hex");
+    const key = buildLoginBudgetKey(" Te st@Example.COM ", secret);
+
+    expect(key).toBe(expected);
+    expect(buildLoginBudgetKey(email, secret.toUpperCase())).toBe(key);
+    expect(key).toMatch(/^[a-f0-9]{64}$/);
+    expect(key).not.toContain(email);
   });
 
-  it("blocks after configured number of failures", () => {
-    const key = buildRateLimitKey("test@example.com", "source");
-
-    registerLoginFailure(key);
-    expect(isLoginBlocked(key)).toBe(false);
-
-    registerLoginFailure(key);
-    expect(isLoginBlocked(key)).toBe(true);
-
-    clearLoginFailures(key);
-    expect(isLoginBlocked(key)).toBe(false);
+  it("separates identities and secrets", () => {
+    const key = buildLoginBudgetKey("test@example.com", secret);
+    expect(buildLoginBudgetKey("other@example.com", secret)).not.toBe(key);
+    expect(buildLoginBudgetKey("test@example.com", "fa".repeat(32))).not.toBe(key);
   });
 });
-

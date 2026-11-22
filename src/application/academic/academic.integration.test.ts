@@ -79,7 +79,7 @@ describe("academic integration (postgres)", () => {
     const password = randomUUID();
     const { hashPassword } = await import("@/src/infrastructure/security/password");
     await client.query("update users set password_hash=$1 where id=$2", [await hashPassword(password), departing.userId]);
-    const credentials = { email: `${departing.userId}@example.com`, password, sourceKey: randomUUID() };
+    const credentials = { email: `${departing.userId}@example.com`, password };
     const login = await auth.authenticateUser(credentials);
     expect(await auth.getAuthenticatedUserFromSessionToken(login.sessionToken)).toBeTruthy();
 

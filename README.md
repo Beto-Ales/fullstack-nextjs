@@ -92,8 +92,9 @@ Ver [.env.example](./.env.example):
 - `TEST_DATABASE_URL`: conexión generada por el aprovisionador para cada ejecución de pruebas con PostgreSQL.
 - `APP_TIME_ZONE`: zona del centro (`Europe/Copenhagen`).
 - `LOG_LEVEL`: nivel de logs.
-- `AUTH_RATE_LIMIT_MAX_ATTEMPTS`: intentos de login permitidos por ventana.
-- `AUTH_RATE_LIMIT_WINDOW_MINUTES`: duración de la ventana de rate limiting.
+- `AUTH_RATE_LIMIT_HMAC_KEY` es obligatorio para el login. Genera 32 bytes aleatorios en hexadecimal y suministra el valor por la configuración privada del servidor. Todas las instancias deben usar el mismo secreto. Para asignar uno al proceso local en PowerShell, usa `$env:AUTH_RATE_LIMIT_HMAC_KEY = node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))"` antes de arrancar Next.js.
+- `AUTH_RATE_LIMIT_MAX_ATTEMPTS` acepta de 1 a 100 oportunidades por correo. El valor predeterminado es 5. El presupuesto general es de 600.
+- `AUTH_RATE_LIMIT_WINDOW_MINUTES` acepta de 1 a 60 minutos para ambos presupuestos. El valor predeterminado es 15. Comparte los valores entre instancias y prepara la migración 0014 antes de activar esta versión. [Política y rotación](./docs/authentication.md#limitación-de-intentos-de-login)
 - `SUPER_ADMIN_EMAIL` y `SUPER_ADMIN_PASSWORD`: variables temporales para el comando de creación inicial de superadmin.
 
 ## PostgreSQL local con Docker Compose (Windows 11 + PowerShell)

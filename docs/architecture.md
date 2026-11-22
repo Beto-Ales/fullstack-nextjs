@@ -35,6 +35,12 @@ Cada ejecución que escribe crea una instancia PostgreSQL 15 en Docker. El puert
 
 La guarda central coteja el identificador y las etiquetas del contenedor en ejecución, el puerto publicado, la identidad del clúster, el rol, la base y el marcador. El migrador comprueba la misma conexión que aplicará el journal. Los helpers validan antes de devolver una conexión para fixtures y `TRUNCATE` exige además una conexión Vitest verificada por ese proceso. El servidor E2E solo arranca tras verificar su conexión. [Comandos y pruebas](testing.md#incremento-106--aislamiento-de-pruebas-postgresql)
 
+## Presupuestos de login en PostgreSQL
+
+La migración aditiva `0014_login_attempt_budgets` crea `login_attempt_budgets` con clave primaria, un contador acotado y un índice sobre `expires_at`. La tabla es independiente de usuarios y sesiones. Cada intento válido toma el mismo bloqueo asesor transaccional en PostgreSQL. En aislamiento `READ COMMITTED`, la consulta posterior al bloqueo lee ambos presupuestos y actualiza las dos filas en una sola sentencia si queda capacidad. Si alguna se agotó, ninguna se incrementa. El commit libera el bloqueo antes de consultar usuarios o comparar contraseñas. Una contraseña correcta libera una oportunidad del correo en una transacción breve con el mismo bloqueo y comprueba que sigue vigente la ventana reservada. Reiniciar un proceso web conserva los presupuestos.
+
+La consulta ignora filas vencidas según el reloj de PostgreSQL. El primer intento de una nueva ventana general elimina mediante el índice las filas ya vencidas. Con una configuración estable, solo pueden quedar identidades admitidas en la ventana general actual o en la anterior. Como cada alta de contador requiere consumir el presupuesto general, el límite es de 1200 filas de identidad más la fila general. En periodos sin tráfico, las filas vencidas pueden permanecer hasta la siguiente admisión y el conjunto no crece. La transacción tiene un tiempo máximo de cinco segundos por sentencia. Un fallo al actualizar o limpiar revierte la admisión. [Política y despliegue](authentication.md#limitación-de-intentos-de-login)
+
 ## Normativa académica versionada
 
 - `/normativa` exige sesión y muestra los valores vigentes a alumnos y administradores. El servidor verifica el rol `SUPER_ADMIN` para publicar y consultar el historial.

@@ -69,6 +69,8 @@ El incremento 10.5 corrige H06. Las nuevas reservas individuales aplican el mism
 
 El incremento 10.6 corrige H08. Cada proceso de pruebas con escritura verifica un PostgreSQL desechable propio antes de migrar, iniciar Next.js o manipular fixtures. Vitest falla explícitamente sin esa verificación y Playwright rechaza servidores HTTP ajenos. [Comandos](docs/testing.md#comandos-vigentes-desde-106) · [Diseño](docs/architecture.md#aislamiento-de-pruebas-postgresql)
 
+El incremento 10.7 corrige H05. PostgreSQL reserva en una sola transacción las oportunidades de login del correo normalizado y del presupuesto general. El correo se deriva con HMAC y las cabeceras quedan fuera del cálculo. El login compara con bcrypt también cuando el correo no existe o la cuenta está desactivada. El despliegue necesita la migración 0014 y el secreto compartido entre instancias. [Política](docs/authentication.md#limitación-de-intentos-de-login) · [Pruebas](docs/testing.md#incremento-107--presupuesto-compartido-de-login)
+
 Fase 11 — Preparación para producción
 
 Variables de entorno, migraciones, configuración de despliegue, backups y documentación.

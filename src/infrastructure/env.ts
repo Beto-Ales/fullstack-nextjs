@@ -17,9 +17,19 @@ const environmentSchema = z.object({
     ),
   APP_TIME_ZONE: z.literal(CENTER_TIME_ZONE).default(CENTER_TIME_ZONE),
   LOG_LEVEL: z.enum(logLevels).default("info"),
-  AUTH_RATE_LIMIT_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
-  AUTH_RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().int().positive().default(15),
 });
+
+export const LOGIN_GLOBAL_MAX_ATTEMPTS = 600;
+
+const loginRateLimitSchema = z.object({
+  AUTH_RATE_LIMIT_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(100).default(5),
+  AUTH_RATE_LIMIT_WINDOW_MINUTES: z.coerce.number().int().min(1).max(60).default(15),
+  AUTH_RATE_LIMIT_HMAC_KEY: z.string().regex(/^[0-9a-f]{64}$/i),
+});
+
+export function parseLoginRateLimitConfig(rawEnvironment: Record<string, string | undefined>) {
+  return loginRateLimitSchema.parse(rawEnvironment);
+}
 
 export type RuntimeEnvironment = z.infer<typeof environmentSchema>;
 

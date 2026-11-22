@@ -164,7 +164,7 @@ describe("audited student details edit (postgres)", () => {
   });
 
   it("uses the new login email and preserves existing sessions and credential-race protections", async () => {
-    const credentials = { password, sourceKey: "student-edit-integration" };
+    const credentials = { password };
     const existing = await auth.authenticateUser({ email: initial.email, ...credentials });
     await update(admin, request({ ...initial, email: "nuevo@example.com" }));
     await expect(auth.getAuthenticatedUserFromSessionToken(existing.sessionToken))

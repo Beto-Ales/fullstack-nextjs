@@ -81,17 +81,35 @@ Protecciones:
 - **Cambiar contraseña** usa la identidad de la sesión del alumno y requiere la contraseña actual.
 - **Editar el correo de acceso** actualiza `email` y `email_normalized` en una transacción con los cambios de perfil y la auditoría. El índice único de PostgreSQL rechaza duplicados del correo normalizado, incluso en dos operaciones concurrentes. El nuevo correo identifica la misma cuenta y las sesiones existentes siguen vinculadas a su `user_id`. Un login en curso comprueba bajo bloqueo que el correo normalizado y el hash que verificó siguen vigentes antes de crear una sesión. El correo de contacto es independiente del de acceso. [Edición auditada](academic-model.md#edición-auditada-de-datos)
 
-## Rate limiting de login
+## Limitación de intentos de login
 
-Se implementa en memoria por clave `email_normalized + source`:
+H05 identificó un contador por proceso que agrupaba por correo, primer valor de `X-Forwarded-For` y `User-Agent`. Reiniciar Next.js descartaba el estado, y cada instancia llevaba la cuenta por separado. Las cuentas inexistentes o desactivadas omitían bcrypt.
 
-- máximo configurable por entorno
-- ventana configurable por entorno
+### Presupuestos y ventanas
 
-Limitación conocida:
+Cada solicitud con correo y contraseña válidos en formato reserva una oportunidad del correo normalizado y otra del presupuesto general antes de consultar la cuenta o ejecutar bcrypt. El primer intento admitido abre una ventana fija e independiente para cada presupuesto. La fecha se calcula con el reloj de PostgreSQL. Una vez verificada la contraseña de una cuenta activa, se devuelve únicamente la oportunidad reservada en la ventana del correo antes de revalidar y emitir la sesión. El presupuesto general contabiliza todo intento admitido. Una solicitud limitada conserva ambos contadores y sus fechas de vencimiento, de modo que insistir durante el bloqueo no lo prolonga.
 
-- No es distribuido entre múltiples instancias.
-- Se reinicia al reiniciar el proceso.
+| Presupuesto | Valores predeterminados | Finalidad |
+| --- | --- | --- |
+| Correo normalizado | 5 intentos en 15 minutos | Contener intentos dirigidos al mismo correo, aunque se distribuyan entre conexiones. El sexto intento dentro de la ventana se limita. |
+| General | 600 intentos en 15 minutos | Contener intentos dirigidos a muchos correos y acotar el trabajo de bcrypt admitido y la creación de filas. El umbral deja margen para logins ordinarios de identidades distintas. |
+
+Todas las instancias deben compartir PostgreSQL, el secreto HMAC y los valores de configuración. El presupuesto del correo se admite entre 1 y 100 intentos y la duración de ambas ventanas entre 1 y 60 minutos. [Variables de entorno](../README.md#variables-de-entorno)
+
+### Origen y privacidad
+
+El despliegue del repositorio carece de un contrato de proxy que acredite la IP del cliente. Los presupuestos son independientes de `X-Forwarded-For`, `X-Real-IP`, `Forwarded`, `User-Agent` y demás cabeceras del navegador. El agente de usuario sigue siendo metadato opcional de la sesión emitida. Cualquier política futura por IP exige verificar que el backend es inaccesible sin el proxy y que este sobrescribe las cabeceras de origen, con una regla explícita para cada salto y para listas de direcciones.
+
+El limitador guarda la clave derivada por HMAC-SHA-256, el contador y el vencimiento. Una fila con clave fija corresponde al presupuesto general. Los correos en claro, las contraseñas y sus hashes, los tokens y las cabeceras quedan fuera de la tabla. El secreto de 32 bytes se distribuye por la configuración del servidor. Rotarlo de forma coordinada cambia las claves por correo y reinicia esos presupuestos para los intentos posteriores. Las filas previas caducan y se limpian en el ciclo habitual. La fila general conserva su ventana. Los errores inesperados registran solo el lugar y el tipo de error.
+
+### Respuestas y disponibilidad
+
+- La entrada malformada o demasiado larga recibe «Credenciales inválidas.» antes de consultar PostgreSQL o ejecutar bcrypt. Se acota el correo bruto a 1024 caracteres y se conserva el formato de las contraseñas existentes.
+- Los correos desconocidos, las cuentas desactivadas y las contraseñas incorrectas reciben el mismo mensaje. Los dos primeros ejecutan una comparación con un hash bcrypt ficticio del coste actual y siempre se rechazan. Esto reduce diferencias observables de trabajo. El acceso a datos y los hashes históricos pueden producir variaciones de tiempo.
+- Una solicitud limitada recibe «Demasiados intentos. Inténtalo más tarde.». El mismo criterio se aplica a correos existentes y desconocidos. La respuesta omite los contadores.
+- Si PostgreSQL falla al comprobar o actualizar el presupuesto o la configuración del limitador es inválida, el login se detiene y muestra un error temporal. Un intento fallido conserva la cookie de una sesión previa. La consulta de sesión y el logout siguen usando su acceso habitual a PostgreSQL sin pasar por el limitador.
+
+Un abuso sostenido puede agotar repetidamente el presupuesto de un correo conocido, o el presupuesto general mediante muchas identidades, y retrasar accesos legítimos. La respuesta de limitación puede reflejar fallos anteriores o intentos simultáneos de una identidad. Para activar el control compartido, aplica primero la migración aditiva `0014`, configura la misma clave en todas las instancias y dirige el tráfico a instancias que ejecuten esta versión. [Persistencia y concurrencia](architecture.md#presupuestos-de-login-en-postgresql) · [Pruebas](testing.md#incremento-107--presupuesto-compartido-de-login)
 
 ## Creación inicial del superadministrador
 

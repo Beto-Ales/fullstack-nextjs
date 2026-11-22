@@ -10,17 +10,11 @@ import {
   TOO_MANY_ATTEMPTS_MESSAGE,
 } from "@/src/application/auth/errors";
 import { logger } from "@/src/infrastructure/logger";
-import { clearSessionCookie, setSessionCookie } from "@/src/interfaces/auth/session";
+import { setSessionCookie } from "@/src/interfaces/auth/session";
 
 export type LoginActionState = {
   error?: string;
 };
-
-function getRequestSourceKey(forwardedFor: string | null, userAgent: string | null): string {
-  const ip = forwardedFor?.split(",")[0]?.trim() || "unknown-ip";
-  const ua = userAgent || "unknown-ua";
-  return `${ip}:${ua}`;
-}
 
 export async function loginAction(_prevState: LoginActionState, formData: FormData): Promise<LoginActionState> {
   const email = formData.get("email");
@@ -31,35 +25,34 @@ export async function loginAction(_prevState: LoginActionState, formData: FormDa
     return { error: INVALID_CREDENTIALS_MESSAGE };
   }
 
-  const headerStore = await headers();
-  const userAgent = headerStore.get("user-agent");
-  const forwardedFor = headerStore.get("x-forwarded-for");
-
   let redirectTo: string;
   try {
+    const userAgent = (await headers()).get("user-agent");
     const { authenticateUser } = await import("@/src/application/auth/auth-service");
     const authResult = await authenticateUser({
       email,
       password,
       returnTo: typeof returnTo === "string" ? returnTo : undefined,
-      sourceKey: getRequestSourceKey(forwardedFor, userAgent),
       userAgent: userAgent ?? undefined,
     });
 
     await setSessionCookie(authResult.sessionToken, authResult.sessionExpiresAt);
     redirectTo = authResult.redirectTo;
   } catch (error) {
-    await clearSessionCookie();
     if (error instanceof AuthServiceError) {
       if (error.code === "too_many_attempts") {
         return { error: TOO_MANY_ATTEMPTS_MESSAGE };
       }
       return { error: INVALID_CREDENTIALS_MESSAGE };
     }
-    logger.error("Login action failed unexpectedly.", {
-      location: "app/login/actions.ts",
-      type: error instanceof Error ? error.name : "unknown",
-    });
+    try {
+      logger.error("Login action failed unexpectedly.", {
+        location: "app/login/actions.ts",
+        type: error instanceof Error ? error.name : "unknown",
+      });
+    } catch {
+      console.error("Login action failed unexpectedly.");
+    }
     return { error: AUTH_SERVICE_UNAVAILABLE_MESSAGE };
   }
 
