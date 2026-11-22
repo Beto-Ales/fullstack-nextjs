@@ -154,7 +154,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic regulation (pos
     });
     if (!("cancellationId" in originalCancellation)) throw new Error("Expected an ordinary cancellation");
 
-    await creditService.grantManualCredits(admin, { studentProfileId: profileId, amount: 3, reason: "Test credits" });
+    await creditService.grantManualCredits(admin, { requestId: randomUUID(), studentProfileId: profileId, amount: 3, reason: "Test credits" });
     const booking = await recoveryService.reserveRecovery(student, { classSessionId: oldSessionId });
     const before = await recoveryService.getRecoveryHistory(student);
     const originalLedger = (await creditService.getCreditOverview(student)).history;
@@ -256,7 +256,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic regulation (pos
     const recoverySession = await createSession("2030-04-13");
     const booking = await recoveryService.reserveRecovery(student, { classSessionId: recoverySession });
     expect(booking.consumedFromGrantMovementId).toBe(grant.id);
-    await creditService.grantManualCredits(admin, { studentProfileId: profileId, amount: 1, reason: "Independent credit" });
+    await creditService.grantManualCredits(admin, { requestId: randomUUID(), studentProfileId: profileId, amount: 1, reason: "Independent credit" });
 
     vi.setSystemTime(new Date("2030-10-02T10:00:00Z"));
     const overview = await creditService.getCreditOverview(student);

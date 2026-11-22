@@ -45,6 +45,187 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("credits integration (pos
     }
   });
 
+  async function seedManualAccount(role: "SUPER_ADMIN" | "STUDENT" = "STUDENT") {
+    const userId = randomUUID();
+    const studentProfileId = randomUUID();
+    await client.query(
+      "insert into users (id, email, email_normalized, password_hash, role) values ($1, $2, $2, 'hash', $3)",
+      [userId, `${userId}@example.com`, role],
+    );
+    if (role === "STUDENT") {
+      await client.query("insert into student_profiles (id, user_id, first_name, last_name) values ($1, $2, 'Test', 'Student')",
+        [studentProfileId, userId]);
+    }
+    return { userId, role, studentProfileId };
+  }
+
+  async function movementsForRequest(requestId: string) {
+    const { rows } = await client.query(`select id, student_profile_id, admin_user_id, amount, reason, movement_type,
+      class_session_id, source_grant_movement_id, created_at from credit_ledger_movements
+      where manual_request_id = $1 order by id`, [requestId]);
+    return rows;
+  }
+
+  async function withBlockedProfile<T>(studentProfileId: string, start: () => Promise<T>, sameRequest: boolean) {
+    const blocker = await createVerifiedTestClient();
+    let result: Promise<T> | undefined;
+    try {
+      const { rows: [{ pid }] } = await blocker.query<{ pid: number }>("select pg_backend_pid() as pid");
+      await blocker.query("begin");
+      await blocker.query("select id from student_profiles where id = $1 for update", [studentProfileId]);
+      result = start();
+      void result.catch(() => {});
+      await expect.poll(async () => {
+        const { rows: [waiters] } = await client.query<{ profile: number; blockedDirectly: boolean; request: number }>(`
+          with activity as (
+            select pid, query, pg_blocking_pids(pid) as waits_for from pg_stat_activity
+            where datname = current_database() and state = 'active'
+          ), waiting_on_profile as (
+            select pid, waits_for from activity where cardinality(waits_for) > 0 and query like '%from student_profiles%'
+          )
+          select (select count(*)::int from waiting_on_profile) as profile,
+            exists(select 1 from waiting_on_profile where $1 = any(waits_for)) as "blockedDirectly",
+            (count(*) filter (where query like 'insert into "manual_credit_adjustment_requests"%'
+              and waits_for && array(select pid from waiting_on_profile)))::int as request
+          from activity`, [pid]);
+        return waiters;
+      }, { timeout: 3_000 }).toEqual(sameRequest ? { profile: 1, blockedDirectly: true, request: 1 }
+        : { profile: 2, blockedDirectly: true, request: 0 });
+    } finally {
+      try {
+        await blocker.query("rollback");
+      } finally {
+        await blocker.end();
+      }
+      await result?.catch(() => {});
+    }
+    return result!;
+  }
+
+  it("persists one normalized grant and returns its original result after replay", async () => {
+    const { studentProfileId } = await seedManualAccount();
+    const input = { requestId: randomUUID(), studentProfileId, amount: 2, reason: "  Corrección inicial  " };
+    const original = await service.grantManualCredits(adminActor, input);
+    await expect(service.grantManualCredits(adminActor, { ...input, reason: "Corrección inicial" })).resolves.toEqual(original);
+    await expect(movementsForRequest(input.requestId)).resolves.toEqual([expect.objectContaining({ id: original.movementId,
+      student_profile_id: studentProfileId, admin_user_id: adminActor.userId, reason: "Corrección inicial", amount: 2,
+      movement_type: "MANUAL_GRANT", created_at: expect.any(Date) })]);
+    const second = await service.grantManualCredits(adminActor, { ...input, requestId: randomUUID() });
+    expect(second.movementId).not.toBe(original.movementId);
+    await expect(service.getCreditOverview(adminActor, { studentProfileId })).resolves.toMatchObject({ availableCredits: 4 });
+    await expect(client.query(`insert into manual_credit_adjustment_requests select * from manual_credit_adjustment_requests where id = $1`,
+      [input.requestId])).rejects.toMatchObject({ code: "23505" });
+  });
+
+  it("rejects changed quantity, student, reason, session, kind or administrator without disclosing the result", async () => {
+    const { studentProfileId } = await seedManualAccount();
+    const otherStudent = await seedManualAccount();
+    const otherAdmin = await seedManualAccount("SUPER_ADMIN");
+    const { rows: [session] } = await client.query(`insert into class_sessions
+      (id, local_date, starts_at_utc, ends_at_utc, max_capacity)
+      values ($1, current_date+1, now()+interval '1 day', now()+interval '25 hours', 12) returning id`, [randomUUID()]);
+    const input = { requestId: randomUUID(), studentProfileId, amount: 2, reason: "Ajuste original", classSessionId: session.id };
+    const original = await service.grantManualCredits(adminActor, input);
+    for (const changed of [{ amount: 1 }, { studentProfileId: otherStudent.studentProfileId }, { reason: "Otro motivo" },
+      { classSessionId: undefined }]) {
+      await expect(service.grantManualCredits(adminActor, { ...input, ...changed })).rejects.toMatchObject({ code: "manual_credit_request_conflict" });
+    }
+    await expect(service.withdrawManualCredits(adminActor, input)).rejects.toMatchObject({ code: "manual_credit_request_conflict" });
+    await expect(service.grantManualCredits(otherAdmin, input)).rejects.toMatchObject({ code: "manual_credit_request_conflict" });
+    await expect(movementsForRequest(input.requestId)).resolves.toEqual([expect.objectContaining({ id: original.movementId,
+      class_session_id: session.id, amount: 2 })]);
+    await expect(service.getCreditOverview(adminActor, { studentProfileId: otherStudent.studentProfileId }))
+      .resolves.toMatchObject({ availableCredits: 0 });
+  });
+
+  it("rechecks the role and current administrative status on replay and student eligibility on new requests", async () => {
+    const student = await seedManualAccount();
+    const input = { requestId: randomUUID(), studentProfileId: student.studentProfileId, amount: 1, reason: "Ajuste autorizado" };
+    await service.grantManualCredits(adminActor, input);
+    await expect(service.grantManualCredits(student, input)).rejects.toMatchObject({ code: "forbidden" });
+    await client.query("update users set status = 'DISABLED' where id = $1", [student.userId]);
+    await expect(service.grantManualCredits(adminActor, { ...input, requestId: randomUUID() })).rejects.toMatchObject({ code: "student_not_active" });
+    await client.query("update users set status = 'DISABLED' where id = $1", [adminActor.userId]);
+    await expect(service.grantManualCredits(adminActor, input)).rejects.toMatchObject({ code: "forbidden" });
+    await expect(movementsForRequest(input.requestId)).resolves.toHaveLength(1);
+  });
+
+  it("coalesces simultaneous grants while PostgreSQL holds the profile and the second connection waits on the request", async () => {
+    const { studentProfileId } = await seedManualAccount();
+    const input = { requestId: randomUUID(), studentProfileId, amount: 2, reason: "Concesión simultánea" };
+    const [first, second] = await withBlockedProfile(studentProfileId, () => Promise.all([
+      service.grantManualCredits(adminActor, input), service.grantManualCredits(adminActor, input),
+    ]), true);
+    expect(first).toEqual(second);
+    await expect(movementsForRequest(input.requestId)).resolves.toHaveLength(1);
+    await expect(service.getCreditOverview(adminActor, { studentProfileId })).resolves.toMatchObject({ availableCredits: 2 });
+  });
+
+  it("replays a concurrent multi-grant withdrawal and preserves historical credits and later intentional withdrawals", async () => {
+    const { studentProfileId } = await seedManualAccount();
+    const historicalId = randomUUID();
+    await client.query(`insert into credit_ledger_movements
+      (id, student_profile_id, movement_type, amount, created_at, reason, admin_user_id, source_grant_movement_id, idempotency_key)
+      values ($1, $2, 'MANUAL_GRANT', 1, '2025-01-01T10:00:00Z', 'Histórico', $3, $1, $1)`,
+    [historicalId, studentProfileId, adminActor.userId]);
+    const readHistorical = async () => (await client.query("select * from credit_ledger_movements where id = $1", [historicalId])).rows;
+    const historical = await readHistorical();
+    const newGrant = await service.grantManualCredits(adminActor, { requestId: randomUUID(), studentProfileId, amount: 3, reason: "Segundo crédito" });
+    const input = { requestId: randomUUID(), studentProfileId, amount: 2, reason: "Retirada de dos créditos" };
+    const [first, second] = await withBlockedProfile(studentProfileId, () => Promise.all([
+      service.withdrawManualCredits(adminActor, input), service.withdrawManualCredits(adminActor, input),
+    ]), true);
+    expect(first).toEqual(second);
+    await expect(service.withdrawManualCredits(adminActor, input)).resolves.toEqual(first);
+    expect(await movementsForRequest(input.requestId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ amount: 1, movement_type: "MANUAL_WITHDRAWAL", source_grant_movement_id: historicalId }),
+      expect.objectContaining({ amount: 1, movement_type: "MANUAL_WITHDRAWAL", source_grant_movement_id: newGrant.movementId }),
+    ]));
+    expect(first.movementIds).toHaveLength(2);
+    const next = await service.withdrawManualCredits(adminActor, { ...input, requestId: randomUUID() });
+    expect(next.movementIds).toHaveLength(1);
+    await expect(service.getCreditOverview(adminActor, { studentProfileId })).resolves.toMatchObject({ availableCredits: 0 });
+    expect(await readHistorical()).toEqual(historical);
+  });
+
+  it("rolls back a multi-grant withdrawal after a later movement fails and permits retry with the original key", async () => {
+    const { studentProfileId } = await seedManualAccount();
+    await client.query(`insert into credit_ledger_movements
+      (id, student_profile_id, movement_type, amount, created_at, reason, admin_user_id, source_grant_movement_id, idempotency_key)
+      values ($1, $3, 'MANUAL_GRANT', 1, '2025-01-01', 'Crédito anterior', $4, $1, $1),
+        ($2, $3, 'MANUAL_GRANT', 2, '2025-01-02', 'Crédito posterior', $4, $2, $2)`,
+    [randomUUID(), randomUUID(), studentProfileId, adminActor.userId]);
+    const input = { requestId: randomUUID(), studentProfileId, amount: 3, reason: "Retirada con fallo controlado" };
+    await client.query(`alter table credit_ledger_movements add constraint test_manual_rollback
+      check (movement_type <> 'MANUAL_WITHDRAWAL' or amount <> 2) not valid`);
+    try {
+      await expect(service.withdrawManualCredits(adminActor, input)).rejects.toMatchObject({ cause: { code: "23514" } });
+    } finally {
+      await client.query("alter table credit_ledger_movements drop constraint test_manual_rollback");
+    }
+    await expect(movementsForRequest(input.requestId)).resolves.toEqual([]);
+    expect((await client.query("select id from manual_credit_adjustment_requests where id = $1", [input.requestId])).rowCount).toBe(0);
+    await expect(service.getCreditOverview(adminActor, { studentProfileId })).resolves.toMatchObject({ availableCredits: 3 });
+    const result = await service.withdrawManualCredits(adminActor, input);
+    expect(result.movementIds).toHaveLength(2);
+  });
+
+  it("serializes a recovery and a manual withdrawal against the same last credit", async () => {
+    const student = await seedManualAccount();
+    const { studentProfileId } = student;
+    const sessionId = randomUUID();
+    await client.query(`insert into class_sessions (id, local_date, starts_at_utc, ends_at_utc, max_capacity)
+      values ($1, current_date+1, now()+interval '1 day', now()+interval '25 hours', 12)`, [sessionId]);
+    await service.grantManualCredits(adminActor, { requestId: randomUUID(), studentProfileId, amount: 1, reason: "Último crédito" });
+    const { reserveRecovery } = await import("@/src/application/recovery/recovery-service");
+    const results = await withBlockedProfile(studentProfileId, () => Promise.allSettled([
+      service.withdrawManualCredits(adminActor, { requestId: randomUUID(), studentProfileId, amount: 1, reason: "Retirada concurrente" }),
+      reserveRecovery(student, { classSessionId: sessionId }),
+    ]), false);
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    await expect(service.getCreditOverview(adminActor, { studentProfileId })).resolves.toMatchObject({ availableCredits: 0 });
+  });
+
   async function seedCancellationCandidate(cancelledAtIso: string) {
     const studentUserId = randomUUID();
     const studentProfileId = randomUUID();
@@ -201,6 +382,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("credits integration (pos
     );
 
     await service.grantManualCredits(adminActor, {
+      requestId: randomUUID(),
       studentProfileId,
       amount: 4,
       reason: "Seed for withdrawal test",
@@ -208,11 +390,13 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("credits integration (pos
 
     const results = await Promise.allSettled([
       service.withdrawManualCredits(adminActor, {
+        requestId: randomUUID(),
         studentProfileId,
         amount: 3,
         reason: "Withdrawal A",
       }),
       service.withdrawManualCredits(adminActor, {
+        requestId: randomUUID(),
         studentProfileId,
         amount: 3,
         reason: "Withdrawal B",
@@ -241,6 +425,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("credits integration (pos
     );
 
     await service.grantManualCredits(adminActor, {
+      requestId: randomUUID(),
       studentProfileId,
       amount: 1,
       reason: "Seed for rollback",
@@ -253,6 +438,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("credits integration (pos
 
     await expect(
       service.withdrawManualCredits(adminActor, {
+        requestId: randomUUID(),
         studentProfileId,
         amount: 2,
         reason: "Should fail",
@@ -283,6 +469,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("credits integration (pos
     );
 
     await service.grantManualCredits(adminActor, {
+      requestId: randomUUID(),
       studentProfileId,
       amount: 2,
       reason: "Valid audit movement",

@@ -136,7 +136,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (po
     }
     const credit = await import("@/src/application/credits/credit-service");
     const recovery = await import("@/src/application/recovery/recovery-service");
-    await credit.grantManualCredits(admin, { studentProfileId: departing.profileId, amount: 2, reason: "Withdrawal fixture" });
+    await credit.grantManualCredits(admin, { requestId: randomUUID(), studentProfileId: departing.profileId, amount: 2, reason: "Withdrawal fixture" });
     async function reserveMakeup(daysAhead: number) {
       const { classSessionId } = await academicService.createOneOffClassSession(admin, {
         localDate: today.plus({ days: daysAhead }).toISODate(), startsAtLocalTime: "18:00", durationMinutes: 60, maxCapacity: 1,
@@ -215,7 +215,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (po
       targetType: "weekly", targetId: templateId, studentProfileId: departing.profileId,
     })).rejects.toMatchObject({ code: "student_inactive" });
 
-    await credit.grantManualCredits(admin, { studentProfileId: recovering.profileId, amount: 1, reason: "Replacement recovery" });
+    await credit.grantManualCredits(admin, { requestId: randomUUID(), studentProfileId: recovering.profileId, amount: 1, reason: "Replacement recovery" });
     const filled = await recovery.reserveRecovery({ userId: recovering.userId, role: "STUDENT" }, { classSessionId: sessionIds[1] });
     expect(filled.consumedMovementId).toBeTruthy();
     expect(await enrollSubstitute()).toEqual({ reservedSessions: 2 });
@@ -338,7 +338,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (po
     const recovering = students[13];
     const creditService = await import("@/src/application/credits/credit-service");
     const recoveryService = await import("@/src/application/recovery/recovery-service");
-    await creditService.grantManualCredits(admin, { studentProfileId: recovering.profileId, amount: 1, reason: "Recovery eligibility fixture" });
+    await creditService.grantManualCredits(admin, { requestId: randomUUID(), studentProfileId: recovering.profileId, amount: 1, reason: "Recovery eligibility fixture" });
     const recoveringActor = { userId: recovering.userId, role: "STUDENT" as const };
     const reserved = await recoveryService.reserveRecovery(recoveringActor, { classSessionId: firstSession.id });
     expect(reserved.consumedMovementId).toBeTruthy();

@@ -222,7 +222,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("administrative enrollment in a 
   it("competes with recovery without consuming a credit for an ordinary booking or duplicating a makeup", async () => {
     const { reserveRecovery } = await import("@/src/application/recovery/recovery-service");
     const { grantManualCredits } = await import("@/src/application/credits/credit-service");
-    await grantManualCredits(admin, { studentProfileId: second.profileId, amount: 2, reason: "Prueba de concurrencia" });
+    await grantManualCredits(admin, { requestId: randomUUID(), studentProfileId: second.profileId, amount: 2, reason: "Prueba de concurrencia" });
     const id = await seedSession();
     const enrolled = await race([
       academic.enrollStudentInSession(admin, request(id)),

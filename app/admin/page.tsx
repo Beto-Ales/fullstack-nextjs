@@ -10,7 +10,6 @@ import { getAdminWeeklyOverview } from "@/src/application/academic/admin-calenda
 import { DEFAULT_CLASS_CAPACITY } from "@/src/domain/academic/constants";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { getCreditOverview } from "@/src/application/credits/credit-service";
-import { grantManualCreditsAction, withdrawManualCreditsAction } from "@/src/interfaces/credits/actions";
 import { redirect } from "next/navigation";
 import { getPublicErrorMessage } from "@/src/infrastructure/errors";
 import { getRecoveryHistory } from "@/src/application/recovery/recovery-service";
@@ -18,6 +17,7 @@ import Link from "next/link";
 import { AdminWeeklyCalendar } from "./weekly-calendar";
 import { AdminWeeklySummary } from "./weekly-summary";
 import { CourseAdministration } from "./course-administration";
+import { ManualCreditForm } from "./manual-credit-form";
 import { StudentAccountForm, StudentWithdrawalForm } from "./student-account-form";
 
 type AdminPageProps = {
@@ -47,43 +47,10 @@ async function createOneOffClassFormAction(formData: FormData) {
   redirect(`/admin?createdClassSession=${encodeURIComponent(classSessionId)}`);
 }
 
-async function grantCreditsFormAction(formData: FormData) {
-  "use server";
-
-  const studentProfileId = String(formData.get("studentProfileId") ?? "");
-  const amount = Number(formData.get("amount"));
-  const reason = String(formData.get("reason") ?? "");
-
-  try {
-    await grantManualCreditsAction({ studentProfileId, amount, reason });
-    redirect(`/admin?studentProfileId=${encodeURIComponent(studentProfileId)}`);
-  } catch (error) {
-    const message = getPublicErrorMessage(error);
-    redirect(`/admin?studentProfileId=${encodeURIComponent(studentProfileId)}&error=${encodeURIComponent(message)}`);
-  }
-}
-
-async function withdrawCreditsFormAction(formData: FormData) {
-  "use server";
-
-  const studentProfileId = String(formData.get("studentProfileId") ?? "");
-  const amount = Number(formData.get("amount"));
-  const reason = String(formData.get("reason") ?? "");
-
-  try {
-    await withdrawManualCreditsAction({ studentProfileId, amount, reason });
-    redirect(`/admin?studentProfileId=${encodeURIComponent(studentProfileId)}`);
-  } catch (error) {
-    const message = getPublicErrorMessage(error);
-    redirect(`/admin?studentProfileId=${encodeURIComponent(studentProfileId)}&error=${encodeURIComponent(message)}`);
-  }
-}
-
 export default async function AdminHomePage({ searchParams }: AdminPageProps) {
   const user = await requireRole("SUPER_ADMIN");
   const query = (await searchParams) ?? {};
   const selectedStudentProfileId = typeof query.studentProfileId === "string" ? query.studentProfileId : undefined;
-  const errorMessage = typeof query.error === "string" ? query.error : undefined;
   const classCreationError = typeof query.classCreationError === "string" ? query.classCreationError : undefined;
   const createdClassSessionId = typeof query.createdClassSession === "string" ? query.createdClassSession : undefined;
   const overview = await getAdminWeeklyOverview(user, query.week);
@@ -178,11 +145,6 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
         )}
       </section>
       <h2>Créditos</h2>
-      {errorMessage ? (
-        <p role="alert" aria-live="polite">
-          {errorMessage}
-        </p>
-      ) : null}
       <form method="get">
         <label htmlFor="studentProfileId">Alumno</label>
         <select id="studentProfileId" name="studentProfileId" defaultValue={selectedStudentProfileId}>
@@ -202,25 +164,14 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
           <p>Caducados: {creditOverview.expiredCredits}</p>
           <p>Total concedidos: {creditOverview.totalCreditsGranted}</p>
 
-          <h3>Conceder créditos manualmente</h3>
-          <form action={grantCreditsFormAction}>
-            <input type="hidden" name="studentProfileId" value={creditOverview.studentProfileId} />
-            <label htmlFor="grant-amount">Cantidad</label>
-            <input id="grant-amount" type="number" name="amount" min={1} required />
-            <label htmlFor="grant-reason">Motivo</label>
-            <input id="grant-reason" type="text" name="reason" minLength={3} required />
-            <button type="submit">Conceder</button>
-          </form>
-
-          <h3>Retirar créditos manualmente</h3>
-          <form action={withdrawCreditsFormAction}>
-            <input type="hidden" name="studentProfileId" value={creditOverview.studentProfileId} />
-            <label htmlFor="withdraw-amount">Cantidad</label>
-            <input id="withdraw-amount" type="number" name="amount" min={1} required />
-            <label htmlFor="withdraw-reason">Motivo</label>
-            <input id="withdraw-reason" type="text" name="reason" minLength={3} required />
-            <button type="submit">Retirar</button>
-          </form>
+          {activeStudents.some(({ id }) => id === creditOverview.studentProfileId) ? (
+            <>
+              <ManualCreditForm key={`grant:${creditOverview.studentProfileId}`} kind="grant"
+                studentProfileId={creditOverview.studentProfileId} adminUserId={user.userId} />
+              <ManualCreditForm key={`withdraw:${creditOverview.studentProfileId}`} kind="withdraw"
+                studentProfileId={creditOverview.studentProfileId} adminUserId={user.userId} />
+            </>
+          ) : <p>Los ajustes requieren una cuenta de alumno activa.</p>}
 
           <h3>Historial de movimientos</h3>
           <ul>

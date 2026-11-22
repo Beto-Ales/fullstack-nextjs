@@ -1,18 +1,18 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { and, desc, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 
 import { settlePendingCancellations } from "@/src/application/academic/cancellation-sequence-service";
-import { creditStudentQuerySchema, manualCreditGrantSchema, manualCreditWithdrawSchema } from "@/src/application/credits/schemas";
+import { creditStudentQuerySchema, manualCreditAdjustmentSchema } from "@/src/application/credits/schemas";
 import { INITIAL_REGULATION } from "@/src/domain/academic/regulation";
 import { type UserRole } from "@/src/domain/auth/roles";
 import { listAvailableFifoBuckets, pickNextFifoBucket, type FifoBucket } from "@/src/domain/credits/fifo";
 import { calculateAutoCreditExpiration, getCenterMonthUtcWindow } from "@/src/domain/credits/ledger";
 import { db } from "@/src/infrastructure/db/client";
-import { academicRegulations, classReservations, classSessions, classTemplates, creditLedgerMovements, reservationCancellations, studentProfiles } from "@/src/infrastructure/db/schema";
+import { academicRegulations, classReservations, classSessions, classTemplates, creditLedgerMovements, manualCreditAdjustmentRequests, reservationCancellations, studentProfiles, users } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
 
 type Actor = {
@@ -696,13 +696,59 @@ export async function getLedgerIntegrityReport(actor: Actor, input?: unknown): P
   });
 }
 
-export async function grantManualCredits(actor: Actor, input: unknown) {
+type ManualCreditAdjustment = ReturnType<typeof manualCreditAdjustmentSchema.parse>;
+
+async function applyManualCreditRequest(
+  actor: Actor,
+  input: unknown,
+  kind: "MANUAL_GRANT" | "MANUAL_WITHDRAWAL",
+  adjust: (tx: TransactionClient, payload: ManualCreditAdjustment) => Promise<string[]>,
+) {
   requireSuperAdmin(actor);
-  const payload = manualCreditGrantSchema.parse(input);
+  const payload = manualCreditAdjustmentSchema.parse(input);
+  const { requestId, studentProfileId, classSessionId, amount, reason } = payload;
+  const payloadHash = createHash("sha256")
+    .update(JSON.stringify([kind, studentProfileId, amount, reason, classSessionId ?? null]))
+    .digest("hex");
 
   return db.transaction(async (tx) => {
-    await lockStudentProfile(tx, payload.studentProfileId);
+    const [admin] = await tx.select({ id: users.id }).from(users)
+      .where(and(eq(users.id, actor.userId), eq(users.role, "SUPER_ADMIN"), eq(users.status, "ACTIVE")))
+      .for("share");
+    if (!admin) throw new ApplicationError("Acceso restringido a la administración.", "forbidden", 403, true);
 
+    // A replay waits on the request key before taking any profile or session lock.
+    const [claim] = await tx.insert(manualCreditAdjustmentRequests)
+      .values({ id: requestId, adminUserId: admin.id, payloadHash })
+      .onConflictDoNothing({ target: manualCreditAdjustmentRequests.id })
+      .returning({ id: manualCreditAdjustmentRequests.id });
+    if (!claim) {
+      const [original] = await tx.select().from(manualCreditAdjustmentRequests)
+        .where(eq(manualCreditAdjustmentRequests.id, requestId));
+      if (original?.adminUserId !== admin.id || original.payloadHash !== payloadHash) {
+        throw new ApplicationError("La solicitud ya está en uso. Revisa el historial antes de iniciar otro ajuste.", "manual_credit_request_conflict", 409, true);
+      }
+      const movements = await tx.select({ id: creditLedgerMovements.id }).from(creditLedgerMovements)
+        .where(eq(creditLedgerMovements.manualRequestId, requestId));
+      if (!movements.length) throw new ApplicationError("Missing manual credit result", "manual_credit_result_missing");
+      return movements.map(({ id }) => id).sort();
+    }
+
+    await lockStudentProfile(tx, studentProfileId);
+    const [student] = await tx.select({ id: users.id }).from(studentProfiles)
+      .innerJoin(users, eq(studentProfiles.userId, users.id))
+      .where(and(eq(studentProfiles.id, studentProfileId), eq(users.role, "STUDENT"), eq(users.status, "ACTIVE")));
+    if (!student) throw new ApplicationError("El alumno debe tener una cuenta activa.", "student_not_active", 409, true);
+    if (classSessionId) {
+      const [session] = await tx.select({ id: classSessions.id }).from(classSessions).where(eq(classSessions.id, classSessionId));
+      if (!session) throw new ApplicationError("No se encontró la sesión asociada.", "session_not_found", 404, true);
+    }
+    return (await adjust(tx, payload)).sort();
+  });
+}
+
+export async function grantManualCredits(actor: Actor, input: unknown) {
+  const [movementId] = await applyManualCreditRequest(actor, input, "MANUAL_GRANT", async (tx, payload) => {
     const movementId = randomUUID();
     await tx.insert(creditLedgerMovements).values({
       id: movementId,
@@ -716,25 +762,23 @@ export async function grantManualCredits(actor: Actor, input: unknown) {
       adminUserId: actor.userId,
       sourceGrantMovementId: movementId,
       idempotencyKey: `manual-grant:${movementId}`,
+      manualRequestId: payload.requestId,
     });
 
-    return { movementId };
+    return [movementId];
   });
+  return { movementId };
 }
 
 export async function withdrawManualCredits(actor: Actor, input: unknown) {
-  requireSuperAdmin(actor);
-  const payload = manualCreditWithdrawSchema.parse(input);
-
-  return db.transaction(async (tx) => {
-    await lockStudentProfile(tx, payload.studentProfileId);
+  const movementIds = await applyManualCreditRequest(actor, input, "MANUAL_WITHDRAWAL", async (tx, payload) => {
     const now = new Date();
     await materializeExpiredCredits(tx, payload.studentProfileId, now);
 
     const rows = await readLedgerRows(tx, payload.studentProfileId);
     const buckets = listAvailableFifoBuckets(buildCreditBuckets(rows), now);
     if (payload.amount > buckets.reduce((sum, bucket) => sum + bucket.availableUnits, 0)) {
-      throw new ApplicationError("Cannot withdraw more credits than available.", "insufficient_credits", 409, true);
+      throw new ApplicationError("El alumno no tiene suficientes créditos disponibles.", "insufficient_credits", 409, true);
     }
 
     let remaining = payload.amount;
@@ -760,16 +804,18 @@ export async function withdrawManualCredits(actor: Actor, input: unknown) {
         adminUserId: actor.userId,
         sourceGrantMovementId: bucket.grantMovementId,
         idempotencyKey: `manual-withdraw:${movementId}`,
+        manualRequestId: payload.requestId,
       });
       movementIds.push(movementId);
       remaining -= toWithdraw;
     }
 
     if (remaining > 0) {
-      throw new ApplicationError("Cannot withdraw more credits than available.", "insufficient_credits", 409, true);
+      throw new ApplicationError("El alumno no tiene suficientes créditos disponibles.", "insufficient_credits", 409, true);
     }
 
-    return { movementIds };
+    return movementIds;
   });
+  return { movementIds };
 }
 

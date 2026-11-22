@@ -151,7 +151,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("administrative capacity 
 
   it.each(["ORDINARY", "MAKEUP"] as const)("shares the last spot with a concurrent %s reservation", async (origin) => {
     const id = await seedSession();
-    if (origin === "MAKEUP") await credits.grantManualCredits(admin, { studentProfileId: profileId, amount: 1, reason: "Crédito de prueba" });
+    if (origin === "MAKEUP") await credits.grantManualCredits(admin, { requestId: randomUUID(), studentProfileId: profileId, amount: 1, reason: "Crédito de prueba" });
     const booking = origin === "ORDINARY"
       ? academic.createReservation(admin, { classSessionId: id, studentProfileId: profileId, origin })
       : recovery.reserveRecovery(student, { classSessionId: id, idempotencyKey: randomUUID() });
@@ -219,7 +219,7 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("administrative capacity 
     const { reservationId } = await academic.createReservation(admin, { classSessionId: id, studentProfileId: profileId, origin: "ORDINARY" });
     await academic.cancelReservation(student, { reservationId });
     await expectAvailability(id, 0, 0, 1);
-    await credits.grantManualCredits(admin, { studentProfileId: profileId, amount: 1, reason: "Crédito de prueba" });
+    await credits.grantManualCredits(admin, { requestId: randomUUID(), studentProfileId: profileId, amount: 1, reason: "Crédito de prueba" });
     await recovery.reserveRecovery(student, { classSessionId: id, idempotencyKey: randomUUID() });
     const detail = await expectAvailability(id, 0, 1, 0);
     expect(detail.cancellations).toMatchObject([{ reservationId }]);

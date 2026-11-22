@@ -1,8 +1,9 @@
-import { boolean, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, check, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 import { classReservations } from "@/src/infrastructure/db/schema/class-reservations";
 import { classSessions } from "@/src/infrastructure/db/schema/class-sessions";
+import { manualCreditAdjustmentRequests } from "@/src/infrastructure/db/schema/manual-credit-adjustment-requests";
 import { reservationCancellations } from "@/src/infrastructure/db/schema/reservation-cancellations";
 import { studentProfiles } from "@/src/infrastructure/db/schema/student-profiles";
 import { users } from "@/src/infrastructure/db/schema/users";
@@ -40,11 +41,15 @@ export const creditLedgerMovements = pgTable(
     sourceMovementId: text("source_movement_id"),
     refundRestoredCredit: boolean("refund_restored_credit"),
     idempotencyKey: text("idempotency_key").notNull(),
+    manualRequestId: uuid("manual_request_id").references(() => manualCreditAdjustmentRequests.id),
     regulationVersionId: text("regulation_version_id").references(() => academicRegulations.id),
   },
   (table) => [
     index("credit_ledger_student_created_idx").on(table.studentProfileId, table.createdAt),
     index("credit_ledger_expires_idx").on(table.expiresAt),
+    index("credit_ledger_manual_request_idx").on(table.manualRequestId).where(sql`${table.manualRequestId} is not null`),
+    check("credit_ledger_manual_request_type_check",
+      sql`${table.manualRequestId} is null or ${table.movementType} in ('MANUAL_GRANT', 'MANUAL_WITHDRAWAL')`),
     uniqueIndex("credit_ledger_idempotency_key_unique_idx").on(table.idempotencyKey),
     uniqueIndex("credit_ledger_auto_cancellation_unique_idx")
       .on(table.sourceCancellationId)

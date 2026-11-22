@@ -134,6 +134,12 @@ En `/admin`, el formulario **Crear clase única** solicita fecha, hora de inicio
   - `source_movement_id` (consumo origen de una devolución),
   - `refund_restored_credit` (si la devolución restaura saldo o solo deja auditoría).
 
+### Solicitudes de ajustes manuales de créditos
+
+Un `SUPER_ADMIN` activo puede conceder y retirar créditos de alumnos activos. Los nuevos ajustes requieren un UUID de solicitud. La identidad de la solicitud vincula el administrador con el tipo de ajuste, el perfil, la cantidad, el motivo normalizado en NFC y sin espacios en los extremos, y la sesión opcional. Una repetición idéntica devuelve el ajuste confirmado. Reutilizar la clave con otros datos o como otro administrador genera un conflicto sin devolver movimientos ajenos.
+
+La migración `0013_manual_credit_adjustment_requests` añade una tabla con la clave de solicitud y un enlace opcional desde el ledger. Una concesión genera un movimiento. Una retirada puede generar varios, uno por crédito de origen consumido. La solicitud, sus movimientos y las caducidades que corresponda materializar en una retirada se confirman juntos. Los movimientos anteriores conservan sus datos y carecen de enlace a una solicitud nueva.
+
 ## Generación de sesiones recurrentes
 
 Servicio en `src/application/academic/academic-service.ts`:

@@ -5,6 +5,7 @@ export * from "@/src/infrastructure/db/schema/class-session-edits";
 export * from "@/src/infrastructure/db/schema/class-sessions";
 export * from "@/src/infrastructure/db/schema/class-templates";
 export * from "@/src/infrastructure/db/schema/credit-ledger";
+export * from "@/src/infrastructure/db/schema/manual-credit-adjustment-requests";
 export * from "@/src/infrastructure/db/schema/reservation-attendance-records";
 export * from "@/src/infrastructure/db/schema/reservation-cancellations";
 export * from "@/src/infrastructure/db/schema/session-capacity-blocks";

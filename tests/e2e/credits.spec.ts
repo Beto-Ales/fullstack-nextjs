@@ -247,6 +247,96 @@ test.describe("credits flows", () => {
     });
   });
 
+  test("confirms manual adjustments and replays a committed request after a lost response at 360px", async ({ page, browser, baseURL }) => {
+    await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+      await withCreditsAccount("STUDENT", async (student) => {
+        const profileId = randomUUID();
+        await student.client.query(`insert into student_profiles (id, user_id, first_name, last_name)
+          values ($1, $2, 'Ajuste', 'Manual')`, [profileId, student.userId]);
+        const panel = `/admin?studentProfileId=${profileId}`;
+        const ledger = () => student.client.query(`select amount, movement_type, manual_request_id, reason
+          from credit_ledger_movements where student_profile_id = $1 order by created_at, id`, [profileId]);
+        const storageKey = `manual-credit:${admin.userId}:${profileId}:grant`;
+        await page.setViewportSize({ width: 360, height: 800 });
+        await login(page, admin.email, admin.password);
+        await expect(page).toHaveURL(/\/admin$/, { timeout: 15_000 });
+        await page.goto(panel);
+
+        const grant = page.locator("form").filter({ has: page.locator("#grant-amount") });
+        const withdraw = page.locator("form").filter({ has: page.locator("#withdraw-amount") });
+        await grant.getByLabel("Cantidad").fill("2");
+        await grant.getByLabel("Motivo").fill("  a  ");
+        await grant.getByRole("button", { name: "Conceder" }).press("Enter");
+        await expect(grant.getByRole("alert")).toHaveText("El motivo debe tener entre 3 y 300 caracteres.");
+        expect((await ledger()).rowCount).toBe(0);
+
+        let completedRequest: Request | undefined;
+        await page.route("**/admin?studentProfileId=*", async (route) => {
+          const request = route.request();
+          if (!completedRequest && request.method() === "POST" && request.headers()["next-action"]) {
+            completedRequest = request;
+            // Commit on the server, then lose the response at the browser boundary.
+            await route.fetch({ maxRetries: 0 });
+            await route.abort();
+          } else {
+            await route.continue();
+          }
+        });
+        await grant.getByLabel("Motivo").fill("Concesión de prueba");
+        await grant.getByLabel("Motivo").press("Tab");
+        await expect(grant.getByRole("button", { name: "Conceder" })).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(grant.getByRole("alert")).toHaveText("No se pudo confirmar el resultado. Reintenta esta misma solicitud.");
+        const firstRows = (await ledger()).rows;
+        expect(firstRows).toEqual([expect.objectContaining({ amount: 2, movement_type: "MANUAL_GRANT" })]);
+        expect(await page.evaluate((key) => sessionStorage.getItem(key), storageKey)).toBe(firstRows[0].manual_request_id);
+        await grant.getByRole("button", { name: "Reintentar" }).press("Enter");
+        await expect(grant.getByRole("status")).toHaveText("Concesión de créditos confirmada.");
+        await expect(grant.getByRole("alert")).toHaveCount(0);
+        await expect(page.getByText("Disponibles: 2", { exact: true })).toBeVisible();
+        await expect(page.getByRole("listitem").filter({ hasText: "Concesión de prueba" })).toHaveCount(1);
+        expect((await ledger()).rows).toEqual(firstRows);
+
+        await page.evaluate(({ key, id }) => sessionStorage.setItem(key, id), { key: storageKey, id: firstRows[0].manual_request_id });
+        await grant.getByLabel("Cantidad").fill("3");
+        await grant.getByLabel("Motivo").fill("Concesión de prueba");
+        await grant.getByRole("button", { name: "Conceder" }).press("Enter");
+        await expect(grant.getByRole("alert")).toContainText("La solicitud ya está en uso.");
+        expect((await ledger()).rows).toEqual(firstRows);
+
+        await withdraw.getByLabel("Cantidad").fill("3");
+        await withdraw.getByLabel("Motivo").fill("Retirada de prueba");
+        await withdraw.getByRole("button", { name: "Retirar" }).press("Enter");
+        await expect(withdraw.getByRole("alert")).toHaveText("El alumno no tiene suficientes créditos disponibles.");
+        expect((await ledger()).rows).toEqual(firstRows);
+        await withdraw.getByLabel("Cantidad").fill("1");
+        await withdraw.getByRole("button", { name: "Retirar" }).press("Enter");
+        await expect(withdraw.getByRole("status")).toHaveText("Retirada de créditos confirmada.");
+        await expect(withdraw.getByRole("alert")).toHaveCount(0);
+        await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+        await expect(page.getByRole("listitem").filter({ hasText: "Retirada de prueba" })).toHaveCount(1);
+
+        const studentContext = await browser.newContext({ baseURL });
+        try {
+          const studentPage = await studentContext.newPage();
+          await login(studentPage, student.email, student.password);
+          await expect(studentPage).toHaveURL(/\/student$/);
+          await studentPage.goto(panel);
+          await expect(studentPage).toHaveURL(/\/student$/);
+          const request = completedRequest!;
+          const headers = request.headers();
+          const response = await studentPage.request.post(panel, { headers: {
+            "next-action": headers["next-action"], "content-type": headers["content-type"], origin: new URL(request.url()).origin,
+          }, data: request.postDataBuffer()! });
+          expect(response.headers()["x-action-redirect"]).toContain("/student");
+          expect((await ledger()).rowCount).toBe(2);
+        } finally {
+          await studentContext.close();
+        }
+      });
+    });
+  });
+
   test("shows a pending cancellation on mobile and grants it only after the earlier absence is recorded", async ({ page, browser, baseURL }) => {
     await withCreditsAccount("SUPER_ADMIN", async (admin) => {
       await withCreditsAccount("STUDENT", async (student) => {

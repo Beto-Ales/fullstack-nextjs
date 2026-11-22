@@ -378,6 +378,13 @@ npm.cmd run test:e2e -- --workers=1
 - Ejecutar sobre bases TEST desechables separadas con el journal existente hasta `0012`. El resumen usa consultas de solo lectura y conserva la normativa publicada del entorno.
 - El 22 de noviembre de 2026 pasaron **209 pruebas de Vitest**, incluidas **5 nuevas de integración**, y **36 pruebas de Chromium sin reintentos** en PostgreSQL **15.20**. La suite completa omitió el caso de crédito pendiente al estar vigente la regla anterior. Ese caso pasó por separado en la base TEST desechable del 9.10, que ya tenía una versión de prueba activa. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes.
 
+### Incremento 10.2 — Ajustes manuales de créditos
+
+- [Integración PostgreSQL](../src/application/credits/credit-service.integration.test.ts). Comprueba normalización, identidad, autorización vigente, unicidad, histórico, retiros de varias concesiones y rollback de una retirada parcial. Los casos concurrentes mantienen el perfil bloqueado desde una conexión independiente y comprueban las esperas de PostgreSQL antes de liberarlo.
+- [Chromium](../tests/e2e/credits.spec.ts). Comprueba la confirmación tras guardar, la recuperación de una respuesta perdida, el conflicto por una solicitud anterior, los errores de validación y saldo, el acceso por rol y la interacción por teclado a 360 px.
+- Ejecutar en PostgreSQL 15 con el journal hasta `0013` en bases desechables verificadas. Pasar la conexión explícitamente en `TEST_DATABASE_URL` para evitar la alternativa a DEV en Playwright y usar `--maxWorkers=1` en Vitest. La regresión de créditos pendientes del 9.10 requiere el escenario de normativa revisada en su base desechable.
+- En PostgreSQL **15.20** pasaron **45 pruebas focalizadas** y **216 pruebas de Vitest** en la suite completa. Chromium pasó **37 casos** en la suite completa con la normativa anterior. El único caso omitido, de créditos pendientes, pasó por separado con una versión sintética de la normativa revisada. Se comprobó la actualización `0012` → `0013` en otra base desechable con un movimiento histórico sintético que conservó todos sus valores originales. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:
