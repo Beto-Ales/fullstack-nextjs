@@ -7,7 +7,7 @@ import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/
 type Connection = Awaited<ReturnType<typeof createVerifiedTestClient>>;
 type Entry = "generic" | "detail" | "recovery";
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("H06 reservation admission (postgres)", () => {
+describe("H06 reservation admission (postgres)", () => {
   let client: Connection;
   let academic: typeof import("./academic-service");
   let recovery: typeof import("@/src/application/recovery/recovery-service");

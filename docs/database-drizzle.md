@@ -50,20 +50,13 @@
 
 ### Reglas de seguridad para migraciones
 
-- `drizzle.config.ts` exige `DATABASE_URL`; no existe fallback silencioso.
-- `npm run db:migrate:dev`:
-  - requiere `DATABASE_URL`,
-  - rechaza destinos que parezcan base de test (`test/testing/e2e/ci`).
-- `npm run db:migrate:test`:
-  - requiere `TEST_DATABASE_URL`,
-  - exige base con token completo de test (`test/testing/e2e/ci` separado por `_` o `-`),
-  - rechaza destinos equivalentes a `DATABASE_URL` usando identidad canónica (`host` normalizado + puerto efectivo + base), ignorando usuario/contraseña/query params.
-- `npm run db:migrate` sin `dev|test` falla con mensaje de uso.
+- `npm run db:migrate:dev` requiere `DATABASE_URL` y rechaza nombres de bases de pruebas. La configuración genérica de Drizzle también rechaza esos nombres y el uso directo de `TEST_DATABASE_URL` como destino.
+- `npm run db:migrate:test` crea y valida una instancia PostgreSQL desechable, aplica el journal completo y retira la instancia al salir. `TEST_DATABASE_URL` y el marcador se generan en el proceso. El comando rechaza asignaciones de prueba previas. El migrador usa la misma conexión cuya identidad se comprobó.
+- `npm run db:migrate` sin `dev|test` falla con mensaje de uso. El comando de TEST pertenece al [flujo de ejecución de pruebas](testing.md#comandos-vigentes-desde-106).
 
 ## Entorno local
 
 Configurar `DATABASE_URL` en `.env` usando `.env.example` como base.
-Para pruebas de integración, usar también `TEST_DATABASE_URL` apuntando a una base separada y segura.
 
 Ejemplo local:
 
@@ -76,7 +69,7 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/fullstack_nextjs
 El repositorio incluye [compose.yaml](../compose.yaml) con dos servicios:
 
 - `postgres_dev` (desarrollo): `127.0.0.1:5432`
-- `postgres_test` (integración): `127.0.0.1:5433`
+- `postgres_test` (TEST persistente): `127.0.0.1:5433`
 
 Ambos usan imagen `postgres:15`, volúmenes independientes y healthchecks con `pg_isready`.
 
@@ -113,19 +106,9 @@ docker compose --env-file .env.compose.local down
 docker compose --env-file .env.compose.local down --volumes
 ```
 
-### Aplicar migraciones en cada base
+### Aplicar migraciones
 
-Drizzle no aplica migraciones automáticamente al arrancar contenedores.
-
-```powershell
-# Base de desarrollo
-$env:DATABASE_URL = "postgresql://<POSTGRES_DEV_USER>:<POSTGRES_DEV_PASSWORD>@localhost:5432/<POSTGRES_DEV_DB>"; npm run db:migrate:dev
-
-# Base de pruebas
-$env:TEST_DATABASE_URL = "postgresql://<POSTGRES_TEST_USER>:<POSTGRES_TEST_PASSWORD>@localhost:5433/<POSTGRES_TEST_DB>"; npm run db:migrate:test
-```
-
-Los comandos imprimen destino seleccionado (`host:port/base`) sin mostrar secretos.
+Los contenedores persistentes de Compose arrancan sin aplicar migraciones. Para desarrollo, usar `npm run db:migrate:dev` con el destino autorizado. Para comprobar el journal en PostgreSQL desechable, usar `npm run db:migrate:test`. Las suites crean sus propias instancias y aplican el journal automáticamente.
 
 ## Validación operativa (Fase 06.2)
 

@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { INITIAL_REGULATION } from "@/src/domain/academic/regulation";
 import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/postgres-test-db";
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("admin calendar attendance (postgres)", () => {
+describe("admin calendar attendance (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let academic: typeof import("./academic-service");
   let calendar: typeof import("./admin-calendar-service");

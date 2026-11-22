@@ -27,7 +27,6 @@ async function withStudentProfile(run: (account: Account, profileId: string) => 
 }
 
 test("edits, cancels and saves on mobile with keyboard while retaining the academic history", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires an isolated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withStudentProfile(async (student, id) => {
       const session = randomUUID();
@@ -77,7 +76,6 @@ test("edits, cancels and saves on mobile with keyboard while retaining the acade
 });
 
 test("reports validation, duplicate emails and stale edits without losing a newer change", async ({ page, context }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires an isolated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withStudentProfile(async (student, id) => {
       await login(page, admin);
@@ -121,7 +119,6 @@ test("reports validation, duplicate emails and stale edits without losing a newe
 });
 
 test("protects an open edit action after switching to a student session and hides editing after deactivation", async ({ page, context, browser, baseURL }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires an isolated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withStudentProfile(async (student, id) => {
       await login(page, admin);
@@ -155,7 +152,6 @@ test("protects an open edit action after switching to a student session and hide
 });
 
 test("pages the audit of a disabled student by keyboard and keeps other audit records private", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires an isolated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withStudentProfile(async (student, id) => {
       await withStudentProfile(async (other, otherId) => {

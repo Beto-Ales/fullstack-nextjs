@@ -40,7 +40,6 @@ async function seedBooking(
 }
 
 test("admin reads the full profile at 360 px and returns to the list and session using the keyboard", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       const profileId = await seedProfile(student, "Marina");
@@ -137,7 +136,6 @@ test("admin reads the full profile at 360 px and returns to the list and session
 });
 
 test("direct profile URLs enforce the role and return a generic 404 to the administrator", async ({ page, browser, baseURL }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (target) => {
       await withCreditsAccount("STUDENT", async (visitor) => {
@@ -170,7 +168,6 @@ test("direct profile URLs enforce the role and return a generic 404 to the admin
 });
 
 test("the admin can open a withdrawn student's history and sees empty sections", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       const profileId = await seedProfile(student, "Baja");

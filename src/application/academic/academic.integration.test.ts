@@ -5,7 +5,7 @@ import { DateTime } from "luxon";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/postgres-test-db";
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (postgres)", () => {
+describe("academic integration (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let academicService: typeof import("@/src/application/academic/academic-service");
 

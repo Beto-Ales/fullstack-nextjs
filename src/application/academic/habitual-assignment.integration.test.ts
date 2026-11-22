@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/postgres-test-db";
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("habitual assignment integration (postgres)", () => {
+describe("habitual assignment integration (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let academicService: typeof import("@/src/application/academic/academic-service");
 

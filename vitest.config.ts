@@ -10,7 +10,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts"],
+    fileParallelism: false,
+    include: [process.env.POSTGRES_TEST_SCOPE === "integration" ? "src/**/*.integration.test.ts" : "src/**/*.test.ts"],
     passWithNoTests: false,
   },
 });

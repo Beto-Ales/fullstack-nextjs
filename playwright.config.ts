@@ -1,16 +1,17 @@
 import { defineConfig, devices } from "@playwright/test";
-import { parseAndValidateTestDatabaseUrl } from "./src/test-support/postgres-test-db";
+import { readTestRun } from "./scripts/postgres-test-guard.mjs";
 
-const testDatabaseUrl = process.env.TEST_DATABASE_URL;
-if (testDatabaseUrl) parseAndValidateTestDatabaseUrl(testDatabaseUrl);
-const host = testDatabaseUrl ? "127.0.0.1" : "localhost";
-const port = Number(process.env.E2E_PORT ?? 3000);
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid E2E_PORT.");
-const baseURL = `http://${host}:${port}`;
+const run = readTestRun(process.env, ["e2e", "e2e-pending"]);
+const port = Number(process.env.E2E_PORT);
+if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error("E2E_PORT no es válido.");
+const baseURL = `http://127.0.0.1:${port}`;
+const pendingScenario = /shows a pending cancellation/;
 
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: true,
+  workers: 1,
+  ...(run.purpose === "e2e-pending" ? { grep: pendingScenario } : { grepInvert: pendingScenario }),
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: "list",
@@ -25,12 +26,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: testDatabaseUrl ? `npm run dev -- --webpack --hostname ${host} --port ${port}` : `npm run dev -- --port ${port}`,
-    url: baseURL,
-    reuseExistingServer: !testDatabaseUrl && !process.env.CI,
+    command: "node scripts/start-test-web.mjs",
+    port,
+    reuseExistingServer: false,
     timeout: 120_000,
-    env: {
-      DATABASE_URL: testDatabaseUrl ?? "postgresql://postgres:postgres@localhost:5432/fullstack_nextjs",
-    },
   },
 });

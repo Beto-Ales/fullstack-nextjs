@@ -11,7 +11,6 @@ async function login(page: Page, credentials: { email: string; password: string 
 }
 
 test("the admin withdraws a student and the student loses access", async ({ page, browser, baseURL }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "PostgreSQL TEST is required.");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       const profileId = randomUUID();

@@ -7,7 +7,7 @@ import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/
 
 vi.mock("server-only", () => ({}));
 
-describe.skipIf(!process.env.TEST_DATABASE_URL)("administrative enrollment in a single session", () => {
+describe("administrative enrollment in a single session", () => {
   let client: Client;
   let academic: typeof import("./academic-service");
   let calendar: typeof import("./admin-calendar-service");

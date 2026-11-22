@@ -6,7 +6,7 @@ import { DateTime } from "luxon";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/postgres-test-db";
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("recovery integration (postgres)", () => {
+describe("recovery integration (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
 
   let recoveryService: typeof import("@/src/application/recovery/recovery-service");

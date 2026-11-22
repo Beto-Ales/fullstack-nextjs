@@ -1,67 +1,27 @@
-import { Client } from "pg";
+import type { Client } from "pg";
+import { assertTestConnection, openVerifiedTestConnection } from "../../scripts/postgres-test-guard.mjs";
 
-const SAFE_DATABASE_NAME = /(^|[_-])(test|testing|e2e|ci)([_-]|$)/i;
-const SAFE_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
-
-export function isSafeTestDatabaseName(databaseName: string): boolean {
-  return SAFE_DATABASE_NAME.test(databaseName);
-}
-
-export function parseAndValidateTestDatabaseUrl(rawUrl: string): URL {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error("TEST_DATABASE_URL is not a valid URL.");
-  }
-
-  if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
-    throw new Error("TEST_DATABASE_URL must start with postgres:// or postgresql://.");
-  }
-
-  const databaseName = parsed.pathname.replace(/^\/+/, "");
-  if (!databaseName || !isSafeTestDatabaseName(databaseName)) {
-    throw new Error("TEST_DATABASE_URL database name must include test/testing/e2e/ci as a full token.");
-  }
-
-  if (!SAFE_HOSTS.has(parsed.hostname.toLowerCase())) {
-    throw new Error("TEST_DATABASE_URL host is not allowed. Only localhost/127.0.0.1/::1 are accepted.");
-  }
-
-  return parsed;
-}
-
-export function getVerifiedTestDatabaseUrl(): string {
-  const testDatabaseUrl = process.env.TEST_DATABASE_URL;
-  if (!testDatabaseUrl) {
-    throw new Error("TEST_DATABASE_URL is required for PostgreSQL integration tests.");
-  }
-
-  parseAndValidateTestDatabaseUrl(testDatabaseUrl);
-  process.env.DATABASE_URL = testDatabaseUrl;
-
-  return testDatabaseUrl;
-}
-
-async function assertSafeConnectedDatabase(client: Client): Promise<void> {
-  const result = await client.query<{ current_database: string }>("select current_database()");
-  const databaseName = result.rows[0]?.current_database ?? "";
-
-  if (!isSafeTestDatabaseName(databaseName)) {
-    throw new Error("Refusing destructive test operation: connected database does not look like a test database.");
-  }
-}
+const verifiedClients = new WeakMap<Client, Awaited<ReturnType<typeof openVerifiedTestConnection>>["run"]>();
+let publishedUrl: string | undefined;
 
 export async function createVerifiedTestClient(): Promise<Client> {
-  const connectionString = getVerifiedTestDatabaseUrl();
-  const client = new Client({ connectionString });
-  await client.connect();
-  await assertSafeConnectedDatabase(client);
+  const env = { ...process.env };
+  if (publishedUrl && env.DATABASE_URL === publishedUrl) delete env.DATABASE_URL;
+  const { client, run } = await openVerifiedTestConnection(env, ["vitest", "e2e", "e2e-pending"]);
+  if (publishedUrl && run.connectionString !== publishedUrl) {
+    await client.end();
+    throw new Error("La base verificada no puede cambiar durante un proceso de pruebas.");
+  }
+  publishedUrl = run.connectionString;
+  process.env.DATABASE_URL = publishedUrl;
+  verifiedClients.set(client, run);
   return client;
 }
 
 export async function resetTestDatabase(client: Client): Promise<void> {
-  await assertSafeConnectedDatabase(client);
+  const run = verifiedClients.get(client);
+  if (run?.purpose !== "vitest") throw new Error("La limpieza requiere una conexión Vitest desechable previamente verificada.");
+  await assertTestConnection(client, run);
 
   const tables = await client.query<{ tablename: string }>(`
     select tablename
@@ -74,7 +34,7 @@ export async function resetTestDatabase(client: Client): Promise<void> {
     return;
   }
 
-  const tableList = tables.rows.map(({ tablename }) => `"${tablename}"`).join(", ");
+  const tableList = tables.rows.map(({ tablename }) => `public."${tablename.replace(/"/g, '""')}"`).join(", ");
   const hasRegulations = tables.rows.some(({ tablename }) => tablename === "academic_regulations");
   await client.query("begin");
   try {

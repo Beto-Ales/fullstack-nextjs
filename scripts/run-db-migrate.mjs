@@ -97,20 +97,7 @@ export function selectTargetUrl(mode, env = process.env) {
   }
 
   if (mode === "test") {
-    const parsed = parseDatabaseUrl("TEST_DATABASE_URL", rawTestDatabaseUrl);
-    const databaseName = getDatabaseName(parsed);
-    if (!isTestDatabaseName(databaseName)) {
-      throw new Error("TEST_DATABASE_URL database name must include test/testing/e2e/ci as a full token.");
-    }
-
-    if (rawDatabaseUrl) {
-      const parsedDev = parseDatabaseUrl("DATABASE_URL", rawDatabaseUrl);
-      if (hasSameDatabaseIdentity(parsed, parsedDev)) {
-        throw new Error("TEST_DATABASE_URL and DATABASE_URL point to the same database. Refusing to migrate.");
-      }
-    }
-
-    return rawTestDatabaseUrl;
+    throw new Error("Usa npm run db:migrate:test para aprovisionar y verificar PostgreSQL desechable.");
   }
 
   throw new Error("Usage: node scripts/run-db-migrate.mjs <dev|test>");
@@ -153,6 +140,9 @@ export function getDrizzleLaunch(platform = process.platform, drizzleExecutable,
 }
 
 export async function runDrizzleMigrate(rawUrl, options = {}) {
+  if (options.mode === "test" || isTestDatabaseName(getDatabaseName(parseDatabaseUrl("DATABASE_URL", rawUrl)))) {
+    throw new Error("Las migraciones de TEST requieren el aprovisionador PostgreSQL desechable.");
+  }
   const spawnImpl = options.spawnImpl ?? spawn;
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
@@ -201,6 +191,11 @@ export async function runDrizzleMigrate(rawUrl, options = {}) {
  */
 export async function main(argv = process.argv, env = process.env) {
   const mode = argv[2];
+  if (mode === "test") {
+    const { runPostgresTests } = await import("./run-postgres-tests.mjs");
+    process.exitCode = await runPostgresTests("migrate", [], env);
+    return;
+  }
 
   const { loadEnvConfig } = nextEnv;
   loadEnvConfig(process.cwd());

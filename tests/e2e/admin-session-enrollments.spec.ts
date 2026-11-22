@@ -13,7 +13,6 @@ async function login(page: Page, account: { email: string; password: string }) {
 }
 
 test("shows confirmed enrollments and cancellation history for one session and protects the direct URL", async ({ page, browser, baseURL }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       const week = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("week").plus({ weeks: 1 });
@@ -267,7 +266,6 @@ async function seedAttendanceSession(
 }
 
 test("registers and corrects attendance on mobile and keeps historical and in-progress sessions read-only", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (first) => {
       await withCreditsAccount("STUDENT", async (second) => {
@@ -398,7 +396,6 @@ test("registers and corrects attendance on mobile and keeps historical and in-pr
 });
 
 test("rejects attendance submissions from a stale admin page after role change or session expiry", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       const id = await seedAttendanceProfile(student, "Nerea", "Asistente");
@@ -438,7 +435,6 @@ test("rejects attendance submissions from a stale admin page after role change o
 });
 
 test("rejects both capacity block actions from old admin pages after the session changes to a student", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       await seedAttendanceProfile(student, "Iris", "Prueba");
@@ -478,7 +474,6 @@ test("rejects both capacity block actions from old admin pages after the session
 });
 
 test("enrolls one student by keyboard on mobile, preserves a block and refreshes both panels", async ({ page, browser }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       await withCreditsAccount("STUDENT", async (other) => {
@@ -573,7 +568,6 @@ test("enrolls one student by keyboard on mobile, preserves a block and refreshes
 });
 
 test("rejects a stale enrollment after the session starts and refreshes the available places", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       const profileId = await seedAttendanceProfile(student, "Elena", "Horario");
@@ -598,7 +592,6 @@ test("rejects a stale enrollment after the session starts and refreshes the avai
 });
 
 test("validates submitted student data and denies both enrollment actions on stale pages for a student", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       const profileId = await seedAttendanceProfile(student, "Lina", "Verificación");
@@ -647,7 +640,6 @@ test("validates submitted student data and denies both enrollment actions on sta
 });
 
 test("cancels a single ordinary enrollment by keyboard, preserves capacity blocks and shows both histories", async ({ page, browser }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       await withCreditsAccount("STUDENT", async (other) => {
@@ -733,7 +725,6 @@ test("cancels a single ordinary enrollment by keyboard, preserves capacity block
 });
 
 test("rejects cancellation from an old admin form after authentication switches to a student", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       const id = await seedAttendanceProfile(student, "Noa", "Inscrita");

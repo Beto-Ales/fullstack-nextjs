@@ -12,7 +12,6 @@ async function login(page: Page, email: string, password: string) {
 }
 
 test.describe("credits flows", () => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
 
   test("student cancels a habitual class, earns one credit and spends it on a recovery", async ({ page }) => {
     await withCreditsAccount("STUDENT", async (fixture) => {
@@ -376,7 +375,7 @@ test.describe("credits flows", () => {
           id: string; cancellation_notice_days: number; max_eligible_consecutive_cancellations: number | null;
         }>(`select id, cancellation_notice_days, max_eligible_consecutive_cancellations from academic_regulations
           where effective_from <= $1 order by effective_from desc limit 1`, [today.toISODate()]);
-        test.skip(rule.max_eligible_consecutive_cancellations === null, "Requires the revised rule active in disposable TEST.");
+        expect(rule.max_eligible_consecutive_cancellations).toBe(3);
         const profileId = randomUUID();
         const templateId = randomUUID();
         student.templateIds.push(templateId);

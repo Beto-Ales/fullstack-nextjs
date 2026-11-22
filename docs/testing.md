@@ -14,87 +14,30 @@ Dejar lista una infraestructura de pruebas segura y mantenible, sin tocar datos 
 - Unitarias/integración: `src/**/*.test.ts`
 - E2E: `tests/e2e/**/*.spec.ts`
 
-## Comandos
+## Comandos vigentes desde 10.6
 
-- `npm run test`
-- `npm run test:watch`
-- `npm run test:e2e`
-- `npx playwright install chromium` (instala navegador E2E cuando falte)
+| Comando | Alcance y destino |
+| --- | --- |
+| `npm run test:unit` | Unitarias sin PostgreSQL ni Docker. |
+| `npm run test:watch` | Unitarias en modo observación. |
+| `npm run test:integration` | Integraciones completas sobre PostgreSQL 15 desechable. Admite filtros de Vitest. |
+| `npm test` | Todas las unitarias e integraciones. La ausencia de PostgreSQL desechable hace fallar la ejecución. |
+| `npm run test:e2e` | Chromium con Next.js dedicado y una instancia desechable distinta. |
+| `npm run test:e2e:pending` | Regresión de créditos pendientes, con una versión sintética de normativa en otra instancia desechable. |
+| `npm run test:verify` | Vitest completo, Chromium y la regresión de créditos pendientes. Cada etapa debe aprobar. |
+
+Para las pruebas de escritura, iniciar Docker y disponer localmente de la imagen `postgres:15`. Si falta, ejecutar `docker pull postgres:15`. Para Chromium, instalar el navegador con `npx playwright install chromium` si hace falta. El repositorio carece de pipeline de CI. Un agente de CI puede preparar esos requisitos y ejecutar `npm run test:verify` sin credenciales persistentes.
 
 ## Base de datos para pruebas
 
-- No usar base de datos de producción.
-- Las suites de integración PostgreSQL usan **exclusivamente** `TEST_DATABASE_URL`.
-- Si `TEST_DATABASE_URL` no existe, esas suites se omiten.
-- No hay fallback silencioso a `DATABASE_URL` en tests de integración.
-- Se rechaza la ejecución si `TEST_DATABASE_URL` no parece una base de test segura:
-  - protocolo `postgres://` o `postgresql://`,
-  - host local (`localhost`, `127.0.0.1` o `::1`),
-  - nombre de base con token completo `test`, `testing`, `e2e` o `ci` (separado por `_` o `-`).
-- La limpieza destructiva (`TRUNCATE ... CASCADE`) verifica primero la base conectada.
+El aprovisionador crea su propio `TEST_DATABASE_URL` y su identidad de ejecución. Quita las asignaciones manuales de `TEST_DATABASE_URL` y `POSTGRES_TEST_RUN` antes de arrancar los comandos. El proceso valida el contenedor Docker, el puerto local, la identidad del servidor PostgreSQL, la base, el rol y el marcador antes de migrar. Vitest serializa los archivos que comparten la base. Playwright comprueba el destino antes de arrancar Next, elige un puerto local y rechaza servidores preexistentes. Con `E2E_PORT` se puede solicitar un puerto concreto.
 
-## Alternativas de Docker para dev/test
-
-### A) Dos contenedores independientes (implementada)
-
-- `postgres_dev` y `postgres_test` en puertos distintos (`5432` y `5433`).
-- Volúmenes separados.
-- Credenciales separadas en `.env.compose.local`.
-- Riesgo menor de limpieza accidental cruzada.
-
-### B) Un contenedor con dos bases de datos aisladas (no implementada)
-
-- Menor consumo de recursos.
-- Mayor riesgo operativo: error de conexión/variable puede apuntar a DB equivocada en el mismo servidor.
-- Menor separación de blast radius en operaciones destructivas de tests.
-
-Se implementa A por seguridad operacional en el flujo de integración.
-
-## Compose en PowerShell
-
-```powershell
-# Preparar variables locales no versionadas
-Copy-Item .env.compose.example .env.compose.local
-
-# Levantar servicios
-docker compose --env-file .env.compose.local up -d
-
-# Estado de servicios
-docker compose --env-file .env.compose.local ps
-
-# Healthchecks
-docker inspect --format='{{json .State.Health}}' fullstack_nextjs_postgres_dev
-docker inspect --format='{{json .State.Health}}' fullstack_nextjs_postgres_test
-
-# Logs
-docker compose --env-file .env.compose.local logs postgres_dev
-docker compose --env-file .env.compose.local logs postgres_test
-
-# Detener sin perder datos
-docker compose --env-file .env.compose.local down
+```console
+npm run test:integration -- recovery.integration.test.ts
+npm run test:e2e -- credits.spec.ts
 ```
 
-### Eliminación explícita de volúmenes (destructivo)
-
-```powershell
-docker compose --env-file .env.compose.local down --volumes
-```
-
-### Migraciones por entorno
-
-```powershell
-# Desarrollo
-$env:DATABASE_URL = "postgresql://<POSTGRES_DEV_USER>:<POSTGRES_DEV_PASSWORD>@localhost:5432/<POSTGRES_DEV_DB>"; npm run db:migrate:dev
-
-# Pruebas
-$env:TEST_DATABASE_URL = "postgresql://<POSTGRES_TEST_USER>:<POSTGRES_TEST_PASSWORD>@localhost:5433/<POSTGRES_TEST_DB>"; npm run db:migrate:test
-```
-
-Reglas de seguridad de migración:
-
-- `db:migrate:dev` no permite destinos con nombre de base de test.
-- `db:migrate:test` exige base con token completo de test (`test/testing/e2e/ci`) y no permite destino equivalente a `DATABASE_URL` (comparación canónica de `host` + puerto efectivo + base).
-- `db:migrate` requiere elegir entorno explícitamente (`dev` o `test`).
+Las secciones históricas siguientes registran resultados y procedimientos anteriores. Para repetirlas, usa los comandos vigentes de arriba. [Diseño y límites](#incremento-106--aislamiento-de-pruebas-postgresql)
 
 ### Resultado operativo de infraestructura (Fase 06.2)
 
@@ -105,13 +48,6 @@ Reglas de seguridad de migración:
   - bases distintas (`fullstack_nextjs` y `fullstack_nextjs_test`),
   - volúmenes persistentes independientes.
 - No se ejecutaron migraciones ni operaciones destructivas durante esta validación.
-
-### Ejecutar integración contra PostgreSQL de test
-
-```powershell
-$env:TEST_DATABASE_URL = "postgresql://<POSTGRES_TEST_USER>:<POSTGRES_TEST_PASSWORD>@localhost:5433/<POSTGRES_TEST_DB>"
-npm run test -- src/application/academic/academic.integration.test.ts src/application/credits/credit-service.integration.test.ts src/application/recovery/recovery.integration.test.ts
-```
 
 ## Cobertura de esta fase
 
@@ -406,6 +342,14 @@ npm.cmd run test:e2e -- --workers=1
 - [Chromium administrativo](../tests/e2e/admin-session-enrollments.spec.ts) y [Chromium de créditos](../tests/e2e/credits.spec.ts) verifican que una página abierta antes del inicio comunica el rechazo y actualiza la disponibilidad sin mostrar éxito ni perder saldo.
 - Usar bases PostgreSQL 15 desechables separadas para Vitest y Chromium, con journal hasta `0013` y `TEST_DATABASE_URL` explícita. El caso de créditos pendientes se verifica con una versión normativa sintética vigente.
 - En PostgreSQL **15.20** pasaron **13 pruebas de H06**, incluidas en las **54 focalizadas**, además de **6 de H02**, **8 de H04** y las **243 de Vitest** en la suite completa. Chromium pasó **39 casos** con la normativa anterior. El único caso omitido, de créditos pendientes, pasó por separado con normativa sintética revisada. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes.
+
+### Incremento 10.6 — Aislamiento de pruebas PostgreSQL
+
+- H08 eliminó el fallback de Playwright a DEV, los saltos de integración por ausencia de URL y la autorización de limpieza basada en el nombre de la base. Cada comando de escritura genera recursos y credenciales de corta duración y falla si no acredita su procedencia. Vitest y Chromium reciben identificadores, clústeres, puertos y bases independientes.
+- La limpieza de fixtures se limita a la base Vitest verificada y preserva el marcador y el journal. Tras éxito, fallo o una señal gestionada, el aprovisionador comprueba la propiedad y detiene únicamente su contenedor. Docker elimina su almacenamiento temporal. Una terminación forzada del proceso o la pérdida del daemon puede impedir la limpieza automática. El prefijo y la identificación de ejecución permiten localizar el recurso restante para revisión.
+- La protección presupone un daemon Docker de confianza y permisos adecuados en el entorno de ejecución. El rol de la suite se crea solo en la instancia desechable. Las conexiones manuales que se hagan fuera de estos comandos siguen bajo los permisos del operador. [Diseño](architecture.md#aislamiento-de-pruebas-postgresql)
+- Las pruebas negativas usan configuraciones y conexiones sintéticas para verificar el rechazo de DEV, TEST persistente, producción, marcadores inválidos y recursos ajenos o vencidos. También comprueban migración y limpieza sin verificación, integración directa sin URL y un servidor HTTP preexistente. La integración positiva coteja cada hash del journal, los permisos del rol y la limpieza de una fixture sin tocar el marcador.
+- Pasaron **86 unitarias** sin PostgreSQL, **185 integraciones** y **271 pruebas** en Vitest completo. `npm run test:verify` pasó además **39 E2E de Chromium** y **1 E2E de créditos pendientes** en una instancia separada con normativa sintética. Se comprobó la retirada exclusiva del contenedor tras un fallo y tras una interrupción gestionada. Pasaron TypeScript, ESLint y `drizzle-kit check`.
 
 ## Matriz de pruebas (Fase 06.2)
 

@@ -56,12 +56,14 @@ npm run dev
 - `npm run start`: ejecutar build de producción.
 - `npm run lint`: lint de todo el proyecto.
 - `npm run typecheck`: comprobación TypeScript sin emitir.
-- `npm run test`: tests unitarios/integración con Vitest.
-- `npm run test:watch`: Vitest en watch mode.
-- `npm run test:e2e`: pruebas E2E con Playwright.
+- `npm run test`: suite completa de Vitest con PostgreSQL desechable.
+- `npm run test:watch`: unitarias de Vitest en modo observación.
+- `npm run test:unit`: unitarias sin PostgreSQL ni Docker.
+- `npm run test:e2e`: Chromium con PostgreSQL desechable.
+- `npm run test:verify`: Vitest, Chromium y créditos pendientes con normativa sintética.
 - `npm run db:generate`: generar migraciones Drizzle desde esquemas.
 - `npm run db:migrate:dev`: aplicar migraciones sobre la base de desarrollo (`DATABASE_URL`).
-- `npm run db:migrate:test`: aplicar migraciones sobre la base de test (`TEST_DATABASE_URL`).
+- `npm run db:migrate:test`: verificar el journal en PostgreSQL desechable.
 - `npm run db:migrate`: comando protegido; requiere seleccionar explícitamente `dev` o `test`.
 - `npm run db:studio`: abrir Drizzle Studio.
 - `npm run admin:create-super-admin`: crear el primer `SUPER_ADMIN` (sin registro público).
@@ -87,7 +89,7 @@ npm run dev
 Ver [.env.example](./.env.example):
 
 - `DATABASE_URL`: conexión PostgreSQL.
-- `TEST_DATABASE_URL`: conexión PostgreSQL exclusiva para integración (obligatoria para suites con DB real y nunca reemplazada silenciosamente por `DATABASE_URL`).
+- `TEST_DATABASE_URL`: conexión generada por el aprovisionador para cada ejecución de pruebas con PostgreSQL.
 - `APP_TIME_ZONE`: zona del centro (`Europe/Copenhagen`).
 - `LOG_LEVEL`: nivel de logs.
 - `AUTH_RATE_LIMIT_MAX_ATTEMPTS`: intentos de login permitidos por ventana.
@@ -99,7 +101,7 @@ Ver [.env.example](./.env.example):
 Se incluye [compose.yaml](./compose.yaml) con **dos contenedores PostgreSQL 15**:
 
 - `postgres_dev` en `127.0.0.1:5432` para desarrollo.
-- `postgres_test` en `127.0.0.1:5433` para integración.
+- `postgres_test` en `127.0.0.1:5433`, reservado para TEST persistente.
 
 La versión `postgres:15` se selecciona porque el proyecto exige PostgreSQL 15+ y esta base ya está alineada con los requisitos actuales del repositorio.
 
@@ -139,28 +141,13 @@ docker compose --env-file .env.compose.local down --volumes
 
 ### Migraciones por base (PowerShell)
 
-Los comandos de migración validan el entorno antes de ejecutar Drizzle:
-
-- `db:migrate:dev` exige `DATABASE_URL` y rechaza destinos con nombre de base de test.
-- `db:migrate:test` exige `TEST_DATABASE_URL`, exige nombre de base con token completo `test/testing/e2e/ci` (separadores `_` o `-`) y rechaza destinos equivalentes a `DATABASE_URL`.
-- La comparación de equivalencia entre destinos usa identidad canónica (`host` normalizado + puerto efectivo + nombre de base), ignorando usuario, contraseña y query params.
-- `db:migrate` sin entorno falla con error descriptivo.
-
-PowerShell:
-
-```powershell
-$env:DATABASE_URL = "postgresql://<POSTGRES_DEV_USER>:<POSTGRES_DEV_PASSWORD>@localhost:5432/<POSTGRES_DEV_DB>"; npm run db:migrate:dev
-$env:TEST_DATABASE_URL = "postgresql://<POSTGRES_TEST_USER>:<POSTGRES_TEST_PASSWORD>@localhost:5433/<POSTGRES_TEST_DB>"; npm run db:migrate:test
-```
-
-Cada comando muestra el destino (`host:port/base`) sin imprimir contraseñas.
+- `db:migrate:dev` exige la conexión autorizada en `DATABASE_URL` y rechaza nombres de bases de prueba.
+- `db:migrate:test` crea y verifica una instancia desechable, aplica el journal y retira la instancia al finalizar.
+- `db:migrate` exige el modo `dev` o `test`.
 
 ### Tests de integración PostgreSQL
 
-```powershell
-$env:TEST_DATABASE_URL = "postgresql://<POSTGRES_TEST_USER>:<POSTGRES_TEST_PASSWORD>@localhost:5433/<POSTGRES_TEST_DB>"
-npm run test -- src/application/academic/academic.integration.test.ts src/application/credits/credit-service.integration.test.ts src/application/recovery/recovery.integration.test.ts
-```
+Inicia Docker y prepara la imagen local `postgres:15`. Ejecuta `npm run test:integration` para las integraciones o `npm run test:verify` para la verificación completa. El aprovisionador no acepta una URL de TEST manual. [Comandos de pruebas](docs/testing.md#comandos-vigentes-desde-106)
 
 ### Validación operativa Compose (Fase 06.2)
 

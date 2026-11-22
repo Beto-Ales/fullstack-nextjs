@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/postgres-test-db";
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("admin student profile (postgres)", () => {
+describe("admin student profile (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let getProfile: typeof import("./admin-student-profile-service").getAdminStudentProfile;
   let academic: typeof import("./academic-service");

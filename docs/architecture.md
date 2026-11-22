@@ -29,6 +29,12 @@ Separar responsabilidades desde el inicio para mantener reglas de negocio fuera 
 4. **Configuración centralizada**: entorno, DB, fechas y logging.
 5. **Preparado para crecer por fases** sin introducir abstracciones vacías.
 
+## Aislamiento de pruebas PostgreSQL
+
+Cada ejecución que escribe crea una instancia PostgreSQL 15 en Docker. El puerto TCP solo se publica en loopback y el directorio de datos vive en `tmpfs`. El aprovisionador usa el rol de arranque dentro del contenedor y entrega a las suites un rol aleatorio sin superusuario con permisos de escritura en la base nueva. El marcador se guarda en un esquema independiente propiedad del rol de arranque. El rol de prueba puede leerlo.
+
+La guarda central coteja el identificador y las etiquetas del contenedor en ejecución, el puerto publicado, la identidad del clúster, el rol, la base y el marcador. El migrador comprueba la misma conexión que aplicará el journal. Los helpers validan antes de devolver una conexión para fixtures y `TRUNCATE` exige además una conexión Vitest verificada por ese proceso. El servidor E2E solo arranca tras verificar su conexión. [Comandos y pruebas](testing.md#incremento-106--aislamiento-de-pruebas-postgresql)
+
 ## Normativa académica versionada
 
 - `/normativa` exige sesión y muestra los valores vigentes a alumnos y administradores. El servidor verifica el rol `SUPER_ADMIN` para publicar y consultar el historial.

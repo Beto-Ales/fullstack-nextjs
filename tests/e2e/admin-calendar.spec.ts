@@ -13,7 +13,6 @@ async function login(page: Page, account: { email: string; password: string }) {
 }
 
 test("navigates the weekly summary by keyboard with attendance, cancellations and capacity", async ({ page, browser, baseURL }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       const week = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("week");
@@ -85,7 +84,6 @@ test("navigates the weekly summary by keyboard with attendance, cancellations an
 });
 
 test("shows weekly capacity and excludes a voluntary cancellation from pending habitual reservations", async ({ page, browser, baseURL }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
       await withCreditsAccount("STUDENT", async (other) => {

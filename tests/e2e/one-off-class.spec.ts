@@ -24,7 +24,6 @@ async function fillClass(form: Locator, localDate: string, capacity: number) {
 }
 
 test.describe("administrative one-off class creation", () => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
 
   test("creates one class in Copenhagen time and rejects an excessive capacity on the server", async ({ page }) => {
     await withCreditsAccount("SUPER_ADMIN", async ({ client, email, password, sessionIds }) => {

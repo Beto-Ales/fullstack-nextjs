@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/postgres-test-db";
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("credits integration (postgres)", () => {
+describe("credits integration (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let db: typeof import("@/src/infrastructure/db/client").db;
   let service: typeof import("@/src/application/credits/credit-service");

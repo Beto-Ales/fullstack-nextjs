@@ -45,9 +45,9 @@ describe("run-db-migrate wrapper", () => {
   it("treats same host/port/db with different users as the same target", async () => {
     const { selectTargetUrl } = await loadModule();
     expect(() =>
-      selectTargetUrl("test", {
-        DATABASE_URL: "postgresql://dev_user:dev_pass@localhost:5432/fullstack_nextjs_test",
-        TEST_DATABASE_URL: "postgresql://test_user:test_pass@localhost:5432/fullstack_nextjs_test",
+      selectTargetUrl("dev", {
+        DATABASE_URL: "postgresql://dev_user:dev_pass@localhost:5432/fullstack_nextjs",
+        TEST_DATABASE_URL: "postgresql://test_user:test_pass@localhost:5432/fullstack_nextjs",
       }),
     ).toThrowError("point to the same database");
   });
@@ -55,9 +55,9 @@ describe("run-db-migrate wrapper", () => {
   it("treats same identity with different query params as the same target", async () => {
     const { selectTargetUrl } = await loadModule();
     expect(() =>
-      selectTargetUrl("test", {
-        DATABASE_URL: "postgresql://user:pass@localhost:5432/fullstack_nextjs_test?sslmode=disable",
-        TEST_DATABASE_URL: "postgresql://user:pass@localhost:5432/fullstack_nextjs_test?application_name=tests",
+      selectTargetUrl("dev", {
+        DATABASE_URL: "postgresql://user:pass@localhost:5432/fullstack_nextjs?sslmode=disable",
+        TEST_DATABASE_URL: "postgresql://user:pass@localhost:5432/fullstack_nextjs?application_name=tests",
       }),
     ).toThrowError("point to the same database");
   });
@@ -65,20 +65,30 @@ describe("run-db-migrate wrapper", () => {
   it("treats omitted port and explicit 5432 as the same target", async () => {
     const { selectTargetUrl } = await loadModule();
     expect(() =>
-      selectTargetUrl("test", {
-        DATABASE_URL: "postgresql://user:pass@localhost/fullstack_nextjs_test",
-        TEST_DATABASE_URL: "postgresql://user:pass@localhost:5432/fullstack_nextjs_test",
+      selectTargetUrl("dev", {
+        DATABASE_URL: "postgresql://user:pass@localhost/fullstack_nextjs",
+        TEST_DATABASE_URL: "postgresql://user:pass@localhost:5432/fullstack_nextjs",
       }),
     ).toThrowError("point to the same database");
   });
 
   it("allows different database names", async () => {
     const { selectTargetUrl } = await loadModule();
-    const selected = selectTargetUrl("test", {
+    const selected = selectTargetUrl("dev", {
       DATABASE_URL: "postgresql://dev_user:dev_pass@localhost:5432/fullstack_nextjs",
       TEST_DATABASE_URL: "postgresql://test_user:test_pass@localhost:5432/fullstack_nextjs_test",
     });
-    expect(selected).toBe("postgresql://test_user:test_pass@localhost:5432/fullstack_nextjs_test");
+    expect(selected).toBe("postgresql://dev_user:dev_pass@localhost:5432/fullstack_nextjs");
+  });
+
+  it("rejects arbitrary TEST migration targets before spawning Drizzle", async () => {
+    const { selectTargetUrl, runDrizzleMigrate } = await loadModule();
+    const TEST_DATABASE_URL = "postgresql://user:pass@localhost:5433/persistent_test";
+    const spawnImpl = vi.fn();
+    expect(() => selectTargetUrl("test", { TEST_DATABASE_URL })).toThrow(/db:migrate:test/);
+    await expect(runDrizzleMigrate(TEST_DATABASE_URL, { mode: "test", spawnImpl })).rejects.toThrow(/aprovisionador/);
+    await expect(runDrizzleMigrate(TEST_DATABASE_URL, { mode: "dev", spawnImpl })).rejects.toThrow(/aprovisionador/);
+    expect(spawnImpl).not.toHaveBeenCalled();
   });
 
   it("prints target without username and password", async () => {
@@ -93,7 +103,7 @@ describe("run-db-migrate wrapper", () => {
     const { runDrizzleMigrate } = await loadModule();
 
     const child = new EventEmitter();
-    const spawnImpl = vi.fn((..._args: unknown[]) => child);
+    const spawnImpl = vi.fn<(...args: unknown[]) => EventEmitter>(() => child);
     const log = vi.fn();
     const errorLog = vi.fn();
 
@@ -122,7 +132,7 @@ describe("run-db-migrate wrapper", () => {
     const { runDrizzleMigrate } = await loadModule();
 
     const child = new EventEmitter();
-    const spawnImpl = vi.fn((..._args: unknown[]) => child);
+    const spawnImpl = vi.fn<(...args: unknown[]) => EventEmitter>(() => child);
     const log = vi.fn();
     const errorLog = vi.fn();
 
@@ -149,7 +159,7 @@ describe("run-db-migrate wrapper", () => {
     const { runDrizzleMigrate } = await loadModule();
 
     const child = new EventEmitter();
-    const spawnImpl = vi.fn((..._args: unknown[]) => child);
+    const spawnImpl = vi.fn<(...args: unknown[]) => EventEmitter>(() => child);
 
     const exitCodePromise = runDrizzleMigrate("postgresql://user:pass@localhost:5432/fullstack_nextjs", {
       mode: "dev",

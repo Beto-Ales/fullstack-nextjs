@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { INITIAL_REGULATION } from "@/src/domain/academic/regulation";
 import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/postgres-test-db";
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic regulation (postgres)", () => {
+describe("academic regulation (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let regulationService: typeof import("@/src/application/academic/regulation-service");
   let academicService: typeof import("@/src/application/academic/academic-service");

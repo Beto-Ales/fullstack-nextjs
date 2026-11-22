@@ -1,4 +1,5 @@
 import { defineConfig } from "drizzle-kit";
+import { getDatabaseName, isTestDatabaseName } from "./scripts/run-db-migrate.mjs";
 
 function getRequiredDatabaseUrl() {
   const databaseUrl = process.env.DATABASE_URL;
@@ -17,6 +18,9 @@ function getRequiredDatabaseUrl() {
 
   if (parsed.protocol !== "postgres:" && parsed.protocol !== "postgresql:") {
     throw new Error("DATABASE_URL must start with postgres:// or postgresql://.");
+  }
+  if (isTestDatabaseName(decodeURIComponent(getDatabaseName(parsed))) || databaseUrl === process.env.TEST_DATABASE_URL) {
+    throw new Error("Las migraciones de TEST requieren npm run db:migrate:test y una base desechable verificada.");
   }
 
   return databaseUrl;

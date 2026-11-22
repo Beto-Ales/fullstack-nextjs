@@ -6,7 +6,6 @@ import { CENTER_TIME_ZONE } from "../../src/domain/time/timezone";
 import { withCreditsAccount } from "./credits-fixtures";
 
 test("shows only the student's reservations in Copenhagen weeks and refreshes after cancellation", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await page.setViewportSize({ width: 360, height: 800 });
   await withCreditsAccount("STUDENT", async (student) => {
     await withCreditsAccount("STUDENT", async (other) => {

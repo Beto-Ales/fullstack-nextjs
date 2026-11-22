@@ -8,7 +8,7 @@ import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/
 type TestConnection = Awaited<ReturnType<typeof createVerifiedTestClient>>;
 type ReservationKind = "ordinary" | "recovery";
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("H04 cancellation account lock (postgres)", () => {
+describe("H04 cancellation account lock (postgres)", () => {
   let client: TestConnection;
   let academic: typeof import("@/src/application/academic/academic-service");
   let recovery: typeof import("@/src/application/recovery/recovery-service");

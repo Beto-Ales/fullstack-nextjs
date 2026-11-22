@@ -6,7 +6,6 @@ import { CENTER_TIME_ZONE } from "../../src/domain/time/timezone";
 import { seedHabitualCreditScenario, withCreditsAccount } from "./credits-fixtures";
 
 test("shows only available credit expirations and updates them on recovery and refund", async ({ page }) => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("STUDENT", async (student) => {
     await withCreditsAccount("STUDENT", async (other) => {
       const scenario = await seedHabitualCreditScenario(student);

@@ -29,7 +29,6 @@ async function fillWeeklyCourse(page: Page, name: string, date: string) {
 }
 
 test.describe("administrative course enrollments", () => {
-  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
 
   test("creates a fixed three-month course and enrolls a student in the course and a one-off class", async ({ page }) => {
     await withCreditsAccount("SUPER_ADMIN", async (admin) => {

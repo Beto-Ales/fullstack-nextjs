@@ -20,7 +20,6 @@ async function fillStudentAccount(page: Page, email: string, password: string) {
 }
 
 test.describe("student accounts", () => {
-  test.skip(!process.env.TEST_DATABASE_URL, "PostgreSQL TEST is required.");
 
   test("creates an enrollable student and revokes all sessions after the student changes password", async ({ page, browser, baseURL }) => {
     await withCreditsAccount("SUPER_ADMIN", async (admin) => {

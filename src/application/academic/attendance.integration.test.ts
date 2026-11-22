@@ -8,7 +8,7 @@ const request = vi.hoisted(() => ({ token: undefined as string | undefined }));
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => ({ value: request.token }) }) }));
 vi.mock("next/navigation", () => ({ redirect: (path: string) => { throw new Error(`redirect:${path}`); } }));
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("attendance (postgres)", () => {
+describe("attendance (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let academic: typeof import("./academic-service");
   let actions: typeof import("@/src/interfaces/academic/actions");

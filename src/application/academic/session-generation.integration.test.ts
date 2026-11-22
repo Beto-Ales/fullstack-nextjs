@@ -11,7 +11,7 @@ const run = promisify(execFile);
 const parsers = ["cli-date", "cli-iso"] as const;
 type Generator = "application" | (typeof parsers)[number];
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("session generation (postgres)", () => {
+describe("session generation (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let service: typeof import("@/src/application/academic/academic-service");
   let admin: { userId: string; role: "SUPER_ADMIN" };

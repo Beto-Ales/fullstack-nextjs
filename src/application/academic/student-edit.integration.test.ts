@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { hashPassword } from "@/src/infrastructure/security/password";
 import { createVerifiedTestClient, resetTestDatabase } from "@/src/test-support/postgres-test-db";
 
-describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("audited student details edit (postgres)", () => {
+describe("audited student details edit (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let update: typeof import("./student-edit-service").updateStudentDetails;
   let readProfile: typeof import("./admin-student-profile-service").getAdminStudentProfile;

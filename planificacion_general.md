@@ -67,6 +67,8 @@ El incremento 10.4 corrige H04. La cancelación del alumno bloquea y revalida su
 
 El incremento 10.5 corrige H06. Las nuevas reservas individuales aplican el mismo corte temporal con el reloj real de PostgreSQL tras los bloqueos y antes de insertar. Las recuperaciones conservan su consumo atómico y las operaciones ya confirmadas conservan el resultado de sus reintentos. [Modelo](docs/academic-model.md#concurrencia-en-reservas) · [Pruebas](docs/testing.md#incremento-105--validación-del-inicio-de-sesión-al-reservar)
 
+El incremento 10.6 corrige H08. Cada proceso de pruebas con escritura verifica un PostgreSQL desechable propio antes de migrar, iniciar Next.js o manipular fixtures. Vitest falla explícitamente sin esa verificación y Playwright rechaza servidores HTTP ajenos. [Comandos](docs/testing.md#comandos-vigentes-desde-106) · [Diseño](docs/architecture.md#aislamiento-de-pruebas-postgresql)
+
 Fase 11 — Preparación para producción
 
 Variables de entorno, migraciones, configuración de despliegue, backups y documentación.
