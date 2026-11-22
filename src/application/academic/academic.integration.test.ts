@@ -67,7 +67,8 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic integration (po
   }
 
   it("withdraws once, frees future ordinary and recovery seats, and refunds only the eligible recovery", async () => {
-    const today = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("day");
+    // Keep the simulated noon and its evening bookings ahead of the real PostgreSQL admission clock.
+    const today = DateTime.now().setZone(CENTER_TIME_ZONE).plus({ days: 1 }).startOf("day");
     vi.setSystemTime(today.set({ hour: 12 }).toJSDate());
     const admin = { userId: randomUUID(), role: "SUPER_ADMIN" as const };
     const [departing, remaining, substitute, recovering] = await seedStudentProfiles(4);

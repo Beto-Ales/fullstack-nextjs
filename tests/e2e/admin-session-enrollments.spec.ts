@@ -572,6 +572,31 @@ test("enrolls one student by keyboard on mobile, preserves a block and refreshes
   });
 });
 
+test("rejects a stale enrollment after the session starts and refreshes the available places", async ({ page }) => {
+  test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withCreditsAccount("STUDENT", async (student) => {
+      const profileId = await seedAttendanceProfile(student, "Elena", "Horario");
+      const session = await seedAttendanceSession(admin, DateTime.now().setZone(CENTER_TIME_ZONE).plus({ days: 2 }), []);
+      await login(page, admin);
+      await expect(page).toHaveURL(/\/admin$/);
+      await page.goto(session.path);
+      const form = page.getByRole("region", { name: "Inscribir a un alumno" });
+      await form.getByLabel("Nombre, apellido o correo del alumno").fill("Elena");
+      await form.getByRole("button", { name: "Buscar alumnos" }).click();
+      await form.getByLabel("Alumno para esta sesión").selectOption(profileId);
+      await admin.client.query(`update class_sessions set starts_at_utc=clock_timestamp()-interval '1 minute',
+        ends_at_utc=clock_timestamp()+interval '59 minutes' where id=$1`, [session.id]);
+
+      await form.getByRole("button", { name: "Confirmar inscripción ordinaria" }).click();
+      await expect(form.getByRole("alert")).toHaveText("Solo se pueden inscribir alumnos en sesiones futuras y programadas.");
+      await expect(form.getByText("La inscripción está cerrada para esta sesión.")).toBeVisible();
+      await expect(form.getByText("Inscripción ordinaria confirmada.")).toHaveCount(0);
+      expect((await admin.client.query("select id from class_reservations where class_session_id=$1", [session.id])).rows).toEqual([]);
+    });
+  });
+});
+
 test("validates submitted student data and denies both enrollment actions on stale pages for a student", async ({ page }) => {
   test.skip(!process.env.TEST_DATABASE_URL, "Requires a migrated PostgreSQL TEST database");
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {

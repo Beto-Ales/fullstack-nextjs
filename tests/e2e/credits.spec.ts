@@ -121,6 +121,37 @@ test.describe("credits flows", () => {
     });
   });
 
+  test("rejects a recovery after its session starts and keeps the student's balance", async ({ page }) => {
+    await withCreditsAccount("STUDENT", async ({ client, userId, email, password, sessionIds }) => {
+      const profileId = randomUUID();
+      const classSessionId = randomUUID();
+      const movementId = randomUUID();
+      const start = DateTime.now().setZone(CENTER_TIME_ZONE).plus({ days: 5 });
+      sessionIds.push(classSessionId);
+      await client.query("insert into student_profiles (id,user_id,first_name,last_name) values ($1,$2,'Test','Horario')", [profileId, userId]);
+      await client.query(`insert into credit_ledger_movements (id,student_profile_id,movement_type,amount,source_grant_movement_id,idempotency_key)
+        values ($1,$2,'MANUAL_GRANT',1,$1,$1)`, [movementId, profileId]);
+      await client.query(`insert into class_sessions (id,local_date,starts_at_utc,ends_at_utc,max_capacity)
+        values ($1,$2,$3,$4,1)`, [classSessionId, start.toISODate(), start.toJSDate(), start.plus({ hours: 1 }).toJSDate()]);
+      await login(page, email, password);
+      await expect(page).toHaveURL(/\/student$/);
+      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+      const options = page.getByRole("region", { name: "Clases futuras disponibles" });
+      const entry = options.getByRole("listitem").filter({ hasText: start.toJSDate().toISOString() });
+      await expect(entry.getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" })).toBeVisible();
+      await client.query(`update class_sessions set starts_at_utc=clock_timestamp()-interval '1 minute',
+        ends_at_utc=clock_timestamp()+interval '59 minutes' where id=$1`, [classSessionId]);
+
+      await entry.getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" }).click();
+      await expect(page.getByRole("main").getByRole("alert")).toHaveText("La sesión de recuperación ya ha comenzado.");
+      await expect(page.getByText("Recuperación reservada.", { exact: true })).toHaveCount(0);
+      await expect(entry).toHaveCount(0);
+      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+      expect((await client.query("select id from class_reservations where class_session_id=$1", [classSessionId])).rows).toEqual([]);
+      expect((await client.query("select id from credit_ledger_movements where student_profile_id=$1", [profileId])).rows).toEqual([{ id: movementId }]);
+    });
+  });
+
   test("hides unavailable classes and confirms only one recovery when two students request the last seat", async ({ page, browser, baseURL }) => {
     await withCreditsAccount("STUDENT", async (first) => {
       await withCreditsAccount("STUDENT", async (second) => {

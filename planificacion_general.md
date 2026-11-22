@@ -65,6 +65,8 @@ El incremento 10.3 corrige H02. PostgreSQL reprodujo el interbloqueo entre un aj
 
 El incremento 10.4 corrige H04. La cancelación del alumno bloquea y revalida su cuenta antes de la sesión. Si la baja se confirmó primero, la cancelación se rechaza. Si la cancelación obtiene primero la cuenta activa, la baja espera y continúa con el estado académico resultante. [Modelo](docs/academic-model.md#cancelaciones-y-secuencias) · [Pruebas](docs/testing.md#incremento-104--revalidación-de-cuentas-en-cancelaciones)
 
+El incremento 10.5 corrige H06. Las nuevas reservas individuales aplican el mismo corte temporal con el reloj real de PostgreSQL tras los bloqueos y antes de insertar. Las recuperaciones conservan su consumo atómico y las operaciones ya confirmadas conservan el resultado de sus reintentos. [Modelo](docs/academic-model.md#concurrencia-en-reservas) · [Pruebas](docs/testing.md#incremento-105--validación-del-inicio-de-sesión-al-reservar)
+
 Fase 11 — Preparación para producción
 
 Variables de entorno, migraciones, configuración de despliegue, backups y documentación.

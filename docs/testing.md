@@ -399,6 +399,14 @@ npm.cmd run test:e2e -- --workers=1
 - Usar PostgreSQL 15 desechable con journal hasta `0013` y `TEST_DATABASE_URL` explícita. Ejecutar Vitest y Chromium en bases separadas. Los bloqueos de sincronización se revierten al cerrar cada prueba. El E2E de créditos pendientes requiere una versión normativa sintética vigente.
 - En PostgreSQL **15.20** pasaron **8 pruebas dirigidas de H04**, **6 de H02**, **110 pruebas focalizadas** y **230 pruebas** en la suite completa de Vitest. Chromium pasó **37 casos** con la normativa anterior. El único caso omitido, de créditos pendientes, pasó por separado con la normativa sintética revisada. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes.
 
+### Incremento 10.5 — Validación del inicio de sesión al reservar
+
+- [PostgreSQL](../src/application/academic/reservation-admission.integration.test.ts). Una conexión separada bloquea el perfil. `pg_blocking_pids` confirma que la reserva espera antes del inicio y `pg_sleep_until` sincroniza la liberación del bloqueo con la hora real de inicio. En 10.4, la recuperación y las dos vías ordinarias se confirmaban en ese cruce. La genérica también aceptaba una sesión pasada con estado `SCHEDULED`.
+- La integración comprueba reprogramaciones y cancelaciones concurrentes, igualdad y precisión de microsegundos con la hora repetida de Copenhague, reintentos válidos, ausencia de reservas o cargos tras un rechazo y conservación del aforo. Los casos de inscripción que antes simulaban el reloj de JavaScript ahora sitúan sus fixtures respecto al reloj de PostgreSQL y mantienen las mismas expectativas de rechazo.
+- [Chromium administrativo](../tests/e2e/admin-session-enrollments.spec.ts) y [Chromium de créditos](../tests/e2e/credits.spec.ts) verifican que una página abierta antes del inicio comunica el rechazo y actualiza la disponibilidad sin mostrar éxito ni perder saldo.
+- Usar bases PostgreSQL 15 desechables separadas para Vitest y Chromium, con journal hasta `0013` y `TEST_DATABASE_URL` explícita. El caso de créditos pendientes se verifica con una versión normativa sintética vigente.
+- En PostgreSQL **15.20** pasaron **13 pruebas de H06**, incluidas en las **54 focalizadas**, además de **6 de H02**, **8 de H04** y las **243 de Vitest** en la suite completa. Chromium pasó **39 casos** con la normativa anterior. El único caso omitido, de créditos pendientes, pasó por separado con normativa sintética revisada. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

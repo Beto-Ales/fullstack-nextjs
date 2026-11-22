@@ -7,6 +7,7 @@ import { DateTime } from "luxon";
 
 import { assertNoActiveAttendance } from "@/src/application/academic/attendance-records";
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { canAdmitNewReservation } from "@/src/application/academic/reservation-admission";
 import { requireActiveStudentForBooking, requireActiveStudentForCancellation } from "@/src/application/auth/active-student";
 import { createRecoveryConsumption, createRecoveryRefund, lockStudentProfile, materializeExpiredCredits, readCreditBalance } from "@/src/application/credits/credit-service";
 import { cancelRecoverySchema, recoveryHistorySchema, recoveryOptionsCursorSchema, reserveRecoverySchema } from "@/src/application/recovery/schemas";
@@ -264,7 +265,7 @@ export async function reserveRecovery(actor: Actor, input: unknown, studentProfi
     const studentProfileId = studentProfileIdForAdmin ?? await getStudentProfileIdForActor(tx, actor);
     await requireActiveStudentForBooking(tx, studentProfileId);
     const sessionRows = await tx.execute(sql`
-      select id, status, starts_at_utc, local_date::text as local_date, max_capacity
+      select id, status, local_date::text as local_date, max_capacity
       from class_sessions
       where id = ${payload.classSessionId}
       for update
@@ -274,7 +275,6 @@ export async function reserveRecovery(actor: Actor, input: unknown, studentProfi
       | {
           id: string;
           status: "SCHEDULED" | "CANCELLED" | "COMPLETED";
-          starts_at_utc: Date;
           local_date: string;
           max_capacity: number;
         }
@@ -284,10 +284,7 @@ export async function reserveRecovery(actor: Actor, input: unknown, studentProfi
       throw new ApplicationError("Class session not found.", "session_not_found", 404, true);
     }
     if (session.status !== "SCHEDULED") {
-      throw new ApplicationError("Class session is not open for reservation.", "session_not_reservable", 409, true);
-    }
-    if (new Date(session.starts_at_utc).getTime() <= Date.now()) {
-      throw new ApplicationError("Recovery class must be in the future.", "session_not_future", 409, true);
+      throw new ApplicationError("La sesión ya no está abierta para reservas.", "session_not_reservable", 409, true);
     }
 
     await lockStudentProfile(tx, studentProfileId);
@@ -365,6 +362,9 @@ export async function reserveRecovery(actor: Actor, input: unknown, studentProfi
     }
 
     const reservationId = randomUUID();
+    if (!await canAdmitNewReservation(tx, payload.classSessionId)) {
+      throw new ApplicationError("La sesión de recuperación ya ha comenzado.", "session_not_future", 409, true);
+    }
     await tx.insert(classReservations).values({
       id: reservationId,
       classSessionId: payload.classSessionId,

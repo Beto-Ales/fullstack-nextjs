@@ -214,14 +214,14 @@ En `/admin`, solo `SUPER_ADMIN` consulta el resumen y el calendario en la misma 
 
 ## Concurrencia en reservas
 
-La creación de reserva usa transacción con bloqueo de fila (`FOR UPDATE`) sobre `class_sessions`:
+Las nuevas reservas ordinarias individuales y de recuperación usan una transacción con bloqueo de fila (`FOR UPDATE`) sobre `class_sessions`:
 
 1. Bloquea sesión.
-2. Verifica estado reservable.
-3. Cuenta reservas confirmadas + plazas bloqueadas.
-4. Inserta reserva si hay capacidad.
+2. Verifica el estado reservable y cuenta las reservas confirmadas y plazas bloqueadas.
+3. Comprueba bajo los bloqueos de la reserva que la sesión sigue programada y que su inicio es estrictamente posterior al reloj de PostgreSQL en ese instante.
+4. Inserta la reserva si cumple las condiciones aplicables. En recuperaciones, el consumo y la reserva se confirman juntos.
 
-Esto evita sobreventa de la última plaza por carreras concurrentes.
+La igualdad con el inicio cierra la admisión. Una sesión que sigue `SCHEDULED` también queda cerrada al comenzar. Los reintentos de una inscripción de detalle o recuperación que recuperen un resultado confirmado siguen sujetos a autorización, titularidad y al contrato de idempotencia, y no crean reservas ni consumos adicionales. La generación habitual conserva su flujo. [Orden de bloqueos](architecture.md#orden-global-de-bloqueo-concurrencia)
 
 ## Cancelaciones y secuencias
 

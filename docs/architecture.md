@@ -41,7 +41,7 @@ La aplicación y el CLI comparten la reserva habitual y se coordinan por plantil
 
 ## Orden global de bloqueo (concurrencia)
 
-Los flujos de H02 y H04 adquieren estos bloqueos en orden. Los perfiles se bloquean con `FOR UPDATE`.
+Los flujos de H02, H04 y H06 adquieren estos bloqueos en orden. El bloqueo del perfil es `FOR UPDATE` salvo donde se indica `FOR KEY SHARE`.
 
 | Flujo | Orden de bloqueo y escritura |
 | --- | --- |
@@ -49,7 +49,8 @@ Los flujos de H02 y H04 adquieren estos bloqueos en orden. Los perfiles se bloqu
 | Reenvío manual | Cuenta administrativa `FOR SHARE` → comprobación de la clave única. Si la solicitud se confirmó, se leen los movimientos iniciales sin bloquear sesión ni perfil. Si la primera transacción se revierte, la clave vuelve a estar disponible. |
 | Cancelación global | Sesión `FOR UPDATE` → perfiles ordenados por ID → reservas → movimiento de consumo y devolución si hay recuperaciones. |
 | Reprogramación | Sesión `FOR UPDATE` → perfiles ordenados por ID si cambia el horario → actualización y auditoría de sesión → reevaluación de cancelaciones pendientes. |
-| Alta de recuperación | Cuenta del alumno `FOR SHARE` → sesión `FOR UPDATE` → perfil → inserción de reserva y consumo. |
+| Alta ordinaria individual | Cuenta del alumno `FOR SHARE` → cuenta del autor `FOR KEY SHARE` si se registra → sesión `FOR UPDATE` → perfil `FOR KEY SHARE` → comprobación temporal → inserción. |
+| Alta de recuperación | Cuenta del alumno `FOR SHARE` → sesión `FOR UPDATE` → perfil → comprobación temporal → inserción de reserva y consumo. |
 | Cancelación individual ordinaria o de recuperación | Si el actor es `STUDENT`, cuenta propia `FOR SHARE` y validación de cuenta activa → sesión `FOR NO KEY UPDATE` → reserva `FOR UPDATE` → perfil → actualización y auditoría o devolución, según corresponda. La cancelación administrativa comienza en la sesión. |
 | Baja lógica | Cuenta del alumno `FOR NO KEY UPDATE` → plantillas y sesiones en orden estable → perfil → baja, revocación de sesiones de acceso y actualización académica. |
 
@@ -58,3 +59,5 @@ Antes de 10.3, el ajuste tomaba el perfil y su inserción en el ledger solicitab
 La clave primaria de solicitud sigue coordinando los reenvíos. Los índices únicos por clave de movimiento, consumo, devolución y reserva activa siguen respaldando los flujos académicos. [Pruebas de H02](testing.md#incremento-103--orden-de-bloqueos-en-ajustes-de-créditos)
 
 Antes de 10.4, una cancelación autenticada podía continuar tras la baja porque la comprobación de titularidad leía el perfil sin proteger el estado de la cuenta. `FOR SHARE` de la cancelación y `FOR NO KEY UPDATE` de la baja compiten sobre la misma fila de cuenta. Si la baja gana, PostgreSQL vuelve a evaluar el filtro de rol y estado al terminar la espera y se devuelve `student_inactive` antes de bloquear sesión, reserva o perfil. Si la cancelación gana, la baja espera y procesa el estado ya confirmado. Los bloqueos referenciales `FOR KEY SHARE` son compatibles con el bloqueo compartido de la cuenta. El orden de sesión y perfil establecido para los ajustes vinculados en H02 se conserva. [Pruebas de H04](testing.md#incremento-104--revalidación-de-cuentas-en-cancelaciones)
+
+En H06, el alta ordinaria adelanta los bloqueos referenciales del perfil y del autor, si hay autor, que antes se adquirían implícitamente al insertar. En particular, el perfil puede estar bloqueado por el ledger y la reserva puede quedar esperando. La recuperación ya bloqueaba el perfil, pero comprobaba la hora antes de hacerlo, y la entrada ordinaria genérica solo comprobaba el estado. La guarda compartida consulta `clock_timestamp()` sobre la fila de sesión protegida inmediatamente antes de insertar. Una reprogramación que se confirma primero determina la hora vigente. La admisión se define en esa consulta y el commit puede ocurrir después del inicio. [Pruebas de H06](testing.md#incremento-105--validación-del-inicio-de-sesión-al-reservar)

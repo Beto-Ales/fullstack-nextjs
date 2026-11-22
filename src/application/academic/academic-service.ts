@@ -32,6 +32,7 @@ import {
 import { assertNoActiveAttendance, findActiveAttendance } from "@/src/application/academic/attendance-records";
 import { readCancellationStreak } from "@/src/application/academic/cancellation-sequence-service";
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { canAdmitNewReservation } from "@/src/application/academic/reservation-admission";
 import {
   currentClassAttendance, habitualAssignmentExists, historicalClass, reservationHasHabitualAssignment, selectHabitualSchedules, studentClassDetails,
 } from "@/src/application/academic/student-class-queries";
@@ -964,8 +965,14 @@ async function createReservationTransaction(
 ) {
   return db.transaction(async (tx) => {
     await requireActiveStudentForBooking(tx, studentProfileId);
-    const session = await lockCapacitySession(tx, classSessionId);
     const detail = context?.mode === "session-detail" ? context : undefined;
+    if (detail) {
+      // Acquire the creator reference before the session, in account-lock order.
+      const [creator] = await tx.select({ id: users.id }).from(users)
+        .where(eq(users.id, detail.createdByUserId)).for("key share");
+      if (!creator) throw new ApplicationError("Forbidden", "forbidden", 403, true);
+    }
+    const session = await lockCapacitySession(tx, classSessionId);
     const reservationId = detail?.reservationId ?? randomUUID();
     if (detail) {
       const [existing] = await tx.select().from(classReservations).where(eq(classReservations.id, reservationId));
@@ -982,11 +989,11 @@ async function createReservationTransaction(
     }
 
     const now = new Date();
-    if (context?.mode === "one-off" && (session.templateId !== null || session.startsAtUtc <= now)) {
+    if (context?.mode === "one-off" && session.templateId !== null) {
       throw new ApplicationError("Selecciona una clase única futura.", "invalid_one_off_enrollment", 409, true);
     }
-    if (session.sessionStatus !== "SCHEDULED" || (detail && getSessionBookingStatus(session, now) !== "UPCOMING")) {
-      throw new ApplicationError("Class session is not open for reservation.", "session_not_reservable", 409, true);
+    if (session.sessionStatus !== "SCHEDULED") {
+      throw new ApplicationError("Solo se pueden reservar sesiones futuras y programadas.", "session_not_reservable", 409, true);
     }
 
     if (detail) {
@@ -1001,6 +1008,17 @@ async function createReservationTransaction(
     const usage = await readSessionUsage(tx, classSessionId);
     if (calculateAvailableSpots({ ...usage, capacity: Math.min(session.maxCapacity, regulation.maxClassCapacity) }) === 0) {
       throw new ApplicationError("No spots available.", "no_spots_available", 409, true);
+    }
+
+    // The reservation foreign key can wait behind ledger operations holding the profile FOR UPDATE.
+    const [profile] = await tx.select({ id: studentProfiles.id }).from(studentProfiles)
+      .where(eq(studentProfiles.id, studentProfileId)).for("key share");
+    if (!profile) throw new ApplicationError("El alumno no tiene una cuenta activa.", "student_inactive", 409, true);
+    if (!await canAdmitNewReservation(tx, classSessionId)) {
+      if (context?.mode === "one-off") {
+        throw new ApplicationError("Selecciona una clase única futura.", "invalid_one_off_enrollment", 409, true);
+      }
+      throw new ApplicationError("Solo se pueden reservar sesiones futuras y programadas.", "session_not_reservable", 409, true);
     }
 
     const [created] = await tx.insert(classReservations).values({

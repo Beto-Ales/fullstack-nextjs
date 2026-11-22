@@ -136,10 +136,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("administrative enrollment in a 
   });
 
   it.each([
-    ["CANCELLED", start], ["COMPLETED", start],
-    ["SCHEDULED", now], ["SCHEDULED", new Date("2031-04-01T14:30Z")],
-    ["SCHEDULED", new Date("2031-04-01T14:00Z")],
-  ] as const)("rejects %s with start %s", async (status, startsAt) => {
+    ["CANCELLED", 30], ["COMPLETED", 30], ["SCHEDULED", 0], ["SCHEDULED", -30], ["SCHEDULED", -60],
+  ] as const)("rejects %s with start %s minutes from the database clock", async (status, offsetMinutes) => {
+    const { rows: [{ startsAt }] } = await client.query<{ startsAt: Date }>(
+      `select clock_timestamp() + $1::int * interval '1 minute' as "startsAt"`, [offsetMinutes]);
     await expect(academic.enrollStudentInSession(admin, request(await seedSession(1, status, startsAt))))
       .rejects.toMatchObject({ code: "session_not_reservable" });
   });
@@ -199,7 +199,9 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("administrative enrollment in a 
   });
 
   it("checks the server clock after waiting for the session lock", async () => {
-    const id = await seedSession();
+    const { rows: [{ startsAt }] } = await client.query<{ startsAt: Date }>(
+      `select clock_timestamp() + interval '1.1 seconds' as "startsAt"`);
+    const id = await seedSession(1, "SCHEDULED", startsAt);
     await client.query("begin");
     await client.query("select id from class_sessions where id = $1 for update", [id]);
     const waiting = Promise.allSettled([academic.enrollStudentInSession(admin, request(id))]);
@@ -211,7 +213,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("administrative enrollment in a 
           and wait_event_type = 'Lock' and query like '%"class_sessions"%for update%'`);
         expect(rows).toHaveLength(1);
       }, { interval: 20, timeout: 2000 });
-      vi.setSystemTime(start);
+      await client.query("select pg_sleep_until(starts_at_utc) from class_sessions where id = $1", [id]);
     } finally {
       await client.query("commit");
     }
