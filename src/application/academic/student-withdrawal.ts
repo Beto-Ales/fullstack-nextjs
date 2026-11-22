@@ -4,6 +4,7 @@ import { and, asc, eq, exists, gt, gte, isNotNull, isNull, or } from "drizzle-or
 import { z } from "zod";
 
 import { regulationDate, resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { lockStudentProfile, resolvePendingCancellationCredits } from "@/src/application/credits/credit-service";
 import { cancelFutureRecoveriesForWithdrawal } from "@/src/application/recovery/recovery-service";
 import type { UserRole } from "@/src/domain/auth/roles";
 import { db } from "@/src/infrastructure/db/client";
@@ -43,6 +44,7 @@ export async function withdrawStudent(actor: { userId: string; role: UserRole },
     for (const id of Array.from(templateIds).sort()) await lockTemplateAssignments(tx, id);
     await tx.select({ id: classSessions.id }).from(classSessions).where(exists(confirmedBookings))
       .orderBy(asc(classSessions.id)).for("no key update");
+    await lockStudentProfile(tx, studentProfileId);
 
     const withdrawnAt = new Date();
     const localDate = regulationDate(withdrawnAt);
@@ -89,6 +91,7 @@ export async function withdrawStudent(actor: { userId: string; role: UserRole },
       releasedReservationIds: releasedReservations.map(({ id }) => id),
       cancelledRecoveries,
     });
+    await resolvePendingCancellationCredits(tx, studentProfileId);
     return { withdrawn: true, releasedReservations: releasedReservations.length, cancelledRecoveries: cancelledRecoveries.length };
   });
 }

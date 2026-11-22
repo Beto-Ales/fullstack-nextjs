@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { expect, test, type Page, type Request } from "@playwright/test";
 import { DateTime } from "luxon";
+import { CENTER_TIME_ZONE } from "../../src/domain/time/timezone";
 import { seedHabitualCreditScenario, seedRecoveryCapacityScenario, seedRecoveryPaginationSessions, withCreditsAccount } from "./credits-fixtures";
 
 async function login(page: Page, email: string, password: string) {
@@ -242,6 +244,75 @@ test.describe("credits flows", () => {
       await expect(page.getByRole("heading", { name: "Área de administración" })).toBeVisible({ timeout: 10_000 });
       await expect(page.getByRole("heading", { name: "Créditos" })).toBeVisible();
       await expect(page.getByRole("button", { name: "Consultar créditos" })).toBeVisible();
+    });
+  });
+
+  test("shows a pending cancellation on mobile and grants it only after the earlier absence is recorded", async ({ page, browser, baseURL }) => {
+    await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+      await withCreditsAccount("STUDENT", async (student) => {
+        const today = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("day");
+        const { rows: [rule] } = await student.client.query<{
+          id: string; cancellation_notice_days: number; max_eligible_consecutive_cancellations: number | null;
+        }>(`select id, cancellation_notice_days, max_eligible_consecutive_cancellations from academic_regulations
+          where effective_from <= $1 order by effective_from desc limit 1`, [today.toISODate()]);
+        test.skip(rule.max_eligible_consecutive_cancellations === null, "Requires the revised rule active in disposable TEST.");
+        const profileId = randomUUID();
+        const templateId = randomUUID();
+        student.templateIds.push(templateId);
+        await student.client.query(`insert into student_profiles (id, user_id, first_name, last_name)
+          values ($1, $2, 'Racha', 'Pendiente')`, [profileId, student.userId]);
+        const previous = today.minus({ days: 2 }).set({ hour: 16 });
+        const future = today.plus({ days: rule.cancellation_notice_days + 2 }).set({ hour: 16 });
+        await student.client.query(`insert into class_templates
+          (id, name, iso_weekday, starts_at_local_time, duration_minutes, effective_from)
+          values ($1, 'Taller de racha pendiente', $2, '16:00', 60, $3)`, [templateId, future.weekday, previous.toISODate()]);
+        await student.client.query(`insert into student_template_assignments (id, student_profile_id, template_id, effective_from)
+          values ($1, $2, $3, $4)`, [randomUUID(), profileId, templateId, previous.toISODate()]);
+        for (const start of [previous, future]) {
+          const sessionId = randomUUID();
+          student.sessionIds.push(sessionId);
+          await student.client.query(`insert into class_sessions
+            (id, template_id, local_date, starts_at_utc, ends_at_utc, max_capacity)
+            values ($1, $2, $3, $4, $5, 1)`, [sessionId, templateId, start.toISODate(), start.toJSDate(), start.plus({ hours: 1 }).toJSDate()]);
+          await student.client.query(`insert into class_reservations (id, class_session_id, student_profile_id) values ($1, $2, $3)`,
+            [randomUUID(), sessionId, profileId]);
+        }
+        await page.setViewportSize({ width: 360, height: 800 });
+        await login(page, student.email, student.password);
+        await expect(page).toHaveURL(/\/student$/);
+        await page.goto("/normativa");
+        await expect(page.getByText("Máximo de cancelaciones consecutivas elegibles", { exact: true })).toBeVisible();
+        await page.getByRole("link", { name: "Volver a mi área" }).press("Enter");
+        const upcoming = page.getByRole("region", { name: "Mis próximas clases" });
+        await upcoming.getByRole("listitem").filter({ hasText: future.toISODate()! })
+          .getByRole("button", { name: "Cancelar clase" }).press("Enter");
+        await expect(page.getByText("Clase cancelada.", { exact: true })).toBeVisible();
+        const streak = page.getByRole("region", { name: "Racha de cancelaciones habituales" });
+        await expect(streak).toContainText("La racha actual está pendiente");
+        await expect(streak).toContainText("Solicitudes de crédito pendientes · 1");
+        await expect(page.getByText("Crédito pendiente de evaluación", { exact: true })).toBeVisible();
+        await expect(page.getByText("Disponibles: 0", { exact: true })).toBeVisible();
+        await expect(upcoming.getByText(future.toISODate()!, { exact: false })).toHaveCount(0);
+
+        const context = await browser.newContext({ baseURL });
+        try {
+          const adminPage = await context.newPage();
+          await login(adminPage, admin.email, admin.password);
+          await expect(adminPage).toHaveURL(/\/admin$/);
+          await adminPage.goto(`/admin/sesiones/${student.sessionIds[0]}`);
+          const attendance = adminPage.getByRole("group", { name: "Registro de asistencia de Racha Pendiente" });
+          await attendance.getByLabel("Resultado").selectOption("ABSENT");
+          await attendance.getByRole("button", { name: "Registrar asistencia" }).click();
+          await expect(adminPage.locator("strong").filter({ hasText: "Ausente" })).toBeVisible();
+        } finally {
+          await context.close();
+        }
+        await page.reload();
+        await expect(streak).toContainText("Cancelaciones consecutivas contabilizadas · 1");
+        await expect(page.getByText("Crédito pendiente de evaluación", { exact: true })).toHaveCount(0);
+        await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+        expect((await student.client.query("select id from credit_ledger_movements where student_profile_id = $1", [profileId])).rowCount).toBe(1);
+      });
     });
   });
 });

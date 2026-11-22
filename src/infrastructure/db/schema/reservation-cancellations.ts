@@ -1,4 +1,5 @@
 import { boolean, index, integer, pgEnum, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 import { classReservations } from "@/src/infrastructure/db/schema/class-reservations";
 import { classSessions } from "@/src/infrastructure/db/schema/class-sessions";
@@ -9,6 +10,7 @@ import { academicRegulations } from "@/src/infrastructure/db/schema/academic-reg
 
 export const reservationCancellationTypeEnum = pgEnum("reservation_cancellation_type", ["ON_TIME", "LATE"]);
 export const reservationCancellationSourceEnum = pgEnum("reservation_cancellation_source", ["STUDENT_REQUEST", "ADMIN_DECISION"]);
+export const cancellationCreditResolutionEnum = pgEnum("cancellation_credit_resolution", ["GRANTED", "MONTHLY_LIMIT", "NOT_ELIGIBLE"]);
 export const cancellationNonEligibilityReasonEnum = pgEnum("cancellation_non_eligibility_reason", [
   "TIMING",
   "SEQUENCE_POSITION",
@@ -39,6 +41,8 @@ export const reservationCancellations = pgTable(
     isHabitualReservation: boolean("is_habitual_reservation").notNull(),
     sequenceId: text("sequence_id"),
     sequencePosition: integer("sequence_position"),
+    sequencePending: boolean("sequence_pending").notNull().default(false),
+    creditResolution: cancellationCreditResolutionEnum("credit_resolution"),
     isThirdCancellation: boolean("is_third_cancellation").notNull().default(false),
     canGenerateCreditCandidate: boolean("can_generate_credit_candidate").notNull().default(false),
     nonEligibilityReason: cancellationNonEligibilityReasonEnum("non_eligibility_reason"),
@@ -51,6 +55,7 @@ export const reservationCancellations = pgTable(
     index("reservation_cancellations_session_idx").on(table.classSessionId),
     index("reservation_cancellations_cancelled_at_idx").on(table.cancelledAt),
     index("reservation_cancellations_sequence_idx").on(table.sequenceId),
+    index("reservation_cancellations_pending_profile_idx").on(table.studentProfileId).where(sql`${table.sequencePending}`),
   ],
 );
 

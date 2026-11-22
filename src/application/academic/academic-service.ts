@@ -30,15 +30,16 @@ import {
   updateClassSessionSchema,
 } from "@/src/application/academic/schemas";
 import { assertNoActiveAttendance, findActiveAttendance } from "@/src/application/academic/attendance-records";
+import { readCancellationStreak } from "@/src/application/academic/cancellation-sequence-service";
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import {
   currentClassAttendance, habitualAssignmentExists, historicalClass, reservationHasHabitualAssignment, selectHabitualSchedules, studentClassDetails,
 } from "@/src/application/academic/student-class-queries";
 import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
-import { lockStudentProfile, tryGenerateAutoCreditFromCancellation } from "@/src/application/credits/credit-service";
+import { lockStudentProfile, resolvePendingCancellationCredits, tryGenerateAutoCreditFromCancellation } from "@/src/application/credits/credit-service";
 import { cancelRecoveriesForCancelledSession, cancelRecoveryReservation, reserveRecovery } from "@/src/application/recovery/recovery-service";
 import { calculateAvailableSpots, getSessionBookingStatus } from "@/src/domain/academic/availability";
-import { classifyCancellationTiming, evaluateCancellationSequence, type HabitualSequenceEvent } from "@/src/domain/academic/cancellation-rules";
+import { classifyCancellationTiming, evaluateCancellationSequence, evaluateCancellationTimeline, type HabitualSequenceEvent } from "@/src/domain/academic/cancellation-rules";
 import {
   DEFAULT_CLASS_CAPACITY, SESSION_GENERATION_HORIZON_MONTHS, WEEKLY_COURSE_DURATION_MONTHS,
 } from "@/src/domain/academic/constants";
@@ -457,13 +458,14 @@ export async function updateClassSession(actor: Actor, input: unknown) {
       : resolveConfiguredCapacity(payload.maxCapacity, regulation.maxClassCapacity);
     const nextStatus = payload.status ?? session.status;
     const nextLocalDate = toCenterLocalDate(nextStartsAtUtc);
+    const timeChanged = nextStartsAtUtc.getTime() !== new Date(session.starts_at_utc).getTime()
+      || nextEndsAtUtc.getTime() !== new Date(session.ends_at_utc).getTime();
 
     if (nextEndsAtUtc.getTime() <= nextStartsAtUtc.getTime()) {
       throw new ApplicationError("Class session end time must be after start time.", "invalid_session_time_range", 400, true);
     }
 
-    if (nextStartsAtUtc.getTime() !== new Date(session.starts_at_utc).getTime()
-      || nextEndsAtUtc.getTime() !== new Date(session.ends_at_utc).getTime()) {
+    if (timeChanged) {
       await assertNoActiveAttendance(tx, eq(reservationAttendanceRecords.classSessionId, payload.classSessionId));
     }
 
@@ -479,18 +481,10 @@ export async function updateClassSession(actor: Actor, input: unknown) {
 
     const previousMonth = toMonthRange(session.local_date).monthStartLocalDate;
     const nextMonth = toMonthRange(nextLocalDate).monthStartLocalDate;
+    const affectedProfiles = timeChanged || nextLocalDate !== session.local_date
+      ? await lockSessionProfiles(tx, payload.classSessionId) : [];
 
     if (previousMonth !== nextMonth) {
-      await tx.execute(sql`
-        select p.id
-        from student_profiles p
-        where p.id in (
-          select student_profile_id from class_reservations
-          where class_session_id = ${payload.classSessionId} and origin = 'MAKEUP' and status = 'CONFIRMED'
-        )
-        order by p.id
-        for update
-      `);
       const range = toMonthRange(nextLocalDate);
       const conflicts = await tx.execute(sql`
         with moving_recoveries as (
@@ -555,7 +549,17 @@ export async function updateClassSession(actor: Actor, input: unknown) {
       maxCapacity: nextMaxCapacity,
       status: nextStatus,
     });
+    for (const profileId of affectedProfiles) await resolvePendingCancellationCredits(tx, profileId);
   });
+}
+
+async function lockSessionProfiles(tx: TransactionClient, sessionId: string): Promise<string[]> {
+  const rows = await tx.select({ id: studentProfiles.id }).from(studentProfiles)
+    .where(inArray(studentProfiles.id, tx.select({ id: classReservations.studentProfileId }).from(classReservations)
+      .where(eq(classReservations.classSessionId, sessionId))))
+    .orderBy(studentProfiles.id)
+    .for("update");
+  return rows.map(({ id }) => id);
 }
 
 export async function cancelClassSession(actor: Actor, input: unknown) {
@@ -570,6 +574,7 @@ export async function cancelClassSession(actor: Actor, input: unknown) {
     if (session && session.status !== "CANCELLED") {
       await assertNoActiveAttendance(tx, eq(reservationAttendanceRecords.classSessionId, payload.classSessionId));
     }
+    const affectedProfiles = session ? await lockSessionProfiles(tx, payload.classSessionId) : [];
     const [cancelledSession] = await tx
       .update(classSessions)
       .set({
@@ -618,6 +623,7 @@ export async function cancelClassSession(actor: Actor, input: unknown) {
       cancelledAt: now,
       regulationVersionId: regulation.id,
     });
+    for (const profileId of affectedProfiles) await resolvePendingCancellationCredits(tx, profileId);
 
     return {
       classSessionId: payload.classSessionId,
@@ -1180,6 +1186,7 @@ async function cancelOrdinaryReservation(
       .where(eq(classReservations.id, lockedReservation.reservationId));
 
     const cancellationId = decision?.cancellationId ?? randomUUID();
+    const revisedRule = regulation.maxEligibleConsecutiveCancellations !== null;
     const [created] = await tx.insert(reservationCancellations).values({
       id: cancellationId,
       reservationId: lockedReservation.reservationId,
@@ -1196,19 +1203,24 @@ async function cancelOrdinaryReservation(
       isHabitualReservation: isHabitual,
       sequenceId: null,
       sequencePosition: null,
+      sequencePending: revisedRule && !decision && isHabitual,
+      creditResolution: revisedRule && !decision && !isHabitual ? "NOT_ELIGIBLE" : null,
       isThirdCancellation: false,
       canGenerateCreditCandidate: false,
-      nonEligibilityReason: null,
+      nonEligibilityReason: revisedRule && !decision && !isHabitual ? "NON_HABITUAL" : null,
     }).onConflictDoNothing({ target: reservationCancellations.id }).returning({ id: reservationCancellations.id });
     if (!created) {
       throw new ApplicationError("Cancellation request ID is already in use.", "cancellation_id_conflict", 409, true);
     }
-    if (decision) return { cancellationId, created: true, autoCreditGenerated: false };
+    if (decision) {
+      await resolvePendingCancellationCredits(tx, lockedReservation.studentProfileId);
+      return { cancellationId, created: true, autoCreditGenerated: false };
+    }
 
-    const alreadyCredited = await snapshotCancellationSequence(tx, lockedReservation.studentProfileId, cancellationId);
-    const autoCredit = alreadyCredited
-      ? { created: false, reason: "SEQUENCE_ALREADY_CREDITED" as const }
-      : await tryGenerateAutoCreditFromCancellation(tx, cancellationId);
+    const autoCredit = revisedRule
+      ? (await resolvePendingCancellationCredits(tx, lockedReservation.studentProfileId)).get(cancellationId)
+        ?? { created: false, reason: isHabitual && timing.meetsSevenDayRule ? "PENDING" as const : "NOT_ELIGIBLE" as const }
+      : await resolveLegacyCancellationCredit(tx, lockedReservation.studentProfileId, cancellationId);
 
     return {
       cancellationId,
@@ -1220,6 +1232,13 @@ async function cancelOrdinaryReservation(
       regulationVersionId: regulation.id,
     };
   });
+}
+
+async function resolveLegacyCancellationCredit(tx: TransactionClient, studentProfileId: string, cancellationId: string) {
+  const alreadyCredited = await snapshotCancellationSequence(tx, studentProfileId, cancellationId);
+  return alreadyCredited
+    ? { created: false, reason: "SEQUENCE_ALREADY_CREDITED" as const }
+    : tryGenerateAutoCreditFromCancellation(tx, cancellationId);
 }
 
 async function lockAttendanceTarget(tx: TransactionClient, payload: { reservationId: string; classSessionId: string }) {
@@ -1259,6 +1278,7 @@ export async function recordAttendance(actor: Actor, input: unknown) {
     const activeRecord = await findActiveAttendance(tx, eq(reservationAttendanceRecords.reservationId, reservation.reservationId));
 
     if (activeRecord && activeRecord.outcome === payload.outcome) {
+      await resolvePendingCancellationCredits(tx, reservation.studentProfileId);
       return { attendanceRecordId: activeRecord.id, updated: false };
     }
 
@@ -1282,6 +1302,7 @@ export async function recordAttendance(actor: Actor, input: unknown) {
       correctedFromRecordId: null,
       supersededAt: null,
     });
+    await resolvePendingCancellationCredits(tx, reservation.studentProfileId);
 
     return { attendanceRecordId, updated: true };
   });
@@ -1326,6 +1347,7 @@ export async function correctAttendance(actor: Actor, input: unknown) {
       correctedFromRecordId: activeRecord.id,
       supersededAt: null,
     });
+    await resolvePendingCancellationCredits(tx, reservation.studentProfileId);
 
     return { attendanceRecordId };
   });
@@ -1381,6 +1403,8 @@ export async function detectAbsences(actor: Actor, input: unknown) {
     }
 
     const regulation = await resolveCurrentAcademicRegulation(tx, referenceTime);
+    const profiles = [...new Set(candidates.map(({ student_profile_id }) => student_profile_id))].sort();
+    for (const profileId of profiles) await lockStudentProfile(tx, profileId);
     const insertedRows = await tx
       .insert(reservationAttendanceRecords)
       .values(
@@ -1405,6 +1429,7 @@ export async function detectAbsences(actor: Actor, input: unknown) {
     const affectedProfiles = Array.from(
       new Set(insertedRows.map((row) => row.studentProfileId)),
     );
+    for (const profileId of affectedProfiles) await resolvePendingCancellationCredits(tx, profileId);
 
     return {
       createdAbsences: insertedRows.length,
@@ -1463,6 +1488,7 @@ export async function listStudentClassHistory(actor: Actor, now: Date) {
     status: classReservations.status,
     cancellationType: reservationCancellations.cancellationType,
     cancellationSource: reservationCancellations.decisionSource,
+    sequencePending: reservationCancellations.sequencePending,
     attendanceOutcome: reservationAttendanceRecords.outcome,
     habitual: sql<boolean>`coalesce(${reservationCancellations.isHabitualReservation}, ${reservationHasHabitualAssignment})`,
     historical: sql<boolean>`${historical}`,
@@ -1520,6 +1546,8 @@ export async function getStudentActivityHistory(actor: Actor, input?: unknown) {
       regulationVersionId: reservationCancellations.regulationVersionId,
       cancellationType: reservationCancellations.cancellationType,
       cancellationSource: reservationCancellations.decisionSource,
+      sequencePending: reservationCancellations.sequencePending,
+      creditResolution: reservationCancellations.creditResolution,
       meetsSevenDayRule: reservationCancellations.meetsSevenDayRule,
       sequenceId: reservationCancellations.sequenceId,
       sequencePosition: reservationCancellations.sequencePosition,
@@ -1549,28 +1577,25 @@ export async function getStudentActivityHistory(actor: Actor, input?: unknown) {
     .where(eq(reservationAttendanceRecords.studentProfileId, studentProfileId))
     .orderBy(reservationAttendanceRecords.recordedAt);
 
-  const events = await collectHabitualSequenceEvents(db, studentProfileId);
-
-  let currentConsecutiveCancellations = 0;
-  for (const event of events) {
-    if (!event.isHabitualReservation) {
-      continue;
-    }
-    if (event.eventType === "ATTENDANCE") {
-      if (event.outcome === "ATTENDED") {
-        currentConsecutiveCancellations = 0;
-      }
-      continue;
-    }
-    currentConsecutiveCancellations += 1;
-  }
+  const regulation = await resolveCurrentAcademicRegulation(db);
+  const maximum = regulation.maxEligibleConsecutiveCancellations;
+  const streak = maximum === null
+    ? evaluateCancellationTimeline(await collectHabitualSequenceEvents(db, studentProfileId))
+    : await readCancellationStreak(db, studentProfileId, maximum);
 
   return {
     studentProfileId,
-    currentConsecutiveCancellations,
+    currentConsecutiveCancellations: streak.currentIsProvisional ? null : streak.currentConsecutiveCancellations,
     cancellations,
     attendance,
   };
+}
+
+export async function getStudentCancellationStreak(actor: Actor, maximum: number) {
+  const [profile] = await db.select({ id: studentProfiles.id }).from(studentProfiles)
+    .where(reservationOwnerIsStudent(actor));
+  if (!profile) throw new ApplicationError("Student profile not found.", "student_profile_not_found", 404, true);
+  return readCancellationStreak(db, profile.id, maximum);
 }
 
 export async function generateClassSessions(actor: Actor, input: unknown) {

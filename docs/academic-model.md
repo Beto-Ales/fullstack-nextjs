@@ -211,31 +211,21 @@ Esto evita sobreventa de la última plaza por carreras concurrentes.
 
 ## Cancelaciones y secuencias
 
-- La cancelación de reserva solo aplica sobre reservas confirmadas y actor autorizado.
-- Clasificación temporal:
-  - `ON_TIME`: cancelación con la antelación de la versión vigente. La versión inicial exige 7 días naturales entre la fecha local de cancelación y la fecha local de la clase.
-  - `LATE`: antelación inferior al umbral. Libera la plaza, cuenta en la racha habitual y queda sin crédito.
-- Secuencia habitual:
-  - solo considera reservas de origen `ORDINARY`,
-  - la asistencia efectiva (`ATTENDED`) reinicia la racha,
-  - una falta sin aviso (`ABSENT`) se registra, mantiene la racha y deja el saldo intacto,
-  - la 3.ª cancelación `ON_TIME` queda candidata a recuperación,
-  - desde la 4.ª cancelación consecutiva ya no genera candidato.
-  - la racha se evalúa en el orden de celebración. Si una cancelación fuera de orden ocupa el tercer lugar de una racha que ya tiene una concesión, se registra la nueva decisión y se conserva la concesión previa.
-- Cada evaluación se registra en la transacción de cancelación con la versión aplicada. Las correcciones de asistencia se tienen en cuenta para las decisiones siguientes.
-- El código y la documentación anteriores contaban 168 horas y reiniciaban la racha con `ABSENT`. Los resultados de esas operaciones se conservan como se registraron.
+- El alumno autorizado cancela su reserva confirmada y la plaza se libera en la misma transacción. La antelación se clasifica con el inicio real de la sesión y el instante de solicitud. La normativa inicial exige siete días naturales en Copenhague.
+- Con la regla del 9.10, el máximo inicial de posiciones elegibles es tres. Las cancelaciones tardías cuentan y quedan sin crédito. El resultado vigente `ATTENDED` o `ABSENT` de una habitual reinicia la racha. Las recuperaciones, las ordinarias individuales y las cancelaciones administrativas son neutrales.
+- La cronología usa el inicio de sesión y desempata por identificador de sesión. Una sesión habitual cuenta una vez incluso con reinscripciones. Una reserva habitual anterior confirmada sin resultado deja pendiente la posición desde el último reinicio pertinente. La ausencia requiere un registro académico vigente. Los datos históricos de cancelación se reconocen si consta solicitud del alumno o si el responsable registrado coincide con él.
+- La cancelación conserva su instante, clasificación y versión de solicitud. `sequence_pending` distingue una evaluación pendiente. Las operaciones que resuelven clases anteriores vuelven a evaluar la secuencia. Dentro del mes natural de la solicitud, una solicitud posterior con posibilidad de crédito espera a las solicitudes anteriores pendientes de ese mes. El orden de asignación usa instante de solicitud e identificador de cancelación. `credit_resolution` registra una concesión, un cupo mensual agotado o la falta de elegibilidad.
+- El cupo mensual se calcula por el mes de solicitud. Un crédito existe y queda disponible cuando se inserta su movimiento. Su caducidad individual se cuenta desde la concesión efectiva con el plazo de la versión de solicitud. El bloqueo por perfil y la clave única de la cancelación garantizan un solo movimiento. Los créditos del 9.10 referencian la sesión a través de la cancelación, por lo que resolver otro crédito del mismo alumno evita bloquear una sesión ajena mediante una referencia redundante.
+- El panel del alumno muestra el máximo normativo, la racha cuando se conoce y las solicitudes pendientes. La cronología puede cambiar al reprogramar una sesión para decisiones futuras. Las decisiones consolidadas y el ledger conservan sus datos originales. [Cobertura del 9.10](testing.md#incremento-910--racha-y-créditos-pendientes)
 
-La [especificación general](../planificacion_general.md#cancelaciones-consecutivas) difiere en dos puntos que quedan por conciliar.
+### Vigencia de la regla corregida
 
-- La especificación permite que las tres primeras cancelaciones consecutivas generen crédito. El código vigente solo evalúa como candidata la tercera, antes de aplicar los demás límites.
-- La especificación indica que una ausencia rompe la racha. El código vigente mantiene la racha ante `ABSENT` y la reinicia con una asistencia efectiva.
-
-Ambos casos se evalúan en [`evaluateCancellationSequence`](../src/domain/academic/cancellation-rules.ts). La fase 7 usa créditos ya concedidos para verificar las recuperaciones y conserva las reglas de concesión y los movimientos históricos.
+La migración aditiva `0012` conserva las versiones existentes con el máximo nuevo vacío. Esas versiones mantienen la tercera posición y el reinicio por asistencia. Para activar el 9.10, `SUPER_ADMIN` publica en `/normativa` una versión con fecha futura, posterior a las versiones programadas con la regla anterior. El formulario ofrece tres como valor inicial. La versión activa al cancelar fija el máximo, la antelación, el cupo mensual y la caducidad de esa solicitud, incluso si la resolución ocurre bajo una versión posterior.
 
 ### Cancelación individual por decisión administrativa
 
 - `SUPER_ADMIN` puede cancelar desde el detalle una reserva ordinaria confirmada de una sesión programada y futura, con un motivo de 3 a 300 caracteres tras recortar espacios. La acción verifica permisos y pertenencia a la sesión. Una asistencia vigente impide la cancelación. La operación conserva la reserva, su origen, su historial y el horario habitual, y libera su ocupación.
-- La decisión administrativa queda fuera del cálculo de la racha. No cuenta como cancelación del alumno ni interrumpe o reinicia la secuencia. El flujo deja intactos el ledger, el saldo y los límites mensuales de generación y recuperaciones. Una eventual compensación se tramita por separado con la concesión manual auditada. Las solicitudes de alumnado conservan la política vigente. Las recuperaciones y las cancelaciones de sesión completa conservan sus flujos.
+- La decisión administrativa queda fuera de la racha y del cupo. Cuando despeja una clase anterior pendiente, el sistema reevalúa las solicitudes existentes del alumno. El crédito, si corresponde, se vincula a la solicitud del alumno. Una compensación por la decisión administrativa se tramita mediante la concesión manual auditada.
 - La migración `0010_admin_reservation_cancellation` añade el origen explícito de la decisión y el motivo administrativo a `reservation_cancellations`. Las nuevas filas ordinarias distinguen `ADMIN_DECISION` de `STUDENT_REQUEST`. La auditoría registra reserva, alumno, sesión, ejecutor, fecha y versión normativa. La fila administrativa registra la transición de confirmada a cancelada. Los registros anteriores conservan origen y motivo desconocidos, incluso si se conoce el ejecutor.
 - La cancelación usa los bloqueos de sesión, reserva y perfil del alumno del flujo ordinario. Comprueba el estado después de bloquear y guarda la transición y la auditoría en la misma transacción. Un reintento con el mismo UUID, sesión, reserva, actor y motivo normalizado devuelve la auditoría original. Una solicitud diferente sobre una reserva cancelada se rechaza.
 - Calendario y detalle actualizan el aforo. La cancelación administrativa de un habitual se reconoce para esa fecha en el indicador de habituales pendientes. El historial del alumno distingue la decisión administrativa y el motivo queda en el historial de administración. Se revalidan el detalle, el calendario administrativo y el panel del alumno.
@@ -247,7 +237,7 @@ Ambos casos se evalúan en [`evaluateCancellationSequence`](../src/domain/academ
 - Repetir el alta con el mismo resultado vigente devuelve el identificador original. Cambiarlo requiere una corrección con motivo de 3 a 300 caracteres después de recortar espacios. La corrección exige un resultado anterior y rechaza repetir el vigente. Cada versión guarda resultado, reserva, actor, hora, normativa aplicada, motivo y referencia a la versión sustituida cuando corresponda.
 - Las escrituras manuales bloquean sesión, reserva y perfil en ese orden. La corrección marca la versión anterior como sustituida e inserta la nueva dentro de la misma transacción. El índice parcial asegura un único resultado vigente por reserva.
 - Si la cancelación de la sesión o de la reserva se confirma primero, el alta y la corrección se rechazan. Si hay un resultado vigente, se rechazan la cancelación de esa reserva, la cancelación de su sesión y los cambios del horario de esa sesión. Las cancelaciones tardías siguen siendo cancelaciones. Ante datos históricos que combinan ambos estados, el historial de clases muestra la cancelación y los registros originales quedan disponibles para auditoría.
-- Registrar y corregir asistencia o ausencia deja intacto el ledger. La racha conserva su lógica actual. Cambiar entre `ATTENDED` y `ABSENT` puede influir en futuras evaluaciones de la racha, según se explica en [Cancelaciones y secuencias](#cancelaciones-y-secuencias).
+- Registrar o corregir asistencia conserva los movimientos consolidados. Con la regla del 9.10, ambos resultados reinician la racha y pueden desbloquear solicitudes de cancelación anteriores. Si se concede un crédito, el movimiento se vincula a la solicitud del alumno. [Cancelaciones y secuencias](#cancelaciones-y-secuencias)
 - El detalle administrativo incluye **Control de asistencia**. La consulta trae el resultado vigente junto con cada reserva y conserva las cancelaciones en su historial. El formulario aparece al consultar una sesión elegible y vuelve a cargar sus resultados tras guardar. La corrección ofrece el resultado alternativo y usa las mismas garantías del servicio. [Cobertura y pruebas](testing.md#incremento-92--control-de-asistencia-en-el-detalle-de-sesión)
 
 ## Detección de ausencias
@@ -328,7 +318,7 @@ Ambos casos se evalúan en [`evaluateCancellationSequence`](../src/domain/academ
 - Los créditos comparten el saldo FIFO, las fechas de vencimiento y el cálculo de caducidad del servicio de créditos. La consulta proyecta los vencimientos pendientes y muestra los movimientos persistidos del ledger. El total de utilizados representa el consumo bruto en recuperaciones. Las devoluciones se leen del ledger y muestran si hubo abono.
 - Las recuperaciones comparten el criterio de reserva `MAKEUP` y la consulta de movimientos de consumo y devolución. Una recuperación figura como realizada si tiene asistencia vigente. Las sesiones pasadas sin registro y las ausencias se identifican por separado.
 - El servicio usa una transacción PostgreSQL de solo lectura con una instantánea consistente para todos los datos de la ficha. Los totales académicos se calculan en PostgreSQL sobre el historial completo. Horarios, próximas clases, historial, movimientos y recuperaciones tienen paginación independiente de 20 filas y orden estable con el identificador como desempate. Créditos muestra hasta cinco fechas de vencimiento próximas.
-- Las estadísticas avanzadas y la discrepancia en la racha de cancelaciones quedan pendientes. La ficha omite el indicador de racha. [Cobertura de pruebas de consulta](testing.md#incremento-97--perfil-administrativo-del-alumno)
+- Las estadísticas avanzadas quedan pendientes. El indicador de racha del 9.10 está disponible en el panel del alumno con la regla corregida vigente. [Cobertura de pruebas de consulta](testing.md#incremento-97--perfil-administrativo-del-alumno)
 
 ### Edición auditada de datos
 

@@ -8,8 +8,13 @@ export const INITIAL_REGULATION = {
   maxClassCapacity: DEFAULT_CLASS_CAPACITY,
 };
 
-export type RegulationRules = typeof INITIAL_REGULATION;
+export const INITIAL_CONSECUTIVE_CANCELLATIONS_LIMIT = 3;
+
+export type RegulationRules = typeof INITIAL_REGULATION & { maxEligibleConsecutiveCancellations: number | null };
 export type RegulationRule = keyof RegulationRules;
 export type RegulationChanges = Partial<Record<RegulationRule, { previous: number | null; next: number }>>;
 
-export const REGULATION_RULES = Object.keys(INITIAL_REGULATION) as RegulationRule[];
+export const REGULATION_RULES: RegulationRule[] = [
+  ...(Object.keys(INITIAL_REGULATION) as (keyof typeof INITIAL_REGULATION)[]),
+  "maxEligibleConsecutiveCancellations",
+];

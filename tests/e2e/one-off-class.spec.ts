@@ -28,7 +28,12 @@ test.describe("administrative one-off class creation", () => {
 
   test("creates one class in Copenhagen time and rejects an excessive capacity on the server", async ({ page }) => {
     await withCreditsAccount("SUPER_ADMIN", async ({ client, email, password, sessionIds }) => {
-      const date = DateTime.now().setZone(CENTER_TIME_ZONE).plus({ days: 40 });
+      const today = DateTime.now().setZone(CENTER_TIME_ZONE);
+      const date = today.plus({ days: 40 });
+      const { rows: [rule] } = await client.query<{ id: string }>(
+        "select id from academic_regulations where effective_from <= $1 order by effective_from desc limit 1",
+        [today.toISODate()],
+      );
       const localDate = date.toISODate()!;
       const startsAt = DateTime.fromISO(`${localDate}T18:25`, { zone: CENTER_TIME_ZONE });
       const endsAt = startsAt.plus({ minutes: 75 });
@@ -64,7 +69,7 @@ test.describe("administrative one-off class creation", () => {
       sessionIds.push(...createdRows.map(({ id }) => id));
       expect(createdRows).toEqual([expect.objectContaining({
         template_id: null, local_date: localDate, starts_at_utc: startsAt.toJSDate(),
-        ends_at_utc: endsAt.toJSDate(), max_capacity: 12, regulation_version_id: "initial",
+        ends_at_utc: endsAt.toJSDate(), max_capacity: 12, regulation_version_id: rule.id,
       })]);
     });
   });

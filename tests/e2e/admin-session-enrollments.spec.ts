@@ -661,7 +661,7 @@ test("cancels a single ordinary enrollment by keyboard, preserves capacity block
           await expect(reason).toBeVisible();
           await expect(row).toContainText("Cancelar la reserva ordinaria de Ada Ordinaria");
           await expect(row).toContainText("Hora de Copenhague");
-          await expect(row).toContainText("El saldo de créditos y la racha del alumno se conservan");
+          await expect(row).toContainText("Esta cancelación queda fuera de la racha y no genera crédito");
           expect(await row.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
           await expect(confirmed.getByText("Total de inscritos: 2")).toBeVisible();
           await reason.fill("   ");

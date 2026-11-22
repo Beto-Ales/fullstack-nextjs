@@ -85,6 +85,13 @@
       "when": 1795355884916,
       "tag": "0011_student_profile_edit_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1795357766139,
+      "tag": "0012_consecutive_cancellation_eligibility",
+      "breakpoints": true
     }
   ]
 }

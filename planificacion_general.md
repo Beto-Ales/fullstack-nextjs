@@ -47,9 +47,11 @@ El calendario global muestra las incidencias de aforo. El detalle de sesión per
 
 El incremento 9.7 incorporó la consulta en `/admin/alumnos/[studentId]` para cuentas activas y desactivadas, con horarios, próximas clases, historial, créditos y recuperaciones. [Modelo y reglas](docs/academic-model.md#perfil-administrativo-del-alumno) · [Pruebas del 9.7](docs/testing.md#incremento-97--perfil-administrativo-del-alumno)
 
-El incremento 9.8 permite editar los datos personales y de contacto de alumnos activos con control de concurrencia y auditoría transaccional. Las estadísticas avanzadas y la revisión de la racha de cancelaciones quedan pendientes. [Edición auditada](docs/academic-model.md#edición-auditada-de-datos) · [Pruebas del 9.8](docs/testing.md#incremento-98--edición-auditada-del-alumno)
+El incremento 9.8 permite editar los datos personales y de contacto de alumnos activos con control de concurrencia y auditoría transaccional. [Edición auditada](docs/academic-model.md#edición-auditada-de-datos) · [Pruebas del 9.8](docs/testing.md#incremento-98--edición-auditada-del-alumno)
 
 El incremento 9.9 añade a la ficha el historial paginado y de solo lectura de las modificaciones administrativas, disponible para `SUPER_ADMIN` en cuentas activas y desactivadas. [Modelo y reglas](docs/academic-model.md#historial-de-modificaciones) · [Pruebas del 9.9](docs/testing.md#incremento-99--historial-de-modificaciones-del-alumno)
+
+El incremento 9.10 corrige la racha habitual y difiere los créditos cuando falta un resultado anterior necesario. El cupo corresponde al mes de solicitud y la caducidad empieza en la concesión efectiva. La regla se activa al entrar en vigor una nueva versión de normativa con el máximo configurable. [Semántica y vigencia](docs/academic-model.md#cancelaciones-y-secuencias) · [Pruebas del 9.10](docs/testing.md#incremento-910--racha-y-créditos-pendientes)
 
 Fase 10 — Seguridad y pruebas
 

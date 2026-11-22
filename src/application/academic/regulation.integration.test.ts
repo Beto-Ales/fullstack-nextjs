@@ -122,7 +122,9 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic regulation (pos
     await expect(getCurrentAcademicRegulation(student)).resolves.toMatchObject({ id: "initial" });
     vi.setSystemTime(new Date("2030-04-01T22:00:00Z"));
     for (const actor of [student, admin]) {
-      await expect(getCurrentAcademicRegulation(actor)).resolves.toEqual({ id: published.id, ...nextRules });
+      await expect(getCurrentAcademicRegulation(actor)).resolves.toEqual({
+        id: published.id, ...nextRules, maxEligibleConsecutiveCancellations: null,
+      });
     }
   });
 
@@ -220,6 +222,30 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic regulation (pos
     expect((await creditService.getCreditOverview(student)).history).toEqual(ledger);
   });
 
+  it("preserves a legacy decision when an earlier confirmed class is cancelled later", async () => {
+    const templateId = await createHabitualTemplate();
+    await academicService.cancelReservation(student, await habitualReservation(templateId, "2030-04-10"));
+    await academicService.cancelReservation(student, await habitualReservation(templateId, "2030-04-12"));
+    const pending = await habitualReservation(templateId, "2030-04-15");
+    const future = await habitualReservation(templateId, "2030-04-18");
+
+    const credited = await academicService.cancelReservation(student, future);
+    expect(credited).toMatchObject({ autoCreditGenerated: true, regulationVersionId: "initial" });
+    const before = await academicService.getStudentActivityHistory(student);
+    const decision = before.cancellations.find(({ classSessionId }) => classSessionId === future.classSessionId);
+    expect(decision).toMatchObject({ sequencePosition: 3, canGenerateCreditCandidate: true });
+    const { history } = await creditService.getCreditOverview(student);
+    expect(history).toHaveLength(1);
+
+    vi.setSystemTime(new Date("2030-04-14T10:00:00Z"));
+    await expect(academicService.cancelReservation(student, pending))
+      .resolves.toMatchObject({ cancellationType: "LATE", autoCreditGenerated: false });
+    const after = await academicService.getStudentActivityHistory(student);
+    expect(after.currentConsecutiveCancellations).toBe(4);
+    expect(after.cancellations.find(({ classSessionId }) => classSessionId === future.classSessionId)).toEqual(decision);
+    expect((await creditService.getCreditOverview(student)).history).toEqual(history);
+  });
+
   it("keeps another available credit when a consumed automatic grant expires", async () => {
     const templateId = await createHabitualTemplate();
     for (const date of ["2030-04-10", "2030-04-11", "2030-04-12"]) {
@@ -282,5 +308,186 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("academic regulation (pos
       { movementType: "EXPIRATION", regulationVersionId: version.id },
     ]);
     expect(await regulationService.resolveAcademicRegulation(db, "2030-04-01")).toMatchObject({ id: "initial" });
+  });
+
+  it("resolves the racha by session, awards the request month in request order, and expires from actual generation", async () => {
+    const revised = await regulationService.publishAcademicRegulation(admin, {
+      ...INITIAL_REGULATION, effectiveFrom: "2030-04-02", maxEligibleConsecutiveCancellations: 3,
+    });
+    const next = await regulationService.publishAcademicRegulation(admin, {
+      ...INITIAL_REGULATION, effectiveFrom: "2030-05-01", maxEligibleConsecutiveCancellations: 1,
+      monthlyCancellationCredits: 1, creditExpirationMonths: 3,
+    });
+    vi.setSystemTime(new Date("2030-04-30T21:56:00Z"));
+    const template = await createHabitualTemplate();
+    const blocker = await habitualReservation(template, "2030-05-06");
+    const targets = [];
+    for (const date of ["2030-05-23", "2030-05-16", "2030-05-09"]) {
+      targets.push(await habitualReservation(template, date));
+    }
+    const requests = ["21:57", "21:58", "21:59"].map((time) => new Date(`2030-04-30T${time}:00Z`));
+    for (const [index, target] of targets.entries()) {
+      vi.setSystemTime(requests[index]);
+      await expect(academicService.cancelReservation(student, target)).resolves.toMatchObject({
+        cancellationType: "ON_TIME", autoCreditGenerated: false, autoCreditSkippedReason: "PENDING", regulationVersionId: revised.id,
+      });
+    }
+    await expect(academicService.cancelReservation(student, targets[0]))
+      .rejects.toMatchObject({ code: "reservation_not_confirmed" });
+    const pending = await academicService.getStudentActivityHistory(student);
+    expect(pending.currentConsecutiveCancellations).toBeNull();
+    expect(pending.cancellations.map((row) => row.sequencePending)).toEqual([true, true, true]);
+    expect((await creditService.getCreditOverview(student)).availableCredits).toBe(0);
+    await expect(recoveryService.reserveRecovery(student, { classSessionId: await createSession("2030-05-24") }))
+      .rejects.toMatchObject({ code: "no_available_credits" });
+
+    const generated = new Date("2030-05-07T10:00:00Z");
+    vi.setSystemTime(generated);
+    await Promise.all([
+      academicService.recordAttendance(admin, { ...blocker, outcome: "ABSENT" }),
+      creditService.getCreditOverview(student),
+      academicService.recordAttendance(admin, { ...blocker, outcome: "ABSENT" }),
+    ]);
+    const resolved = await academicService.getStudentActivityHistory(student);
+    expect(resolved.cancellations.map((row) => [
+      row.cancelledAt, row.sequencePosition, row.sequencePending, row.creditResolution, row.canGenerateCreditCandidate,
+    ])).toEqual([
+      [requests[0], 3, false, "GRANTED", true],
+      [requests[1], 2, false, "GRANTED", true],
+      [requests[2], 1, false, "MONTHLY_LIMIT", true],
+    ]);
+    const aprilGrants = (await creditService.getCreditOverview(student)).history;
+    expect(aprilGrants).toHaveLength(2);
+    expect(aprilGrants).toEqual(expect.arrayContaining(targets.slice(0, 2).map((target) => expect.objectContaining({
+      classSessionId: target.classSessionId, createdAt: generated, expiresAt: new Date("2030-11-07T11:00:00Z"),
+      regulationVersionId: revised.id,
+    }))));
+    await academicService.correctAttendance(admin, { ...blocker, outcome: "PRESENT", reason: "Verificación posterior" });
+    expect((await creditService.getCreditOverview(student)).history).toEqual(aprilGrants);
+
+    const reset = await habitualReservation(template, "2030-05-24");
+    vi.setSystemTime(new Date("2030-05-25T10:00:00Z"));
+    await academicService.recordAttendance(admin, { ...reset, outcome: "PRESENT" });
+    const juneClass = await habitualReservation(template, "2030-06-03");
+    await expect(academicService.cancelReservation(student, juneClass)).resolves.toMatchObject({
+      autoCreditGenerated: true, regulationVersionId: next.id,
+    });
+    const overview = await creditService.getCreditOverview(student);
+    expect(overview.availableCredits).toBe(3);
+    expect(overview.history[2]).toMatchObject({ classSessionId: juneClass.classSessionId, regulationVersionId: next.id });
+  });
+
+  it("counts a late cancellation, keeps administrative decisions neutral, and resets on recorded attendance and absence", async () => {
+    await regulationService.publishAcademicRegulation(admin, {
+      ...INITIAL_REGULATION, effectiveFrom: "2030-04-02", maxEligibleConsecutiveCancellations: 3,
+    });
+    vi.setSystemTime(new Date("2030-04-02T10:00:00Z"));
+    const template = await createHabitualTemplate();
+    const dates = [];
+    for (const date of ["2030-04-10", "2030-04-11", "2030-04-13", "2030-04-15", "2030-04-24", "2030-05-01"]) {
+      dates.push(await habitualReservation(template, date));
+    }
+    const [first, second, adminDate, late, fourth, fifth] = dates;
+    expect(await academicService.cancelReservation(student, first)).toMatchObject({ autoCreditGenerated: true });
+    expect(await academicService.cancelReservation(student, second)).toMatchObject({ autoCreditGenerated: true });
+    await expect(academicService.cancelSessionEnrollment(admin, {
+      ...adminDate, cancellationId: randomUUID(), reason: "Ajuste de la escuela",
+    })).resolves.toMatchObject({ autoCreditGenerated: false });
+    expect(await academicService.cancelReservation(student, fourth)).toMatchObject({ autoCreditSkippedReason: "PENDING" });
+    vi.setSystemTime(new Date("2030-04-14T10:00:00Z"));
+    expect(await academicService.cancelReservation(student, late)).toMatchObject({ autoCreditGenerated: false, cancellationType: "LATE" });
+    expect(await academicService.cancelReservation(student, fifth)).toMatchObject({ autoCreditGenerated: false });
+    const after = await academicService.getStudentActivityHistory(student);
+    expect(after.cancellations.filter((row) => row.sequencePosition !== null).map((row) => row.sequencePosition).sort()).toEqual([1, 2, 3, 4, 5]);
+    expect(after.cancellations.find((row) => row.classSessionId === fourth.classSessionId))
+      .toMatchObject({ sequencePosition: 4, nonEligibilityReason: "SEQUENCE_POSITION", creditResolution: "NOT_ELIGIBLE" });
+    expect(after.cancellations.find((row) => row.classSessionId === adminDate.classSessionId))
+      .toMatchObject({ sequencePosition: null, creditResolution: null, sequencePending: false });
+    expect(after.cancellations.find((row) => row.classSessionId === late.classSessionId))
+      .toMatchObject({ sequencePosition: 3, nonEligibilityReason: "TIMING" });
+
+    const attended = await habitualReservation(template, "2030-05-04");
+    vi.setSystemTime(new Date("2030-05-05T10:00:00Z"));
+    await academicService.recordAttendance(admin, { ...attended, outcome: "PRESENT" });
+    expect((await academicService.getStudentActivityHistory(student)).currentConsecutiveCancellations).toBe(0);
+    expect(await academicService.cancelReservation(student, await habitualReservation(template, "2030-05-13")))
+      .toMatchObject({ autoCreditGenerated: true });
+    const absent = await habitualReservation(template, "2030-05-15");
+    const waiting = await habitualReservation(template, "2030-05-30");
+    expect(await academicService.cancelReservation(student, waiting)).toMatchObject({ autoCreditSkippedReason: "PENDING" });
+    vi.setSystemTime(new Date("2030-05-16T10:00:00Z"));
+    await expect(academicService.detectAbsences(admin, {})).resolves.toMatchObject({ createdAbsences: 1 });
+    const history = await academicService.listStudentClassHistory(student, new Date());
+    expect(history.history.find((row) => row.reservationId === absent.reservationId)).toMatchObject({ attendanceOutcome: "ABSENT" });
+    expect(history.history.find((row) => row.reservationId === waiting.reservationId)).toMatchObject({ sequencePending: false });
+    expect((await academicService.getStudentActivityHistory(student)).cancellations.find((row) => row.classSessionId === waiting.classSessionId))
+      .toMatchObject({ sequencePosition: 1, creditResolution: "GRANTED" });
+    expect((await creditService.getCreditOverview(student)).availableCredits).toBe(4);
+  });
+
+  it("does not let a later request with known position take the last monthly slot from an older pending request", async () => {
+    await regulationService.publishAcademicRegulation(admin, {
+      ...INITIAL_REGULATION, effectiveFrom: "2030-04-02", maxEligibleConsecutiveCancellations: 3,
+      monthlyCancellationCredits: 1,
+    });
+    vi.setSystemTime(new Date("2030-04-10T10:00:00Z"));
+    const template = await createHabitualTemplate();
+    const earlySession = await habitualReservation(template, "2030-04-18");
+    const blocker = await habitualReservation(template, "2030-04-20");
+    const lateSession = await habitualReservation(template, "2030-04-27");
+    expect(await academicService.cancelReservation(student, lateSession)).toMatchObject({ autoCreditSkippedReason: "PENDING" });
+    vi.setSystemTime(new Date("2030-04-11T10:00:00Z"));
+    expect(await academicService.cancelReservation(student, earlySession)).toMatchObject({ autoCreditSkippedReason: "PENDING" });
+    vi.setSystemTime(new Date("2030-04-21T10:00:00Z"));
+    await academicService.recordAttendance(admin, { ...blocker, outcome: "ABSENT" });
+    const { cancellations } = await academicService.getStudentActivityHistory(student);
+    expect(cancellations).toMatchObject([
+      { classSessionId: lateSession.classSessionId, sequencePosition: 1, creditResolution: "GRANTED" },
+      { classSessionId: earlySession.classSessionId, sequencePosition: 1, creditResolution: "MONTHLY_LIMIT" },
+    ]);
+    const overview = await creditService.getCreditOverview(student);
+    expect(overview.history).toMatchObject([{ classSessionId: lateSession.classSessionId }]);
+  });
+
+  it("activates the corrected rule after scheduled legacy versions and inherits the configured threshold", async () => {
+    const legacy = await regulationService.publishAcademicRegulation(admin, { ...nextRules, effectiveFrom: "2030-05-01" });
+    const revised = { ...nextRules, maxEligibleConsecutiveCancellations: 3 };
+    await expect(regulationService.publishAcademicRegulation(admin, revised))
+      .rejects.toMatchObject({ code: "regulation_sequence_date_conflict" });
+    await expect(regulationService.publishAcademicRegulation(admin, { ...revised, effectiveFrom: "2030-05-02" }))
+      .resolves.toMatchObject({
+        previousVersionId: legacy.id,
+        changes: { maxEligibleConsecutiveCancellations: { previous: null, next: 3 } },
+      });
+    await expect(regulationService.publishAcademicRegulation(admin, {
+      ...nextRules, effectiveFrom: "2030-05-03", monthlyCancellationCredits: 2,
+    })).resolves.toMatchObject({ maxEligibleConsecutiveCancellations: 3 });
+    expect(await regulationService.resolveAcademicRegulation(db, "2030-05-01")).toMatchObject({
+      id: legacy.id, maxEligibleConsecutiveCancellations: null,
+    });
+  });
+
+  it("re-evaluates after a session moves past a pending cancellation without recalculating notice", async () => {
+    const version = await regulationService.publishAcademicRegulation(admin, {
+      ...INITIAL_REGULATION, effectiveFrom: "2030-04-02", maxEligibleConsecutiveCancellations: 3,
+    });
+    vi.setSystemTime(new Date("2030-04-02T10:00:00Z"));
+    const template = await createHabitualTemplate();
+    const blocker = await habitualReservation(template, "2030-04-12");
+    const target = await habitualReservation(template, "2030-04-17");
+    await expect(academicService.cancelReservation(student, target)).resolves.toMatchObject({ autoCreditSkippedReason: "PENDING" });
+    vi.setSystemTime(new Date("2030-04-16T10:00:00Z"));
+    await academicService.updateClassSession(admin, {
+      classSessionId: blocker.classSessionId,
+      startsAtUtc: new Date("2030-04-19T16:00:00Z"),
+      endsAtUtc: new Date("2030-04-19T17:00:00Z"),
+    });
+    const { cancellations } = await academicService.getStudentActivityHistory(student);
+    expect(cancellations[0]).toMatchObject({
+      cancelledAt: new Date("2030-04-02T10:00:00Z"), cancellationType: "ON_TIME", creditResolution: "GRANTED",
+    });
+    expect((await creditService.getCreditOverview(student)).history).toMatchObject([{
+      classSessionId: target.classSessionId, createdAt: new Date("2030-04-16T10:00:00Z"), regulationVersionId: version.id,
+    }]);
   });
 });

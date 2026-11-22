@@ -363,6 +363,14 @@ npm.cmd run test:e2e -- --workers=1
 - Usar bases TEST desechables independientes con el journal hasta `0011_student_profile_edit_audit`. Ejecutar Vitest con `--maxWorkers=1`.
 - El 22 de noviembre de 2026 pasaron **193 pruebas de Vitest**, incluidas **3 nuevas de integración**, y **35 E2E de Chromium sin reintentos**, incluido **1 nuevo**. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes. Ambas suites usaron bases desechables de PostgreSQL **15.20** con las doce migraciones aplicadas.
 
+### Incremento 9.10 — Racha y créditos pendientes
+
+- [Pruebas de dominio](../src/domain/academic/cancellation-rules.test.ts). Cubren las cinco posiciones, cambios de límite, cancelaciones tardías, resultados pendientes, reinicio por asistencia o ausencia, reinscripciones y desempates.
+- [Integración PostgreSQL](../src/application/academic/regulation.integration.test.ts). Comprueba activación normativa, auditoría anterior, reintentos, concurrencia, prioridad de solicitud, cambio de mes, caducidad desde la concesión, reprogramación y resolución tras registrar asistencia, ausencia o una cancelación anterior.
+- [Chromium](../tests/e2e/credits.spec.ts). El flujo de la racha pendiente requiere una versión revisada vigente en la base desechable de Playwright con máximo tres y los demás valores iniciales. La prueba cancela por teclado a 360 px, verifica que la plaza se libera con saldo cero y comprueba que la ausencia anterior registrada desde administración desbloquea el crédito.
+- Ejecutar las suites en bases desechables separadas con el journal hasta `0012_consecutive_cancellation_eligibility`. Usar `--maxWorkers=1` para Vitest.
+- El 22 de noviembre de 2026 pasaron **204 pruebas de Vitest** y **36 E2E de Chromium sin reintentos** con PostgreSQL **15.20**. Se verificó en una tercera base desechable que la actualización de `0011` a `0012` conserva la normativa, una cancelación consolidada y su movimiento de crédito. TypeScript y `drizzle-kit check` pasaron. ESLint registró cero errores y tres avisos preexistentes.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

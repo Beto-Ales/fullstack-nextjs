@@ -36,7 +36,7 @@ export function SessionCancellationForm({ reservationId, cancellationId, student
         <fieldset disabled={form.pending} className="grid min-w-0 gap-2 sm:max-w-md">
           <legend>Cancelar la reserva ordinaria de {studentName}</legend>
           <p>{sessionLabel}</p>
-          <p>Se libera la plaza. El saldo de créditos y la racha del alumno se conservan.</p>
+          <p>Se libera la plaza. Esta cancelación queda fuera de la racha y no genera crédito.</p>
           <label htmlFor={reasonId}>Motivo de la cancelación</label>
           <textarea id={reasonId} name="reason" required minLength={3} maxLength={300} rows={2}
             className="w-full min-w-0 rounded border p-2" />

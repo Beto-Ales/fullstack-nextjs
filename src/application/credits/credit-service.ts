@@ -2,15 +2,17 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq, gte, inArray, isNotNull, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
+import { settlePendingCancellations } from "@/src/application/academic/cancellation-sequence-service";
 import { creditStudentQuerySchema, manualCreditGrantSchema, manualCreditWithdrawSchema } from "@/src/application/credits/schemas";
 import { INITIAL_REGULATION } from "@/src/domain/academic/regulation";
 import { type UserRole } from "@/src/domain/auth/roles";
 import { listAvailableFifoBuckets, pickNextFifoBucket, type FifoBucket } from "@/src/domain/credits/fifo";
 import { calculateAutoCreditExpiration, getCenterMonthUtcWindow } from "@/src/domain/credits/ledger";
 import { db } from "@/src/infrastructure/db/client";
-import { classReservations, classSessions, classTemplates, creditLedgerMovements, reservationCancellations, studentProfiles } from "@/src/infrastructure/db/schema";
+import { academicRegulations, classReservations, classSessions, classTemplates, creditLedgerMovements, reservationCancellations, studentProfiles } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
 
 type Actor = {
@@ -412,6 +414,10 @@ export async function tryGenerateAutoCreditFromCancellation(
   tx: TransactionClient,
   cancellationId: string,
 ): Promise<{ created: boolean; reason?: "NOT_ELIGIBLE" | "MONTHLY_LIMIT" | "IDEMPOTENT_ALREADY_EXISTS" }> {
+  const [owner] = await tx.select({ id: reservationCancellations.studentProfileId }).from(reservationCancellations)
+    .where(eq(reservationCancellations.id, cancellationId));
+  if (!owner) throw new ApplicationError("Cancellation not found.", "cancellation_not_found", 404, true);
+  await lockStudentProfile(tx, owner.id);
   const cancellationRows = await tx.execute(sql`
     select
       rc.id,
@@ -419,7 +425,10 @@ export async function tryGenerateAutoCreditFromCancellation(
       rc.class_session_id,
       rc.cancelled_at,
       rc.can_generate_credit_candidate,
+      rc.sequence_pending,
+      rc.credit_resolution,
       rc.regulation_version_id,
+      policy.max_eligible_consecutive_cancellations,
       policy.monthly_cancellation_credits,
       policy.credit_expiration_months
     from reservation_cancellations rc
@@ -435,6 +444,9 @@ export async function tryGenerateAutoCreditFromCancellation(
         class_session_id: string;
         cancelled_at: Date;
         can_generate_credit_candidate: boolean;
+        sequence_pending: boolean;
+        credit_resolution: "GRANTED" | "MONTHLY_LIMIT" | "NOT_ELIGIBLE" | null;
+        max_eligible_consecutive_cancellations: number | null;
         regulation_version_id: string | null;
         monthly_cancellation_credits: number | null;
         credit_expiration_months: number | null;
@@ -445,25 +457,35 @@ export async function tryGenerateAutoCreditFromCancellation(
     throw new ApplicationError("Cancellation not found.", "cancellation_not_found", 404, true);
   }
 
-  if (!cancellation.can_generate_credit_candidate) {
+  if (cancellation.sequence_pending || !cancellation.can_generate_credit_candidate) {
     return { created: false, reason: "NOT_ELIGIBLE" };
   }
+  if (cancellation.credit_resolution === "MONTHLY_LIMIT") return { created: false, reason: "MONTHLY_LIMIT" };
 
-  await lockStudentProfile(tx, cancellation.student_profile_id);
+  const [existing] = await tx.select({ id: creditLedgerMovements.id }).from(creditLedgerMovements)
+    .where(and(eq(creditLedgerMovements.sourceCancellationId, cancellationId),
+      eq(creditLedgerMovements.movementType, "AUTO_CANCELLATION_GRANT")));
+  if (existing) return { created: false, reason: "IDEMPOTENT_ALREADY_EXISTS" };
 
   const { monthStartUtc, nextMonthStartUtc } = getCenterMonthUtcWindow(new Date(cancellation.cancelled_at));
+  const request = alias(reservationCancellations, "grant_request");
+  const policy = alias(academicRegulations, "grant_policy");
+  const countAt = sql`case when ${policy.maxEligibleConsecutiveCancellations} is not null
+    then ${request.cancelledAt} else ${creditLedgerMovements.createdAt} end`;
 
   const [monthlyAutoCount] = await tx
     .select({
       count: sql<number>`count(*)::int`,
     })
     .from(creditLedgerMovements)
+    .leftJoin(request, eq(request.id, creditLedgerMovements.sourceCancellationId))
+    .leftJoin(policy, eq(policy.id, request.regulationVersionId))
     .where(
       and(
         eq(creditLedgerMovements.studentProfileId, cancellation.student_profile_id),
         eq(creditLedgerMovements.movementType, "AUTO_CANCELLATION_GRANT"),
-        gte(creditLedgerMovements.createdAt, monthStartUtc),
-        lt(creditLedgerMovements.createdAt, nextMonthStartUtc),
+        sql`${countAt} >= ${monthStartUtc.toISOString()}::timestamptz`,
+        sql`${countAt} < ${nextMonthStartUtc.toISOString()}::timestamptz`,
       ),
     );
 
@@ -473,6 +495,8 @@ export async function tryGenerateAutoCreditFromCancellation(
   }
 
   const movementId = randomUUID();
+  const revisedPolicy = cancellation.max_eligible_consecutive_cancellations !== null;
+  const generatedAt = revisedPolicy ? new Date() : new Date(cancellation.cancelled_at);
   const insertResult = await tx
     .insert(creditLedgerMovements)
     .values({
@@ -480,14 +504,18 @@ export async function tryGenerateAutoCreditFromCancellation(
       studentProfileId: cancellation.student_profile_id,
       movementType: "AUTO_CANCELLATION_GRANT",
       amount: 1,
-      createdAt: new Date(cancellation.cancelled_at),
+      createdAt: generatedAt,
       expiresAt: calculateAutoCreditExpiration(
-        new Date(cancellation.cancelled_at),
+        generatedAt,
         cancellation.credit_expiration_months ?? INITIAL_REGULATION.creditExpirationMonths,
       ),
       regulationVersionId: cancellation.regulation_version_id,
-      reason: "Auto credit from third consecutive ON_TIME cancellation",
-      classSessionId: cancellation.class_session_id,
+      reason: revisedPolicy
+        ? "Crédito automático por cancelación habitual anticipada"
+        : "Auto credit from third consecutive ON_TIME cancellation",
+      // The source cancellation already links its session. Avoid taking a foreign-key lock
+      // on another session while resolving deferred credits under the profile lock.
+      classSessionId: revisedPolicy ? null : cancellation.class_session_id,
       sourceCancellationId: cancellation.id,
       sourceGrantMovementId: movementId,
       idempotencyKey: `auto-cancellation:${cancellation.id}`,
@@ -499,6 +527,10 @@ export async function tryGenerateAutoCreditFromCancellation(
   }
 
   return { created: true };
+}
+
+export function resolvePendingCancellationCredits(tx: TransactionClient, studentProfileId: string) {
+  return settlePendingCancellations(tx, studentProfileId, tryGenerateAutoCreditFromCancellation);
 }
 
 function summarizeCreditOverview(history: LedgerRow[], now: Date) {
@@ -525,6 +557,7 @@ export async function getCreditOverview(actor: Actor, input?: unknown) {
 
   return db.transaction(async (tx) => {
     await lockStudentProfile(tx, studentProfileId);
+    if (actor.role === "STUDENT") await resolvePendingCancellationCredits(tx, studentProfileId);
     const now = new Date();
     await materializeExpiredCredits(tx, studentProfileId, now);
 
@@ -533,12 +566,13 @@ export async function getCreditOverview(actor: Actor, input?: unknown) {
         ...ledgerFields,
         reason: creditLedgerMovements.reason,
         regulationVersionId: creditLedgerMovements.regulationVersionId,
-        classSessionId: creditLedgerMovements.classSessionId,
+        classSessionId: sql<string | null>`coalesce(${creditLedgerMovements.classSessionId}, ${reservationCancellations.classSessionId})`,
         relatedReservationId: creditLedgerMovements.relatedReservationId,
         adminUserId: creditLedgerMovements.adminUserId,
         sourceCancellationId: creditLedgerMovements.sourceCancellationId,
       })
       .from(creditLedgerMovements)
+      .leftJoin(reservationCancellations, eq(reservationCancellations.id, creditLedgerMovements.sourceCancellationId))
       .where(eq(creditLedgerMovements.studentProfileId, studentProfileId))
       .orderBy(creditLedgerMovements.createdAt, creditLedgerMovements.id);
 

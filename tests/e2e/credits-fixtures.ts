@@ -86,7 +86,7 @@ export async function seedHabitualCreditScenario(
     [habitualReservationId, habitualSessionId, profileId, regulation.id],
   );
 
-  // The third consecutive on-time cancellation is the first one that can earn a credit.
+  // Seed the first two recorded cancellations without grants so the target starts in third position.
   const cancelledAt = now.minus({ days: 1 });
   for (const [index, start] of habitualDates.slice(0, 2).entries()) {
     const sessionId = await createSession(start, templateId);

@@ -12,7 +12,7 @@ import Link from "next/link";
 import { DateTime } from "luxon";
 import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import {
-  listStudentCalendarReservations, listStudentClassHistory, listStudentHabitualSchedules, listUpcomingOrdinaryReservations,
+  getStudentCancellationStreak, listStudentCalendarReservations, listStudentClassHistory, listStudentHabitualSchedules, listUpcomingOrdinaryReservations,
 } from "@/src/application/academic/academic-service";
 import { cancelReservationAction } from "@/src/interfaces/academic/actions";
 import { resolveCenterWeek } from "@/src/domain/time/center-week";
@@ -90,6 +90,8 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
       : query.recovery === "cancelled" ? "Recuperación cancelada." : undefined;
   const regulation = await getCurrentAcademicRegulation(user);
   const creditOverview = await getCreditOverview({ userId: user.userId, role: user.role });
+  const maximum = regulation.maxEligibleConsecutiveCancellations;
+  const streak = maximum === null ? null : await getStudentCancellationStreak(user, maximum);
   const recoveryOptions = await listFutureRecoveryOptionsAction();
   const [upcomingClasses, calendarReservations, habitualSchedules, { history, pendingRecoveries }] = await Promise.all([
     listUpcomingOrdinaryReservations(user),
@@ -128,6 +130,24 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
         </ul>
       </section>
       <h2>Créditos</h2>
+      {streak && maximum !== null && (
+        <section aria-labelledby="racha-de-cancelaciones">
+          <h3 id="racha-de-cancelaciones">Racha de cancelaciones habituales</h3>
+          <p>Máximo de posiciones elegibles por racha · {maximum}</p>
+          {streak.currentIsProvisional
+            ? <p>La racha actual está pendiente de resultados de clases anteriores.</p>
+            : <p>Cancelaciones consecutivas contabilizadas · {streak.currentConsecutiveCancellations}</p>}
+          {!streak.currentIsProvisional && streak.currentConsecutiveCancellations >= maximum && (
+            <p>La racha actual alcanzó el máximo. Si continúa, la siguiente cancelación queda fuera del límite por racha.</p>
+          )}
+          {streak.unresolvedPredecessor
+            ? <p>La elegibilidad de una próxima cancelación puede depender de resultados anteriores.</p>
+            : streak.currentConsecutiveCancellations < maximum && (
+              <p>Si continúa la racha, la próxima cancelación estaría dentro del límite. También se aplican la antelación y el cupo mensual.</p>
+            )}
+          {streak.pendingCredits > 0 && <p>Solicitudes de crédito pendientes · {streak.pendingCredits}</p>}
+        </section>
+      )}
       <p>Disponibles: {creditOverview.availableCredits}</p>
       <p>Caducados: {creditOverview.expiredCredits}</p>
       <CreditExpirations expirations={creditOverview.availableExpirations} />

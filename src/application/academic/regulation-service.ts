@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { desc, eq, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, lte, sql } from "drizzle-orm";
 import { DateTime } from "luxon";
 import { z } from "zod";
 
@@ -23,6 +23,7 @@ const publishSchema = z.object({
   monthlyRecoveries: z.number().int().min(0).max(31),
   creditExpirationMonths: z.number().int().min(1).max(120),
   maxClassCapacity: z.number().int().min(1).max(DEFAULT_CLASS_CAPACITY),
+  maxEligibleConsecutiveCancellations: z.number().int().min(0).max(2_147_483_647).optional(),
 });
 
 function requireAdmin(actor: Actor | null): asserts actor is Actor {
@@ -57,9 +58,9 @@ export async function getCurrentAcademicRegulation(actor: Actor | null) {
 
   const version = await resolveCurrentAcademicRegulation(db);
   const { id, effectiveFrom, cancellationNoticeDays, monthlyCancellationCredits, monthlyRecoveries,
-    creditExpirationMonths, maxClassCapacity } = version;
+    creditExpirationMonths, maxClassCapacity, maxEligibleConsecutiveCancellations } = version;
   return { id, effectiveFrom, cancellationNoticeDays, monthlyCancellationCredits, monthlyRecoveries,
-    creditExpirationMonths, maxClassCapacity };
+    creditExpirationMonths, maxClassCapacity, maxEligibleConsecutiveCancellations };
 }
 
 export async function getAcademicRegulationHistory(actor: Actor | null) {
@@ -77,23 +78,37 @@ export async function publishAcademicRegulation(actor: Actor | null, input: unkn
     throw new ApplicationError("Revisa la fecha de vigencia y los valores de la normativa.", "invalid_regulation", 400, true);
   }
 
-  const payload = parsed.data;
   return db.transaction(async (tx) => {
+    const input = parsed.data;
     await tx.execute(sql`select pg_advisory_xact_lock(903000043)`);
     const publishedAt = new Date();
-    if (payload.effectiveFrom <= regulationDate(publishedAt)) {
+    if (input.effectiveFrom <= regulationDate(publishedAt)) {
       throw new ApplicationError("La vigencia debe empezar en una fecha futura.", "regulation_date_in_past", 400, true);
     }
 
-    const previous = await resolveAcademicRegulation(tx, payload.effectiveFrom);
-    if (previous.effectiveFrom === payload.effectiveFrom) {
+    const previous = await resolveAcademicRegulation(tx, input.effectiveFrom);
+    if (previous.effectiveFrom === input.effectiveFrom) {
       throw new ApplicationError("Ya hay una versión para esa fecha.", "regulation_date_conflict", 409, true);
+    }
+    const payload = {
+      ...input,
+      maxEligibleConsecutiveCancellations: input.maxEligibleConsecutiveCancellations ?? previous.maxEligibleConsecutiveCancellations,
+    };
+    if (payload.maxEligibleConsecutiveCancellations !== null && previous.maxEligibleConsecutiveCancellations === null) {
+      const [laterLegacy] = await tx.select({ id: academicRegulations.id }).from(academicRegulations).where(and(
+        gt(academicRegulations.effectiveFrom, payload.effectiveFrom),
+        isNull(academicRegulations.maxEligibleConsecutiveCancellations),
+      )).limit(1);
+      if (laterLegacy) {
+        throw new ApplicationError("Elige una fecha posterior a las versiones programadas con la regla anterior.", "regulation_sequence_date_conflict", 409, true);
+      }
     }
 
     const changes: RegulationChanges = {};
     for (const rule of REGULATION_RULES) {
-      if (previous[rule] !== payload[rule]) {
-        changes[rule] = { previous: previous[rule], next: payload[rule] };
+      const next = payload[rule];
+      if (next !== null && previous[rule] !== next) {
+        changes[rule] = { previous: previous[rule], next };
       }
     }
     if (Object.keys(changes).length === 0) {

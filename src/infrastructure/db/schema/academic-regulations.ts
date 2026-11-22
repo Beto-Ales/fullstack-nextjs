@@ -11,6 +11,7 @@ export const academicRegulations = pgTable("academic_regulations", {
   monthlyRecoveries: integer("monthly_recoveries").notNull(),
   creditExpirationMonths: integer("credit_expiration_months").notNull(),
   maxClassCapacity: integer("max_class_capacity").notNull(),
+  maxEligibleConsecutiveCancellations: integer("max_eligible_consecutive_cancellations"),
   previousVersionId: text("previous_version_id").references((): AnyPgColumn => academicRegulations.id),
   publishedByUserId: text("published_by_user_id").references(() => users.id),
   publishedAt: timestamp("published_at", { withTimezone: true }).notNull().defaultNow(),
