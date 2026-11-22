@@ -1,0 +1,42 @@
+.summary {
+  margin-block: 1rem;
+  overflow-wrap: anywhere;
+}
+
+.groups {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.groups section {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid #777;
+  border-radius: 0.375rem;
+}
+
+.groups h4 {
+  margin-block: 0 0.5rem;
+}
+
+.metrics {
+  margin-block: 0.5rem;
+}
+
+.metrics > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.metrics dd {
+  margin-inline-start: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (min-width: 42rem) {
+  .groups {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

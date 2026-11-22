@@ -53,6 +53,8 @@ El incremento 9.9 añade a la ficha el historial paginado y de solo lectura de l
 
 El incremento 9.10 corrige la racha habitual y difiere los créditos cuando falta un resultado anterior necesario. El cupo corresponde al mes de solicitud y la caducidad empieza en la concesión efectiva. La regla se activa al entrar en vigor una nueva versión de normativa con el máximo configurable. [Semántica y vigencia](docs/academic-model.md#cancelaciones-y-secuencias) · [Pruebas del 9.10](docs/testing.md#incremento-910--racha-y-créditos-pendientes)
 
+El incremento 9.11 incorpora en el calendario administrativo los indicadores semanales de sesiones, asistencia, cancelaciones y aforo. [Definiciones](docs/academic-model.md#resumen-semanal-administrativo) · [Pruebas del 9.11](docs/testing.md#incremento-911--resumen-semanal-administrativo)
+
 Fase 10 — Seguridad y pruebas
 
 Tests unitarios, integración, E2E, autorización, concurrencia y revisión de posibles vulnerabilidades.

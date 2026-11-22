@@ -1,5 +1,6 @@
 import type { DateTime } from "luxon";
 import Link from "next/link";
+import type { ReactNode } from "react";
 
 import { CalendarTimeRange, WeeklyCalendarLayout } from "@/app/components/weekly-calendar";
 import type { listAdminCalendarSessions } from "@/src/application/academic/admin-calendar-service";
@@ -7,6 +8,7 @@ import type { listAdminCalendarSessions } from "@/src/application/academic/admin
 type AdminWeeklyCalendarProps = {
   week: DateTime;
   sessions: Awaited<ReturnType<typeof listAdminCalendarSessions>>;
+  summary: ReactNode;
 };
 
 const statuses = {
@@ -16,7 +18,7 @@ const statuses = {
   COMPLETED: "Finalizada",
 };
 
-export function AdminWeeklyCalendar({ week, sessions }: AdminWeeklyCalendarProps) {
+export function AdminWeeklyCalendar({ week, sessions, summary }: AdminWeeklyCalendarProps) {
   return (
     <WeeklyCalendarLayout
       route="/admin"
@@ -24,6 +26,7 @@ export function AdminWeeklyCalendar({ week, sessions }: AdminWeeklyCalendarProps
       emptyMessage="No hay sesiones en esta semana."
       week={week}
       entries={sessions}
+      summary={summary}
       entryKey={(session) => session.id}
       renderEntry={(session) => (
         <div className="space-y-1 border-b pb-2">
@@ -41,6 +44,7 @@ export function AdminWeeklyCalendar({ week, sessions }: AdminWeeklyCalendarProps
               <><dt>Habituales pendientes de reserva</dt><dd>{session.habitualPending}</dd></>
             )}
           </dl>
+          <p>Capacidad física · {session.physicalCapacity} · Plazas físicamente libres · {session.physicallyFreeSpots}</p>
           {session.capacityConflict && <p className="font-semibold">Los habituales pendientes superan las plazas libres.</p>}
           {session.capacityExcess > 0 && <p className="font-semibold">El aforo efectivo está superado.</p>}
           <Link className="underline" prefetch={false}

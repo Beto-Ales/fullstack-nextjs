@@ -371,6 +371,13 @@ npm.cmd run test:e2e -- --workers=1
 - Ejecutar las suites en bases desechables separadas con el journal hasta `0012_consecutive_cancellation_eligibility`. Usar `--maxWorkers=1` para Vitest.
 - El 22 de noviembre de 2026 pasaron **204 pruebas de Vitest** y **36 E2E de Chromium sin reintentos** con PostgreSQL **15.20**. Se verificó en una tercera base desechable que la actualización de `0011` a `0012` conserva la normativa, una cancelación consolidada y su movimiento de crédito. TypeScript y `drizzle-kit check` pasaron. ESLint registró cero errores y tres avisos preexistentes.
 
+### Incremento 9.11 — Resumen semanal administrativo
+
+- [Integración PostgreSQL](../src/application/academic/admin-calendar.integration.test.ts). Cubre autorización, semanas vacías y mixtas, cambios de mes y año, ambos cambios de hora, resultados de asistencia vigentes, procedencia de cancelaciones y coincidencia del aforo con el detalle.
+- [Chromium](../tests/e2e/admin-calendar.spec.ts). Comprueba los indicadores, la navegación por teclado a 360 px, la semana al regresar del detalle y el acceso exclusivo de administración.
+- Ejecutar sobre bases TEST desechables separadas con el journal existente hasta `0012`. El resumen usa consultas de solo lectura y conserva la normativa publicada del entorno.
+- El 22 de noviembre de 2026 pasaron **209 pruebas de Vitest**, incluidas **5 nuevas de integración**, y **36 pruebas de Chromium sin reintentos** en PostgreSQL **15.20**. La suite completa omitió el caso de crédito pendiente al estar vigente la regla anterior. Ese caso pasó por separado en la base TEST desechable del 9.10, que ya tenía una versión de prueba activa. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

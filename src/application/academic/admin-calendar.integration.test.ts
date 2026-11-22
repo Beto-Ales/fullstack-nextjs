@@ -27,6 +27,112 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("admin calendar attendanc
   afterEach(() => vi.useRealTimers());
   afterAll(async () => { await client?.end(); });
 
+  it("returns an empty, validated week to an administrator and rejects students", async () => {
+    await expect(calendar.getAdminWeeklyOverview({ role: "STUDENT" }, "2031-01-06", now)).rejects.toMatchObject({ code: "forbidden" });
+    const summary = await calendar.getAdminWeeklyOverview(admin, ["not-a-date"], now);
+    expect(summary.week.toISODate()).toBe("2031-01-06");
+    expect(summary.sessions).toEqual([]);
+    expect(Object.values(summary.sessionCounts)).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(Object.values(summary.activity).every((count) => count === 0)).toBe(true);
+  });
+
+  it("counts consolidated attendance and cancellation origins once, and matches the detail capacity", async () => {
+    const regulation = await import("./regulation-service");
+    vi.setSystemTime(new Date("2031-01-05T10:00:00Z"));
+    await regulation.publishAcademicRegulation(admin, { ...INITIAL_REGULATION, effectiveFrom: "2031-01-06",
+      maxClassCapacity: 4, maxEligibleConsecutiveCancellations: 3 });
+    vi.setSystemTime(now);
+    const profiles = Array.from({ length: 10 }, () => ({ id: randomUUID(), user: randomUUID() }));
+    await client.query(`insert into users (id,email,email_normalized,password_hash,role)
+      select id,id || '@example.com',id || '@example.com','fixture','STUDENT' from unnest($1::text[]) as u(id)`,
+    [profiles.map(({ user }) => user)]);
+    await client.query(`insert into student_profiles (id,user_id,first_name,last_name)
+      select profile,owner,'Weekly','Fixture' from unnest($1::text[],$2::text[]) as p(profile,owner)`,
+    [profiles.map(({ id }) => id), profiles.map(({ user }) => user)]);
+    const template = randomUUID();
+    await client.query(`insert into class_templates (id,name,iso_weekday,starts_at_local_time,duration_minutes,effective_from)
+      values ($1,'Miércoles',3,'18:00',60,'2031-01-01')`, [template]);
+    await client.query(`insert into student_template_assignments (id,student_profile_id,template_id,effective_from)
+      select assignment,profile,$3,'2031-01-01' from unnest($1::text[],$2::text[]) as a(assignment,profile)`,
+    [profiles.slice(0, 3).map(() => randomUUID()), profiles.slice(0, 3).map(({ id }) => id), template]);
+
+    async function session(date: string, firstHour: string, lastHour: string, capacity: number, templateId: string | null = null) {
+      const id = randomUUID();
+      await client.query(`insert into class_sessions (id,template_id,local_date,starts_at_utc,ends_at_utc,max_capacity)
+        values ($1,$2,$3,$4,$5,$6)`, [id, templateId, date, `${date}T${firstHour}Z`, `${date}T${lastHour}Z`, capacity]);
+      return id;
+    }
+    async function reservation(sessionId: string, profileIndex: number, status = "CONFIRMED", actor: string | null = null, origin = "ORDINARY") {
+      const id = randomUUID();
+      await client.query(`insert into class_reservations (id,class_session_id,student_profile_id,status,cancelled_by_user_id,origin)
+        values ($1,$2,$3,$4,$5,$6)`, [id, sessionId, profiles[profileIndex].id, status, actor, origin]);
+      return id;
+    }
+    const ended = await session("2031-01-06", "16:00", "17:00", 12);
+    const active = await session("2031-01-07", "16:30", "17:30", 12);
+    const future = await session("2031-01-08", "17:00", "18:00", 8, template);
+    const full = await session("2031-01-09", "17:00", "18:00", 1);
+    const closed = await session("2031-01-10", "17:00", "18:00", 12);
+    const outside = await session("2031-01-13", "17:00", "18:00", 12);
+    const present = await reservation(ended, 0);
+    const absent = await reservation(ended, 1, "CONFIRMED", null, "MAKEUP");
+    await reservation(ended, 2);
+    await reservation(active, 2);
+    await reservation(future, 3);
+    await reservation(full, 4);
+    await reservation(closed, 4);
+    await reservation(outside, 4, "CANCELLED", profiles[4].user);
+    await academic.recordAttendance(admin, { classSessionId: ended, reservationId: present, outcome: "ABSENT" });
+    await academic.correctAttendance(admin, { classSessionId: ended, reservationId: present, outcome: "PRESENT", reason: "Resultado vigente" });
+    await academic.recordAttendance(admin, { classSessionId: ended, reservationId: absent, outcome: "ABSENT" });
+    await academic.cancelClassSession(admin, { classSessionId: closed });
+    for (const [index, timing, source, actor] of [
+      [5, "ON_TIME", "STUDENT_REQUEST", profiles[5].user], [6, "LATE", null, profiles[6].user],
+      [7, "ON_TIME", "ADMIN_DECISION", admin.userId],
+    ] as const) {
+      const id = await reservation(ended, index, "CANCELLED", actor);
+      await client.query(`insert into reservation_cancellations
+        (id,reservation_id,student_profile_id,class_session_id,cancelled_by_user_id,cancelled_at,cancellation_type,
+         hours_before_start,meets_seven_day_rule,is_habitual_reservation,decision_source)
+        values ($1,$2,$3,$4,$5,'2030-12-20 12:00Z',$6,100,$8,false,$7)`,
+      [randomUUID(), id, profiles[index].id, ended, actor, timing, source, timing === "ON_TIME"]);
+    }
+    await reservation(ended, 8, "CANCELLED", admin.userId);
+    await reservation(future, 9, "CANCELLED", profiles[9].user, "MAKEUP");
+    const released = await reservation(active, 9, "CANCELLED", admin.userId);
+    await client.query(`insert into student_withdrawals
+      (student_user_id,withdrawn_by_user_id,withdrawn_at,ended_assignment_ids,released_reservation_ids,cancelled_recoveries)
+      values ($1,$2,$3,'[]',$4,'[]')`, [profiles[9].user, admin.userId, now, JSON.stringify([released])]);
+    await client.query(`insert into session_capacity_blocks (id,class_session_id,blocked_spots,is_active)
+      values ($1,$3,1,true),($2,$3,3,false)`, [randomUUID(), randomUUID(), future]);
+
+    const overview = await calendar.getAdminWeeklyOverview(admin, "2031-01-09", now);
+    expect(overview.week.toISODate()).toBe("2031-01-06");
+    expect(overview.sessionCounts).toEqual({ scheduled: 4, future: 2, inProgress: 1, finished: 1, cancelled: 1, incidents: 1 });
+    expect(overview.activity).toEqual({ attended: 1, absent: 1, pending: 1, early: 1, late: 1,
+      studentWithoutTiming: 1, administrative: 1, other: 2, unknown: 1 });
+    expect(overview.capacity).toEqual({ physical: 9, effective: 5, confirmed: 2, blocked: 1,
+      physicallyFree: 6, reservable: 2, habitualPending: 3 });
+    const detail = await calendar.getAdminCalendarSessionDetails(admin, future, now);
+    expect(overview.sessions.find(({ id }) => id === future)).toMatchObject(
+      Object.fromEntries(Object.entries(detail!.capacityOverview).filter(([key]) => key !== "confirmedWithCancellation")),
+    );
+  });
+
+  it.each([
+    ["2030-12-30", "2030-12-29T23:00:00Z", "2031-01-05T23:00:00Z"],
+    ["2026-03-23", "2026-03-22T23:00:00Z", "2026-03-29T22:00:00Z"],
+    ["2026-10-19", "2026-10-18T22:00:00Z", "2026-10-25T23:00:00Z"],
+  ])("uses the Copenhagen week bounds for %s", async (week, start, end) => {
+    const inside = randomUUID();
+    await client.query(`insert into class_sessions (id,local_date,starts_at_utc,ends_at_utc,max_capacity)
+      values ($1,$4, $5::timestamptz - interval '1 second',$5,12),
+             ($2,$4, $5,$5::timestamptz + interval '1 hour',12),
+             ($3,$4, $6,$6::timestamptz + interval '1 hour',12)`, [randomUUID(), inside, randomUUID(), week, start, end]);
+    const overview = await calendar.getAdminWeeklyOverview(admin, week, now);
+    expect(overview.sessions.map(({ id }) => id)).toEqual([inside]);
+  });
+
   it("joins only the current outcome to the correct reservation, keeping cancellations separate", async () => {
     const classSessionId = randomUUID();
     const otherSessionId = randomUUID();

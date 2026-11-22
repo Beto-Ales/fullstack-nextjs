@@ -174,6 +174,14 @@ Fórmula:
 - sin confiar en datos del cliente.
 - El aforo máximo inicial es de 12 plazas. Una reducción entra en vigor para nuevas reservas y bloqueos y conserva los compromisos existentes.
 
+### Resumen semanal administrativo
+
+En `/admin`, solo `SUPER_ADMIN` consulta el resumen y el calendario en la misma instantánea PostgreSQL de solo lectura. La semana incluye sesiones cuyo inicio cae desde el lunes a medianoche hasta el lunes siguiente en Copenhague, incluidos los cambios de hora. El total de programadas sin cancelar reúne futuras, en curso y finalizadas. Los límites entre esos estados se basan en las horas de inicio y fin. Una sesión cancelada se cuenta por separado.
+
+- **Asistencia.** Solo reservas confirmadas sin auditoría de cancelación y en sesiones finalizadas sin cancelar. Se usa el resultado vigente por reserva. El porcentaje divide asistencias entre asistencias más ausencias registradas. Las reservas pendientes quedan visibles y hacen provisional el porcentaje. Sin resultados registrados aparece «Sin datos suficientes».
+- **Cancelaciones.** Una fila por reserva cancelada o con auditoría, en la semana de la sesión afectada. Se cuentan las solicitudes del alumno con su antelación persistida cuando existe. Las decisiones individuales administrativas se identifican mediante su origen explícito. La baja y la cancelación de sesión se reconocen cuando su auditoría identifica la reserva. Los casos sin evidencia suficiente figuran como de origen indeterminado.
+- **Capacidad.** El total suma únicamente sesiones futuras abiertas según el cálculo vigente del calendario y detalle. Las incidencias se cuentan para toda la semana con ese mismo cálculo. Reservas y bloqueos reflejan lo persistido al consultar. El modelo carece de una fotografía de ocupación al inicio de cada clase. Las reservas que reemplazan a una cancelada cuentan como ocupación y la cancelación sigue en su historial. Los créditos y sus solicitudes pendientes se consultan en sus propios flujos.
+
 ### Aforo en el detalle administrativo
 
 - **Capacidad física** es la guardada en la sesión. Las plazas físicamente libres se calculan restando las reservas confirmadas y los bloqueos activos, con mínimo cero. Las cancelaciones y los bloqueos históricos quedan fuera del cálculo. Si una plaza liberada se vuelve a reservar, la nueva confirmación ocupa esa capacidad.

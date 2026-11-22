@@ -6,11 +6,9 @@ import { requireRole } from "@/src/interfaces/auth/session";
 import { db } from "@/src/infrastructure/db/client";
 import { classSessions, studentProfiles, users } from "@/src/infrastructure/db/schema";
 import { createOneOffClassSessionAction } from "@/src/interfaces/academic/actions";
-import { listAdminCalendarSessions } from "@/src/application/academic/admin-calendar-service";
-import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { getAdminWeeklyOverview } from "@/src/application/academic/admin-calendar-service";
 import { DEFAULT_CLASS_CAPACITY } from "@/src/domain/academic/constants";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
-import { resolveCenterWeek } from "@/src/domain/time/center-week";
 import { getCreditOverview } from "@/src/application/credits/credit-service";
 import { grantManualCreditsAction, withdrawManualCreditsAction } from "@/src/interfaces/credits/actions";
 import { redirect } from "next/navigation";
@@ -18,6 +16,7 @@ import { getPublicErrorMessage } from "@/src/infrastructure/errors";
 import { getRecoveryHistory } from "@/src/application/recovery/recovery-service";
 import Link from "next/link";
 import { AdminWeeklyCalendar } from "./weekly-calendar";
+import { AdminWeeklySummary } from "./weekly-summary";
 import { CourseAdministration } from "./course-administration";
 import { StudentAccountForm, StudentWithdrawalForm } from "./student-account-form";
 
@@ -83,17 +82,13 @@ async function withdrawCreditsFormAction(formData: FormData) {
 export default async function AdminHomePage({ searchParams }: AdminPageProps) {
   const user = await requireRole("SUPER_ADMIN");
   const query = (await searchParams) ?? {};
-  const now = DateTime.now();
-  const { week } = resolveCenterWeek(query.week, now);
   const selectedStudentProfileId = typeof query.studentProfileId === "string" ? query.studentProfileId : undefined;
   const errorMessage = typeof query.error === "string" ? query.error : undefined;
   const classCreationError = typeof query.classCreationError === "string" ? query.classCreationError : undefined;
   const createdClassSessionId = typeof query.createdClassSession === "string" ? query.createdClassSession : undefined;
-  const [regulation, calendarSessions] = await Promise.all([
-    getCurrentAcademicRegulation(user),
-    listAdminCalendarSessions(user, week.toJSDate(), week.plus({ weeks: 1 }).toJSDate(), now.toJSDate()),
-  ]);
-  const capacityLimit = Math.min(regulation.maxClassCapacity, DEFAULT_CLASS_CAPACITY);
+  const overview = await getAdminWeeklyOverview(user, query.week);
+  const { week, sessions: calendarSessions } = overview;
+  const capacityLimit = Math.min(overview.capacityLimit, DEFAULT_CLASS_CAPACITY);
   const [createdClass] = createdClassSessionId
     ? await db.select({
       localDate: classSessions.localDate,
@@ -130,7 +125,7 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
       <h1>Área de administración</h1>
       <p>Sesión iniciada como: {user.email}</p>
       <p><Link href="/normativa">Consultar y gestionar la normativa</Link></p>
-      <AdminWeeklyCalendar week={week} sessions={calendarSessions} />
+      <AdminWeeklyCalendar week={week} sessions={calendarSessions} summary={<AdminWeeklySummary overview={overview} />} />
       <section aria-labelledby="one-off-class">
         <h2 id="one-off-class">Crear clase única</h2>
         <p>La fecha y la hora se interpretan en la zona de Copenhague.</p>

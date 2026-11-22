@@ -31,10 +31,11 @@ type WeeklyCalendarLayoutProps<Entry> = {
   entries: Entry[];
   entryKey: (entry: Entry) => string;
   renderEntry: (entry: Entry) => ReactNode;
+  summary?: ReactNode;
 };
 
 export function WeeklyCalendarLayout<Entry extends { startsAtUtc: Date }>({
-  route, title, emptyMessage, week, entries, entryKey, renderEntry,
+  route, title, emptyMessage, week, entries, entryKey, renderEntry, summary,
 }: WeeklyCalendarLayoutProps<Entry>) {
   const days = new Map<string, Entry[]>();
   for (const entry of entries) {
@@ -60,6 +61,7 @@ export function WeeklyCalendarLayout<Entry extends { startsAtUtc: Date }>({
         <Link className="rounded border px-2 py-1 underline" prefetch={false}
           href={`${route}?week=${week.plus({ weeks: 1 }).toISODate()}#calendario-semanal`}>Semana siguiente</Link>
       </nav>
+      {summary}
       {days.size === 0 ? <p>{emptyMessage}</p> : (
         <div className="grid gap-3 sm:grid-cols-2">
           {Array.from(days, ([day, group]) => (

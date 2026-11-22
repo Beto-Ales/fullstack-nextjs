@@ -1,15 +1,18 @@
 import "server-only";
 
-import { and, desc, eq, gte, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lt, lte, ne, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { DateTime } from "luxon";
 import { z } from "zod";
 
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { cancellationSource, cancelledReservation, currentClassAttendance, sessionCancellation, withdrawalCancellation } from "./student-class-queries";
 import { calculateAvailableSpots, getSessionBookingStatus } from "@/src/domain/academic/availability";
 import type { UserRole } from "@/src/domain/auth/roles";
+import { resolveCenterWeek } from "@/src/domain/time/center-week";
 import { db } from "@/src/infrastructure/db/client";
 import { activeHabitualStudents, sessionUsageCounts } from "@/src/infrastructure/db/habitual-reservations.mjs";
-import { classReservations, classSessions, classTemplates, reservationAttendanceRecords, reservationCancellations, sessionCapacityBlocks, studentProfiles, users } from "@/src/infrastructure/db/schema";
+import { classReservations, classSessions, classTemplates, reservationAttendanceRecords, reservationCancellations, sessionCapacityBlocks, studentProfiles, studentWithdrawals, users } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
 
 function requireCalendarAdmin(actor: { role: UserRole }) {
@@ -85,11 +88,83 @@ function summarizeCapacity(session: AdminSession, regulationCapacity: number, no
 export async function listAdminCalendarSessions(actor: { role: UserRole }, start: Date, end: Date, now: Date) {
   requireCalendarAdmin(actor);
   const regulation = await resolveCurrentAcademicRegulation(db, now);
-  const sessions = await selectAdminSessions(now)
-    .where(and(gte(classSessions.startsAtUtc, start), lt(classSessions.startsAtUtc, end)))
+  return readCalendarSessions(db, weekRange(start, end), regulation.maxClassCapacity, now);
+}
+
+function weekRange(start: Date, end: Date) {
+  return and(gte(classSessions.startsAtUtc, start), lt(classSessions.startsAtUtc, end))!;
+}
+
+async function readCalendarSessions(reader: AdminSessionReader, range: SQL, capacity: number, now: Date) {
+  const sessions = await selectAdminSessions(now, reader).where(range)
     .orderBy(classSessions.startsAtUtc, classSessions.id);
 
-  return sessions.map((session) => ({ ...session, ...summarizeCapacity(session, regulation.maxClassCapacity, now) }));
+  return sessions.map((session) => ({ ...session, ...summarizeCapacity(session, capacity, now) }));
+}
+
+function countWhen(condition: SQL | undefined) {
+  return sql<number>`count(*) filter (where ${condition})`.mapWith(Number);
+}
+
+async function readWeeklyActivity(reader: AdminSessionReader, range: SQL, now: Date) {
+  const eligible = and(
+    ne(classSessions.status, "CANCELLED"), lte(classSessions.endsAtUtc, now),
+    eq(classReservations.status, "CONFIRMED"), isNull(reservationCancellations.id),
+  );
+  const student = eq(cancellationSource, "STUDENT_REQUEST");
+  const admin = eq(cancellationSource, "ADMIN_DECISION");
+  const documented = or(withdrawalCancellation, sessionCancellation(reader));
+  const [counts] = await reader.select({
+    attended: countWhen(and(eligible, eq(reservationAttendanceRecords.outcome, "ATTENDED"))),
+    absent: countWhen(and(eligible, eq(reservationAttendanceRecords.outcome, "ABSENT"))),
+    pending: countWhen(and(eligible, isNull(reservationAttendanceRecords.id))),
+    early: countWhen(and(student, eq(reservationCancellations.cancellationType, "ON_TIME"))),
+    late: countWhen(and(student, eq(reservationCancellations.cancellationType, "LATE"))),
+    studentWithoutTiming: countWhen(and(student, isNull(reservationCancellations.cancellationType))),
+    administrative: countWhen(admin),
+    other: countWhen(and(cancelledReservation, isNull(cancellationSource), documented)),
+    unknown: countWhen(and(cancelledReservation, isNull(cancellationSource), sql`not (${documented})`)),
+  }).from(classSessions)
+    .innerJoin(classReservations, eq(classReservations.classSessionId, classSessions.id))
+    .innerJoin(studentProfiles, eq(studentProfiles.id, classReservations.studentProfileId))
+    .leftJoin(reservationCancellations, eq(reservationCancellations.reservationId, classReservations.id))
+    .leftJoin(reservationAttendanceRecords, and(currentClassAttendance, eq(reservationAttendanceRecords.classSessionId, classSessions.id)))
+    .leftJoin(studentWithdrawals, eq(studentWithdrawals.studentUserId, studentProfiles.userId))
+    .where(range);
+  return counts;
+}
+
+export async function getAdminWeeklyOverview(actor: { role: UserRole }, requestedWeek: unknown, now = new Date()) {
+  requireCalendarAdmin(actor);
+  const { week } = resolveCenterWeek(requestedWeek, DateTime.fromJSDate(now));
+  const range = weekRange(week.toJSDate(), week.plus({ weeks: 1 }).toJSDate());
+  return db.transaction(async (tx) => {
+    const regulation = await resolveCurrentAcademicRegulation(tx, now);
+    const sessions = await readCalendarSessions(tx, range, regulation.maxClassCapacity, now);
+    const activity = await readWeeklyActivity(tx, range, now);
+    const sessionCounts = { scheduled: 0, future: 0, inProgress: 0, finished: 0, cancelled: 0, incidents: 0 };
+    const capacity = { physical: 0, effective: 0, confirmed: 0, blocked: 0, physicallyFree: 0, reservable: 0, habitualPending: 0 };
+    for (const session of sessions) {
+      if (session.capacityConflict || session.capacityExcess > 0) sessionCounts.incidents++;
+      if (session.bookingStatus === "CANCELLED") {
+        sessionCounts.cancelled++;
+        continue;
+      }
+      sessionCounts.scheduled++;
+      if (session.endsAtUtc <= now) sessionCounts.finished++;
+      else if (session.startsAtUtc <= now) sessionCounts.inProgress++;
+      else sessionCounts.future++;
+      if (session.bookingStatus !== "UPCOMING") continue;
+      capacity.physical += session.physicalCapacity;
+      capacity.effective += session.capacity;
+      capacity.confirmed += session.confirmedReservations;
+      capacity.blocked += session.blockedSpots;
+      capacity.physicallyFree += session.physicallyFreeSpots;
+      capacity.reservable += session.reservableSpots;
+      capacity.habitualPending += session.habitualPending ?? 0;
+    }
+    return { week, sessions, sessionCounts, activity, capacity, capacityLimit: regulation.maxClassCapacity };
+  }, { isolationLevel: "repeatable read", accessMode: "read only" });
 }
 
 export async function getAdminCalendarSessionDetails(actor: { role: UserRole }, sessionId: string, now = new Date()) {

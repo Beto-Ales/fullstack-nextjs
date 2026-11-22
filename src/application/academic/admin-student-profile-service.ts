@@ -1,20 +1,21 @@
 import "server-only";
 
-import { and, desc, eq, exists, gt, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
 import { regulationDate } from "@/src/application/academic/regulation-service";
 import { studentEditVersion } from "@/src/application/academic/student-edit-service";
 import {
-  currentClassAttendance, historicalClass, reservationHasHabitualAssignment, selectHabitualSchedules, studentClassDetails,
+  cancellationActorId, cancellationSource, cancelledReservation as cancelled, currentClassAttendance, historicalClass,
+  reservationHasHabitualAssignment, selectHabitualSchedules, sessionCancellation, studentClassDetails, withdrawalCancellation,
 } from "@/src/application/academic/student-class-queries";
 import { readAdminCreditOverview, type TransactionClient } from "@/src/application/credits/credit-service";
 import { recoveryReservationScope, selectRecoveryMovements } from "@/src/application/recovery/recovery-service";
 import type { UserRole } from "@/src/domain/auth/roles";
 import { db } from "@/src/infrastructure/db/client";
 import {
-  classReservations, classSessionEdits, classSessions, classTemplates, reservationAttendanceRecords, reservationCancellations,
+  classReservations, classSessions, classTemplates, reservationAttendanceRecords, reservationCancellations,
   studentProfileEdits, studentProfiles, studentWithdrawals, users,
 } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
@@ -22,12 +23,6 @@ import { ApplicationError } from "@/src/infrastructure/errors";
 const PAGE_SIZE = 20;
 export type ProfilePageKey = "horarios" | "proximas" | "historial" | "movimientos" | "recuperaciones" | "modificaciones";
 const editFields = ["firstName", "lastName", "email", "contactEmail", "contactPhone"] as const;
-const cancellationActorId = sql`coalesce(${reservationCancellations.cancelledByUserId}, ${classReservations.cancelledByUserId})`;
-const cancelled = or(eq(classReservations.status, "CANCELLED"), isNotNull(reservationCancellations.id))!;
-const cancellationSource = sql<"STUDENT_REQUEST" | "ADMIN_DECISION" | null>`case when ${cancelled}
-  then coalesce(${reservationCancellations.decisionSource},
-    case when ${cancellationActorId} = ${studentProfiles.userId} then 'STUDENT_REQUEST'::reservation_cancellation_source end)
-  end`;
 
 function readPage(value: unknown) {
   if (typeof value !== "string" || !/^[1-9]\d{0,5}$/.test(value)) return 1;
@@ -86,17 +81,6 @@ async function readProfileEdits(reader: TransactionClient, studentProfileId: str
 function selectClassActivity(reader: TransactionClient) {
   const cancellationActor = alias(users, "cancellation_actor");
   const attendanceActor = alias(users, "attendance_actor");
-  const withdrawalCancellation = sql<boolean>`coalesce(
-    ${studentWithdrawals.releasedReservationIds} @> jsonb_build_array(${classReservations.id})
-    or ${studentWithdrawals.cancelledRecoveries} @> jsonb_build_array(jsonb_build_object('reservationId', ${classReservations.id})),
-    false
-  )`;
-  const sessionCancellation = exists(reader.select({ id: classSessionEdits.id }).from(classSessionEdits).where(and(
-    eq(classSessionEdits.classSessionId, classSessions.id),
-    eq(classSessionEdits.status, "CANCELLED"),
-    eq(classSessionEdits.editedAt, classReservations.cancelledAt),
-    eq(classSessionEdits.editedByUserId, classReservations.cancelledByUserId),
-  )));
   return reader.select({
     ...studentClassDetails,
     classSessionId: classSessions.id,
@@ -104,7 +88,7 @@ function selectClassActivity(reader: TransactionClient) {
     cancelled: sql<boolean>`${cancelled}`,
     cancellationSource,
     withdrawalCancellation,
-    sessionCancellation: sql<boolean>`${sessionCancellation}`,
+    sessionCancellation: sql<boolean>`${sessionCancellation(reader)}`,
     cancellationType: reservationCancellations.cancellationType,
     cancellationActorEmail: cancellationActor.email,
     administrativeReason: reservationCancellations.administrativeReason,
