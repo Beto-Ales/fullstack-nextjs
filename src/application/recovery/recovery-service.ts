@@ -7,7 +7,7 @@ import { DateTime } from "luxon";
 
 import { assertNoActiveAttendance } from "@/src/application/academic/attendance-records";
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
-import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
+import { requireActiveStudentForBooking, requireActiveStudentForCancellation } from "@/src/application/auth/active-student";
 import { createRecoveryConsumption, createRecoveryRefund, lockStudentProfile, materializeExpiredCredits, readCreditBalance } from "@/src/application/credits/credit-service";
 import { cancelRecoverySchema, recoveryHistorySchema, recoveryOptionsCursorSchema, reserveRecoverySchema } from "@/src/application/recovery/schemas";
 import { type UserRole } from "@/src/domain/auth/roles";
@@ -399,6 +399,7 @@ export async function cancelRecoveryReservation(actor: Actor, input: unknown) {
   const payload = cancelRecoverySchema.parse(input);
 
   return db.transaction(async (tx) => {
+    const studentProfileId = actor.role === "STUDENT" ? await requireActiveStudentForCancellation(tx, actor.userId) : undefined;
     const reservation = await lockReservationForRecoveryCancellation(tx, payload.reservationId);
 
     if (reservation.reservationOrigin !== "MAKEUP") {
@@ -406,7 +407,6 @@ export async function cancelRecoveryReservation(actor: Actor, input: unknown) {
     }
 
     if (actor.role === "STUDENT") {
-      const studentProfileId = await getStudentProfileIdForActor(tx, actor);
       if (studentProfileId !== reservation.studentProfileId) {
         throw new ApplicationError("Forbidden", "forbidden", 403, true);
       }

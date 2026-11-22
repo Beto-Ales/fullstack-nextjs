@@ -41,7 +41,7 @@ La aplicación y el CLI comparten la reserva habitual y se coordinan por plantil
 
 ## Orden global de bloqueo (concurrencia)
 
-Los flujos de H02 adquieren estos bloqueos en orden. Los perfiles se bloquean con `FOR UPDATE`.
+Los flujos de H02 y H04 adquieren estos bloqueos en orden. Los perfiles se bloquean con `FOR UPDATE`.
 
 | Flujo | Orden de bloqueo y escritura |
 | --- | --- |
@@ -50,8 +50,11 @@ Los flujos de H02 adquieren estos bloqueos en orden. Los perfiles se bloquean co
 | Cancelación global | Sesión `FOR UPDATE` → perfiles ordenados por ID → reservas → movimiento de consumo y devolución si hay recuperaciones. |
 | Reprogramación | Sesión `FOR UPDATE` → perfiles ordenados por ID si cambia el horario → actualización y auditoría de sesión → reevaluación de cancelaciones pendientes. |
 | Alta de recuperación | Cuenta del alumno `FOR SHARE` → sesión `FOR UPDATE` → perfil → inserción de reserva y consumo. |
-| Cancelación individual de recuperación | Sesión `FOR NO KEY UPDATE` → reserva `FOR UPDATE` → perfil → actualización de reserva y, si corresponde, consumo `FOR UPDATE` y devolución. |
+| Cancelación individual ordinaria o de recuperación | Si el actor es `STUDENT`, cuenta propia `FOR SHARE` y validación de cuenta activa → sesión `FOR NO KEY UPDATE` → reserva `FOR UPDATE` → perfil → actualización y auditoría o devolución, según corresponda. La cancelación administrativa comienza en la sesión. |
+| Baja lógica | Cuenta del alumno `FOR NO KEY UPDATE` → plantillas y sesiones en orden estable → perfil → baja, revocación de sesiones de acceso y actualización académica. |
 
 Antes de 10.3, el ajuste tomaba el perfil y su inserción en el ledger solicitaba `FOR KEY SHARE` sobre la sesión al comprobar la clave foránea. Si una operación académica ya tenía `FOR UPDATE` sobre la sesión y esperaba el mismo perfil, ambas transacciones esperaban entre sí. PostgreSQL 15 devolvió `40P01` en la prueba con la cancelación global. Tomar `FOR KEY SHARE` antes del perfil protege la referencia frente a borrados o cambios de clave y es compatible con `FOR NO KEY UPDATE`. La comprobación posterior de la clave foránea usa el mismo modo.
 
-La clave primaria de solicitud sigue coordinando los reenvíos. Los índices únicos por clave de movimiento, consumo, devolución y reserva activa siguen respaldando los flujos académicos. La baja conserva su orden de cuenta, plantillas y sesiones en orden estable. La prueba del 10.3 verifica el ciclo de H02. [Pruebas de concurrencia](testing.md#incremento-103--orden-de-bloqueos-en-ajustes-de-créditos)
+La clave primaria de solicitud sigue coordinando los reenvíos. Los índices únicos por clave de movimiento, consumo, devolución y reserva activa siguen respaldando los flujos académicos. [Pruebas de H02](testing.md#incremento-103--orden-de-bloqueos-en-ajustes-de-créditos)
+
+Antes de 10.4, una cancelación autenticada podía continuar tras la baja porque la comprobación de titularidad leía el perfil sin proteger el estado de la cuenta. `FOR SHARE` de la cancelación y `FOR NO KEY UPDATE` de la baja compiten sobre la misma fila de cuenta. Si la baja gana, PostgreSQL vuelve a evaluar el filtro de rol y estado al terminar la espera y se devuelve `student_inactive` antes de bloquear sesión, reserva o perfil. Si la cancelación gana, la baja espera y procesa el estado ya confirmado. Los bloqueos referenciales `FOR KEY SHARE` son compatibles con el bloqueo compartido de la cuenta. El orden de sesión y perfil establecido para los ajustes vinculados en H02 se conserva. [Pruebas de H04](testing.md#incremento-104--revalidación-de-cuentas-en-cancelaciones)

@@ -392,6 +392,13 @@ npm.cmd run test:e2e -- --workers=1
 - Ejecutar Vitest y Chromium en bases desechables separadas con journal hasta `0013` y `TEST_DATABASE_URL` explícita. Los límites de espera para reproducir la regresión se aplican solo a las conexiones de prueba. H02 no requiere una migración nueva.
 - En PostgreSQL **15.20** pasaron las **6 pruebas dirigidas** tras la corrección, las **117 pruebas focalizadas** de créditos y sesiones y las **222 pruebas de Vitest** en la suite completa. Chromium pasó **37 casos** con la normativa anterior. El único caso omitido en esa ejecución, de créditos pendientes, pasó por separado con una versión sintética de la normativa revisada. TypeScript y `drizzle-kit check` pasaron. ESLint registró cero errores y tres avisos preexistentes.
 
+### Incremento 10.4 — Revalidación de cuentas en cancelaciones
+
+- [Integración PostgreSQL](../src/application/academic/cancellation-account.integration.test.ts). La prueba autentica una sesión sintética, bloquea la sesión académica desde otra conexión y observa las esperas con `pg_blocking_pids`. Con 10.3, las dos cancelaciones se confirmaron después de la baja. Con 10.4, si la baja gana, la solicitud espera por la cuenta y se rechaza tras la revocación, con reservas, ledger y auditoría de cancelación intactos.
+- Si la cancelación gana, la baja espera por la cuenta. La prueba verifica una sola devolución en recuperación y una sola solicitud ordinaria pendiente con normativa revisada. El registro administrativo posterior de una ausencia resuelve ese crédito una vez. También se cubren reintentos tras la baja, titularidad, rol persistido, cancelación administrativa, cancelación global y reprogramación.
+- Usar PostgreSQL 15 desechable con journal hasta `0013` y `TEST_DATABASE_URL` explícita. Ejecutar Vitest y Chromium en bases separadas. Los bloqueos de sincronización se revierten al cerrar cada prueba. El E2E de créditos pendientes requiere una versión normativa sintética vigente.
+- En PostgreSQL **15.20** pasaron **8 pruebas dirigidas de H04**, **6 de H02**, **110 pruebas focalizadas** y **230 pruebas** en la suite completa de Vitest. Chromium pasó **37 casos** con la normativa anterior. El único caso omitido, de créditos pendientes, pasó por separado con la normativa sintética revisada. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

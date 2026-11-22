@@ -63,6 +63,8 @@ El incremento 10.2 corrige H01. La redirección de éxito de los ajustes quedaba
 
 El incremento 10.3 corrige H02. PostgreSQL reprodujo el interbloqueo entre un ajuste vinculado a sesión y la cancelación global. El ajuste adquiere ahora `FOR KEY SHARE` sobre la sesión antes del perfil. Las peticiones sin sesión y los reenvíos confirmados conservan su camino anterior. [Orden de bloqueos](docs/architecture.md#orden-global-de-bloqueo-concurrencia) · [Pruebas](docs/testing.md#incremento-103--orden-de-bloqueos-en-ajustes-de-créditos)
 
+El incremento 10.4 corrige H04. La cancelación del alumno bloquea y revalida su cuenta antes de la sesión. Si la baja se confirmó primero, la cancelación se rechaza. Si la cancelación obtiene primero la cuenta activa, la baja espera y continúa con el estado académico resultante. [Modelo](docs/academic-model.md#cancelaciones-y-secuencias) · [Pruebas](docs/testing.md#incremento-104--revalidación-de-cuentas-en-cancelaciones)
+
 Fase 11 — Preparación para producción
 
 Variables de entorno, migraciones, configuración de despliegue, backups y documentación.

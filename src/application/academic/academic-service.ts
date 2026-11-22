@@ -35,7 +35,7 @@ import { resolveCurrentAcademicRegulation } from "@/src/application/academic/reg
 import {
   currentClassAttendance, habitualAssignmentExists, historicalClass, reservationHasHabitualAssignment, selectHabitualSchedules, studentClassDetails,
 } from "@/src/application/academic/student-class-queries";
-import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
+import { requireActiveStudentForBooking, requireActiveStudentForCancellation } from "@/src/application/auth/active-student";
 import { lockStudentProfile, resolvePendingCancellationCredits, tryGenerateAutoCreditFromCancellation } from "@/src/application/credits/credit-service";
 import { cancelRecoveriesForCancelledSession, cancelRecoveryReservation, reserveRecovery } from "@/src/application/recovery/recovery-service";
 import { calculateAvailableSpots, getSessionBookingStatus } from "@/src/domain/academic/availability";
@@ -120,20 +120,6 @@ function toMonthRange(localDate: string): { monthStartLocalDate: string; nextMon
     monthStartLocalDate: local.startOf("month").toISODate() ?? localDate,
     nextMonthStartLocalDate: local.startOf("month").plus({ months: 1 }).toISODate() ?? localDate,
   };
-}
-
-async function getStudentProfileForUserId(tx: TransactionClient, userId: string): Promise<string> {
-  const [profile] = await tx
-    .select({ id: studentProfiles.id })
-    .from(studentProfiles)
-    .where(eq(studentProfiles.userId, userId))
-    .limit(1);
-
-  if (!profile) {
-    throw new ApplicationError("Student profile not found.", "student_profile_not_found", 404, true);
-  }
-
-  return profile.id;
 }
 
 async function isHabitualReservation(
@@ -1127,6 +1113,7 @@ async function cancelOrdinaryReservation(
   decision?: ReturnType<typeof cancelSessionEnrollmentSchema.parse>,
 ) {
   return db.transaction(async (tx) => {
+    const studentProfileId = decision ? undefined : await requireActiveStudentForCancellation(tx, actor.userId);
     const lockedReservation = await lockReservationForMutation(tx, reservationId);
 
     if (decision) {
@@ -1146,11 +1133,8 @@ async function cancelOrdinaryReservation(
         }
         throw new ApplicationError("A cancellation already exists.", "reservation_already_cancelled", 409, true);
       }
-    } else {
-      const profileId = await getStudentProfileForUserId(tx, actor.userId);
-      if (profileId !== lockedReservation.studentProfileId) {
-        throw new ApplicationError("Forbidden", "forbidden", 403, true);
-      }
+    } else if (studentProfileId !== lockedReservation.studentProfileId) {
+      throw new ApplicationError("Forbidden", "forbidden", 403, true);
     }
 
     if (lockedReservation.reservationStatus !== "CONFIRMED") {
