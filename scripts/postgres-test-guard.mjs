@@ -7,7 +7,7 @@ import { migrate } from "drizzle-orm/node-postgres/migrator";
 export const TEST_POSTGRES_IMAGE = "postgres:15";
 export const TEST_POSTGRES_DATA = "/var/lib/postgresql/data";
 export const TEST_OWNER_LABEL = "fullstack-nextjs.postgres-test";
-export const TEST_PURPOSES = ["vitest", "e2e", "e2e-pending", "migrate"];
+export const TEST_PURPOSES = ["vitest", "e2e", "e2e-pending", "migrate", "rehearsal"];
 const runIdPattern = /^[a-f0-9]{32}$/;
 const containerIdPattern = /^[a-f0-9]{64}$/;
 const reservedPorts = new Set([5432, 5433]);

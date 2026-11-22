@@ -19,6 +19,8 @@
     "db:migrate": "node scripts/run-db-migrate.mjs",
     "db:migrate:dev": "node scripts/run-db-migrate.mjs dev",
     "db:migrate:test": "node scripts/run-postgres-tests.mjs migrate",
+    "db:inspect": "node scripts/db-inspection.mjs",
+    "db:rehearse": "node scripts/run-postgres-tests.mjs integration postgres-rehearsal.integration.test.ts",
     "db:studio": "drizzle-kit studio",
     "admin:create-super-admin": "node scripts/create-super-admin.mjs",
     "academic:generate-sessions": "node scripts/generate-class-sessions.mjs"

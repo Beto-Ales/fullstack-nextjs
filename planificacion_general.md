@@ -71,6 +71,8 @@ El incremento 10.6 corrige H08. Cada proceso de pruebas con escritura verifica u
 
 El incremento 10.7 corrige H05. PostgreSQL reserva en una sola transacción las oportunidades de login del correo normalizado y del presupuesto general. El correo se deriva con HMAC y las cabeceras quedan fuera del cálculo. El login compara con bcrypt también cuando el correo no existe o la cuenta está desactivada. El despliegue necesita la migración 0014 y el secreto compartido entre instancias. [Política](docs/authentication.md#limitación-de-intentos-de-login) · [Pruebas](docs/testing.md#incremento-107--presupuesto-compartido-de-login)
 
+El incremento 10.8 prepara H07. El ensayo lleva los esquemas 0005 y 0006 hasta 0014 con datos sintéticos y comprueba la recuperación de una copia en un contenedor nuevo. La inspección de los entornos persistentes fue de solo lectura. La actualización real y la publicación de normativa requieren decisiones y autorizaciones independientes. [Inventario y procedimiento](docs/postgres-upgrade-recovery.md)
+
 Fase 11 — Preparación para producción
 
 Variables de entorno, migraciones, configuración de despliegue, backups y documentación.

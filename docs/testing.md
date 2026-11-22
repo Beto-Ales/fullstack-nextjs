@@ -359,6 +359,13 @@ npm.cmd run test:e2e -- --workers=1
 - La migración 0014 se aplica desde el aprovisionador del incremento 10.6. Para repetir las integraciones focalizadas, usa `npm run test:integration -- login.integration.test.ts academic.integration.test.ts student-edit.integration.test.ts`. Para Chromium, usa `npm run test:e2e -- auth-guards.spec.ts admin-student-edit.spec.ts student-accounts.spec.ts student-withdrawal.spec.ts`. [Política de login](authentication.md#limitación-de-intentos-de-login)
 - Pasaron 30 integraciones y 13 escenarios Chromium focalizados. `npm run test:verify` pasó las 306 pruebas de Vitest (111 unitarias y 195 integraciones), los 43 escenarios Chromium y el escenario adicional con normativa sintética en otra instancia. También pasaron TypeScript, ESLint y `drizzle-kit check`.
 
+### Incremento 10.8 — Ensayo de actualización y recuperación PostgreSQL
+
+- `npm run db:rehearse` ejecuta los ensayos H07, también incluidos en `npm run test:verify`. El PostgreSQL Vitest migrado desde vacío sirve como referencia final. El mismo aprovisionador crea clústeres independientes para los prefijos, las dos actualizaciones y la restauración.
+- Los recorridos comparan valores de cuentas, perfiles, sesiones, reservas, asistencia, cancelaciones, normativa, auditoría y ledger. Comprueban el saldo y consumo de la fixture, relaciones, idempotencia, el presupuesto compartido de login y la ausencia de publicación automática. Un error sintético de restricción revierte el lote de migraciones y conserva el estado anterior.
+- El ensayo valida el formato personalizado, SHA-256, contenido del TOC y restauración completa. Rechaza el archivo truncado, un destino persistente, un destino de restauración ya ocupado, la deriva de catálogo y una configuración de arranque incompatible. La inspección de DEV y TEST persistente solo accede a identidad, catálogo y journal. [Inventario y procedimiento](postgres-upgrade-recovery.md)
+- Pasaron los cuatro ensayos de H07 y la verificación completa con 310 pruebas Vitest, 43 escenarios Chromium y uno adicional con normativa sintética. También pasaron TypeScript, ESLint y `drizzle-kit check`.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

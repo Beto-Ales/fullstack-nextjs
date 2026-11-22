@@ -128,9 +128,4 @@ Resultado de validación local sin migraciones:
 
 ## Estado de migraciones
 
-- `0000_smiling_hobgoblin.sql`: infraestructura base inicial.
-- `0001_melted_christian_walker.sql`: tablas de identidad y sesiones.
-- `0002_soft_toad.sql`: modelo académico (plantillas, sesiones, perfiles, reservas y capacidad).
-- `0003_orange_microbe.sql`: asistencia y cancelaciones.
-- `0004_mean_lifeguard.sql`: ledger de créditos.
-- `0005_odd_rachel_grey.sql`: soporte de recuperaciones (vínculos ledger↔reserva, flags de devolución y metadatos de cancelación).
+El journal del repositorio llega hasta `0014_login_attempt_budgets`. Para comprobar el estado local en solo lectura usa `npm run db:inspect -- dev` o `npm run db:inspect -- test`. Para repetir el ensayo con datos sintéticos usa `npm run db:rehearse`. Las escrituras en bases persistentes requieren autorización independiente. [Inventario y procedimiento de actualización y recuperación](postgres-upgrade-recovery.md)

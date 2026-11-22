@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 
 import {
   assertOwnedTestContainer, getPublishedTestPort, inspectTestContainer, migrateTestDatabase,
-  openVerifiedTestConnection, testResourceNames, TEST_OWNER_LABEL, TEST_POSTGRES_DATA, TEST_POSTGRES_IMAGE,
+  openVerifiedTestConnection, testResourceNames, TEST_OWNER_LABEL, TEST_POSTGRES_DATA, TEST_POSTGRES_IMAGE, TEST_PURPOSES,
 } from "./postgres-test-guard.mjs";
 
 const exec = promisify(execFile);
@@ -76,18 +76,24 @@ async function seedPendingRegulation(env) {
   }
 }
 
-/** @param {Record<string, string | undefined>} inheritedEnv */
-export async function runPostgresTests(mode, args = [], inheritedEnv = process.env) {
-  if (!Object.hasOwn(commands, mode)) throw new Error("Modo requerido: vitest, integration, e2e, e2e-pending o migrate.");
+/**
+ * @template Result
+ * @param {string} purpose
+ * @param {(env: Record<string, string | undefined>, controls: {
+ *   runId: string, checkInterrupted: () => void, runChild: (script: string, args: string[]) => Promise<number>
+ * }) => Promise<Result>} action
+ * @param {Record<string, string | undefined>} inheritedEnv
+ */
+export async function withDisposablePostgres(purpose, action, inheritedEnv = process.env) {
+  if (!TEST_PURPOSES.includes(purpose)) throw new Error("Tipo de ejecución PostgreSQL desechable inválido.");
   if (inheritedEnv.TEST_DATABASE_URL || inheritedEnv.POSTGRES_TEST_RUN) {
     throw new Error("El aprovisionador genera TEST_DATABASE_URL e identidad propias. Retira las asignaciones externas de prueba.");
   }
 
-  const command = commands[mode];
   const runId = randomBytes(16).toString("hex");
   const { name, database, user } = testResourceNames(runId);
   const password = randomBytes(32).toString("hex");
-  const run = { runId, purpose: command.purpose };
+  const run = { runId, purpose };
   let attemptedStart = false;
   let child;
   let interruptCode;
@@ -133,27 +139,15 @@ export async function runPostgresTests(mode, args = [], inheritedEnv = process.e
 
     const env = { ...inheritedEnv, TEST_DATABASE_URL: `postgresql://${user}:${password}@127.0.0.1:${port}/${database}`,
       POSTGRES_TEST_RUN: JSON.stringify(run) };
-    // Keep the original DATABASE_URL for collision detection during migration, then remove it from the test processes.
-    await migrateTestDatabase(env);
-    delete env.DATABASE_URL;
-    delete env.POSTGRES_TEST_SCOPE;
-    env.AUTH_RATE_LIMIT_HMAC_KEY = randomBytes(32).toString("hex");
-    env.AUTH_RATE_LIMIT_MAX_ATTEMPTS = "5";
-    env.AUTH_RATE_LIMIT_WINDOW_MINUTES = "15";
-    if (mode === "integration") env.POSTGRES_TEST_SCOPE = "integration";
     checkInterrupted();
-    console.log(`[postgres-test:${run.purpose}] PostgreSQL 15 desechable verificado y migrado (${runId}).`);
-    if (!command.script) return 0;
-    if (run.purpose === "e2e-pending") await seedPendingRegulation(env);
-    if (run.purpose.startsWith("e2e")) env.E2E_PORT ??= await findLoopbackPort();
-    checkInterrupted();
-
-    const script = fileURLToPath(new URL(command.script, import.meta.url));
-    return await new Promise((resolve, reject) => {
-      child = spawn(process.execPath, [script, ...command.args, ...args], { env, stdio: "inherit", windowsHide: true });
+    const runChild = (script, args) => new Promise((resolve, reject) => {
+      child = spawn(process.execPath, [script, ...args], { env, stdio: "inherit", windowsHide: true });
       child.once("error", () => reject(new Error("No se pudo arrancar el proceso de pruebas.")));
       child.once("close", (code) => resolve(interruptCode ?? code ?? 1));
     });
+    const result = await action(env, { runId, checkInterrupted, runChild });
+    checkInterrupted();
+    return result;
   } catch (error) {
     if (interruptCode) return interruptCode;
     throw error;
@@ -176,6 +170,29 @@ export async function runPostgresTests(mode, args = [], inheritedEnv = process.e
       process.off("SIGTERM", onSigterm);
     }
   }
+}
+
+/** @param {Record<string, string | undefined>} inheritedEnv */
+export async function runPostgresTests(mode, args = [], inheritedEnv = process.env) {
+  if (!Object.hasOwn(commands, mode)) throw new Error("Modo requerido: vitest, integration, e2e, e2e-pending o migrate.");
+  const command = commands[mode];
+  return withDisposablePostgres(command.purpose, async (env, { runId, checkInterrupted, runChild }) => {
+    // Keep the original DATABASE_URL for collision detection, then remove it from test processes.
+    await migrateTestDatabase(env);
+    delete env.DATABASE_URL;
+    delete env.POSTGRES_TEST_SCOPE;
+    env.AUTH_RATE_LIMIT_HMAC_KEY = randomBytes(32).toString("hex");
+    env.AUTH_RATE_LIMIT_MAX_ATTEMPTS = "5";
+    env.AUTH_RATE_LIMIT_WINDOW_MINUTES = "15";
+    if (mode === "integration") env.POSTGRES_TEST_SCOPE = "integration";
+    checkInterrupted();
+    console.log(`[postgres-test:${command.purpose}] PostgreSQL 15 desechable verificado y migrado (${runId}).`);
+    if (!command.script) return 0;
+    if (command.purpose === "e2e-pending") await seedPendingRegulation(env);
+    if (command.purpose.startsWith("e2e")) env.E2E_PORT ??= await findLoopbackPort();
+    checkInterrupted();
+    return runChild(fileURLToPath(new URL(command.script, import.meta.url)), [...command.args, ...args]);
+  }, inheritedEnv);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
