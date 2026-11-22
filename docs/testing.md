@@ -341,6 +341,14 @@ npm.cmd run test:e2e -- --workers=1
 - Usar bases TEST desechables separadas con el journal hasta `0010_admin_reservation_cancellation`. Se verificó la actualización desde `0009` en PostgreSQL 15.20 con cancelaciones históricas ejecutadas por ambos roles. Los registros y actores se conservaron y las columnas nuevas quedaron a nulo.
 - Pasaron **177 pruebas de Vitest**, incluidas **6 nuevas de integración**, y **28 E2E de Chromium sin reintentos**. TypeScript y `drizzle-kit check` pasaron. ESLint registró cero errores y tres avisos preexistentes. El TEST persistente conserva sus siete migraciones.
 
+### Incremento 9.7 — Perfil administrativo del alumno
+
+- [Modelo y reglas de consulta](academic-model.md#perfil-administrativo-del-alumno). La ficha `/admin/alumnos/[studentId]` está disponible desde el listado y el detalle de sesión. Funciona con cuentas activas y desactivadas.
+- [Integración PostgreSQL](../src/application/academic/admin-student-profile.integration.test.ts). Cubre autorización, UUID inválidos e inexistentes, proyección de cuenta, vigencia de asignaciones, reservas futuras, versiones de asistencia, orígenes de cancelación, registros incompletos, totales y orden estable de páginas. Compara el saldo con el servicio existente y verifica que la consulta conserva el ledger y que el historial sobrevive a la baja.
+- [Chromium](../tests/e2e/admin-student-profile.spec.ts). Cubre acceso desde listado y sesión, navegación por teclado a 360 px, datos y secciones, paginación, regreso al punto de partida, acceso directo por URL, baja e información vacía.
+- Ejecutar Vitest con `--maxWorkers=1` por la limpieza de tablas entre casos. Usar bases desechables independientes para Vitest y Playwright con `TEST_DATABASE_URL` y el journal hasta `0010_admin_reservation_cancellation`. La ficha usa el esquema existente.
+- El 22 de noviembre de 2026 pasaron **183 pruebas de Vitest**, incluidas **6 nuevas de integración**, y **31 E2E de Chromium sin reintentos**, incluidos los **3 nuevos**. Cada base desechable de PostgreSQL **15.20** tenía las once migraciones aplicadas. TypeScript y `drizzle-kit check` pasaron. ESLint registró cero errores y tres avisos preexistentes.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

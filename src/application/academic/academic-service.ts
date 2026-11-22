@@ -2,7 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lt, lte, ne, notExists, or, sql, type SQLWrapper } from "drizzle-orm";
+import { and, desc, eq, gt, gte, ilike, inArray, lt, ne, notExists, or, sql, type SQLWrapper } from "drizzle-orm";
 import { DateTime } from "luxon";
 
 import {
@@ -31,6 +31,9 @@ import {
 } from "@/src/application/academic/schemas";
 import { assertNoActiveAttendance, findActiveAttendance } from "@/src/application/academic/attendance-records";
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import {
+  currentClassAttendance, habitualAssignmentExists, historicalClass, reservationHasHabitualAssignment, selectHabitualSchedules, studentClassDetails,
+} from "@/src/application/academic/student-class-queries";
 import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
 import { lockStudentProfile, tryGenerateAutoCreditFromCancellation } from "@/src/application/credits/credit-service";
 import { cancelRecoveriesForCancelledSession, cancelRecoveryReservation, reserveRecovery } from "@/src/application/recovery/recovery-service";
@@ -130,20 +133,6 @@ async function getStudentProfileForUserId(tx: TransactionClient, userId: string)
   }
 
   return profile.id;
-}
-
-function habitualAssignmentExists(input: {
-  studentProfileId: string | SQLWrapper;
-  templateId: string | SQLWrapper;
-  localDate: string | SQLWrapper;
-}) {
-  return sql<boolean>`exists (
-    select 1 from student_template_assignments sta
-    where sta.student_profile_id = ${input.studentProfileId}
-      and sta.template_id = ${input.templateId}
-      and sta.effective_from <= ${input.localDate}
-      and (sta.effective_to is null or sta.effective_to >= ${input.localDate})
-  )`;
 }
 
 async function isHabitualReservation(
@@ -1452,21 +1441,6 @@ export async function listUpcomingOrdinaryReservations(actor: Actor) {
     .orderBy(classSessions.startsAtUtc, classReservations.id);
 }
 
-const studentClassDetails = {
-  reservationId: classReservations.id,
-  origin: classReservations.origin,
-  className: classTemplates.name,
-  startsAtUtc: classSessions.startsAtUtc,
-  endsAtUtc: classSessions.endsAtUtc,
-  sessionStatus: classSessions.status,
-};
-
-const reservationHasHabitualAssignment = habitualAssignmentExists({
-  studentProfileId: classReservations.studentProfileId,
-  templateId: classSessions.templateId,
-  localDate: classSessions.localDate,
-});
-
 export async function listStudentCalendarReservations(actor: Actor, start: Date, end: Date) {
   return db.select({ ...studentClassDetails, habitual: reservationHasHabitualAssignment }).from(classReservations)
     .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
@@ -1482,12 +1456,7 @@ export async function listStudentCalendarReservations(actor: Actor, start: Date,
 }
 
 export async function listStudentClassHistory(actor: Actor, now: Date) {
-  const historical = or(
-    eq(classReservations.status, "CANCELLED"),
-    ne(classSessions.status, "SCHEDULED"),
-    lte(classSessions.endsAtUtc, now),
-    isNotNull(reservationAttendanceRecords.id),
-  );
+  const historical = historicalClass(now);
   const rows = await db.select({
     ...studentClassDetails,
     localDate: classSessions.localDate,
@@ -1502,13 +1471,7 @@ export async function listStudentClassHistory(actor: Actor, now: Date) {
     .innerJoin(studentProfiles, eq(studentProfiles.id, classReservations.studentProfileId))
     .leftJoin(classTemplates, eq(classTemplates.id, classSessions.templateId))
     .leftJoin(reservationCancellations, eq(reservationCancellations.reservationId, classReservations.id))
-    .leftJoin(reservationAttendanceRecords, and(
-      eq(reservationAttendanceRecords.reservationId, classReservations.id),
-      isNull(reservationAttendanceRecords.supersededAt),
-      eq(classReservations.status, "CONFIRMED"),
-      ne(classSessions.status, "CANCELLED"),
-      isNull(reservationCancellations.id),
-    ))
+    .leftJoin(reservationAttendanceRecords, currentClassAttendance)
     .where(and(reservationOwnerIsStudent(actor), or(historical, eq(classReservations.origin, "MAKEUP"))))
     .orderBy(desc(classSessions.startsAtUtc), desc(classReservations.id));
 
@@ -1522,28 +1485,9 @@ export async function listStudentHabitualSchedules(actor: Actor, localDate: stri
   if (actor.role !== "STUDENT") {
     throw new ApplicationError("Forbidden", "forbidden", 403, true);
   }
-  const effectiveFrom = sql`greatest(${studentTemplateAssignments.effectiveFrom}, ${classTemplates.effectiveFrom})`;
-  const effectiveTo = sql`least(${studentTemplateAssignments.effectiveTo}, ${classTemplates.effectiveTo})`;
-
-  return db.select({
-    assignmentId: studentTemplateAssignments.id,
-    courseName: classTemplates.name,
-    isoWeekday: classTemplates.isoWeekday,
-    startsAtLocalTime: classTemplates.startsAtLocalTime,
-    durationMinutes: classTemplates.durationMinutes,
-    effectiveFrom: sql<string>`${effectiveFrom}::text`,
-    effectiveTo: sql<string | null>`${effectiveTo}::text`,
-    upcoming: sql<boolean>`${effectiveFrom} > ${localDate}::date`,
-  }).from(studentTemplateAssignments)
-    .innerJoin(studentProfiles, eq(studentProfiles.id, studentTemplateAssignments.studentProfileId))
-    .innerJoin(classTemplates, eq(classTemplates.id, studentTemplateAssignments.templateId))
-    .where(and(
-      eq(studentProfiles.userId, actor.userId),
-      eq(classTemplates.status, "ACTIVE"),
-      // A bounded assignment can be marked ENDED before its last valid day.
-      sql`(${effectiveTo} is null or ${effectiveTo} >= greatest(${effectiveFrom}, ${localDate}::date))`,
-    ))
-    .orderBy(classTemplates.isoWeekday, classTemplates.startsAtLocalTime, classTemplates.name, effectiveFrom, studentTemplateAssignments.id);
+  const schedules = await selectHabitualSchedules(db, localDate, eq(studentProfiles.userId, actor.userId));
+  return schedules.map(({ assignmentId, courseName, isoWeekday, startsAtLocalTime, durationMinutes, effectiveFrom, effectiveTo, upcoming }) =>
+    ({ assignmentId, courseName, isoWeekday, startsAtLocalTime, durationMinutes, effectiveFrom, effectiveTo, upcoming }));
 }
 
 export async function getStudentActivityHistory(actor: Actor, input?: unknown) {

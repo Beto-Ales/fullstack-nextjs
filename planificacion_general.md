@@ -45,6 +45,8 @@ Calendario global, perfiles, estadísticas, bloqueos de plazas y gestión de cr�
 
 El calendario global muestra las incidencias de aforo. El detalle de sesión permite consultar inscritos y cancelaciones, gestionar asistencia, bloquear y desbloquear plazas, inscribir a un alumno y cancelar con auditoría una reserva ordinaria futura. Una decisión administrativa libera la plaza y deja intactos el saldo y la racha del alumno. [Avance y pruebas](docs/testing.md#incremento-96--cancelación-individual-auditada)
 
+El incremento 9.7 incorpora el perfil individual de solo lectura en `/admin/alumnos/[studentId]`. `SUPER_ADMIN` puede consultar cuentas activas y desactivadas, sus horarios, próximas clases, historial, créditos y recuperaciones. Las estadísticas avanzadas, la edición del alumno y la revisión de la racha de cancelaciones quedan pendientes. [Modelo y reglas](docs/academic-model.md#perfil-administrativo-del-alumno) · [Pruebas del 9.7](docs/testing.md#incremento-97--perfil-administrativo-del-alumno)
+
 Fase 10 — Seguridad y pruebas
 
 Tests unitarios, integración, E2E, autorización, concurrencia y revisión de posibles vulnerabilidades.

@@ -1,0 +1,104 @@
+.profile {
+  max-width: 64rem;
+  margin-inline: auto;
+  padding: 0.75rem;
+  overflow-wrap: anywhere;
+  font-family: Arial, Helvetica, sans-serif;
+  line-height: 1.5;
+}
+
+.profile header,
+.profile section {
+  margin-block-start: 1.5rem;
+}
+
+.profile h1 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.profile h2 {
+  font-size: 1.25rem;
+}
+
+.profile h3 {
+  font-size: 1.05rem;
+}
+
+.profile p {
+  margin-block: 0.375rem;
+}
+
+.profile a {
+  text-underline-offset: 0.2em;
+}
+
+.profile a:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+}
+
+.account,
+.indicators,
+.cards {
+  display: grid;
+  gap: 0.625rem;
+  margin-block: 0.75rem;
+}
+
+.account dd,
+.indicators dd {
+  margin: 0;
+}
+
+.account dt,
+.label {
+  font-weight: 600;
+}
+
+.indicators {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.indicators dd {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.cards {
+  list-style: none;
+  padding: 0;
+}
+
+.card {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid #777;
+  border-radius: 0.375rem;
+}
+
+.card ul {
+  padding-inline-start: 1.25rem;
+}
+
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.pagination a {
+  padding-block: 0.375rem;
+}
+
+@media (min-width: 40rem) {
+  .account,
+  .cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .indicators {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

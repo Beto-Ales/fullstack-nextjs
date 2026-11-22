@@ -167,6 +167,21 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
       <StudentAccountForm created={query.studentAccount === "created"}
         error={typeof query.studentAccountError === "string" ? query.studentAccountError : undefined} />
       <StudentWithdrawalForm students={activeStudents} query={query} />
+      <section aria-labelledby="perfiles-de-alumnos">
+        <h2 id="perfiles-de-alumnos">Perfiles de alumnos</h2>
+        {students.length === 0 ? <p>No hay alumnos registrados.</p> : (
+          <ul>
+            {students.map(({ id, firstName, lastName, email, status }) => (
+              <li key={id}>
+                <Link href={`/admin/alumnos/${id}?week=${week.toISODate()}`} prefetch={false}>
+                  {firstName} {lastName} · {email}
+                </Link>
+                {status === "DISABLED" && " · Cuenta desactivada"}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
       <h2>Créditos</h2>
       {errorMessage ? (
         <p role="alert" aria-live="polite">

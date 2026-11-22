@@ -551,6 +551,29 @@ export async function cancelRecoveriesForCancelledSession(
   return { cancelledRecoveries, refundsCreated };
 }
 
+export function recoveryReservationScope(studentProfileId: string) {
+  return and(eq(classReservations.studentProfileId, studentProfileId), eq(classReservations.origin, "MAKEUP"));
+}
+
+export function selectRecoveryMovements(tx: TransactionClient, studentProfileId: string, reservationIds?: string[]) {
+  return tx.select({
+    id: creditLedgerMovements.id,
+    movementType: creditLedgerMovements.movementType,
+    relatedReservationId: creditLedgerMovements.relatedReservationId,
+    amount: creditLedgerMovements.amount,
+    createdAt: creditLedgerMovements.createdAt,
+    expiresAt: creditLedgerMovements.expiresAt,
+    refundRestoredCredit: creditLedgerMovements.refundRestoredCredit,
+    regulationVersionId: creditLedgerMovements.regulationVersionId,
+  }).from(creditLedgerMovements)
+    .where(and(
+      eq(creditLedgerMovements.studentProfileId, studentProfileId),
+      inArray(creditLedgerMovements.movementType, ["RECOVERY_CONSUMPTION", "RECOVERY_REFUND"]),
+      reservationIds && inArray(creditLedgerMovements.relatedReservationId, reservationIds),
+    ))
+    .orderBy(creditLedgerMovements.createdAt, creditLedgerMovements.id);
+}
+
 export async function getRecoveryHistory(actor: Actor, input?: unknown) {
   const payload = recoveryHistorySchema.parse(input ?? {});
 
@@ -580,33 +603,10 @@ export async function getRecoveryHistory(actor: Actor, input?: unknown) {
       })
       .from(classReservations)
       .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
-      .where(
-        and(
-          eq(classReservations.studentProfileId, studentProfileId),
-          eq(classReservations.origin, "MAKEUP"),
-        ),
-      )
+      .where(recoveryReservationScope(studentProfileId))
       .orderBy(classSessions.startsAtUtc);
 
-    const ledgerRows = await tx
-      .select({
-        id: creditLedgerMovements.id,
-        movementType: creditLedgerMovements.movementType,
-        relatedReservationId: creditLedgerMovements.relatedReservationId,
-        amount: creditLedgerMovements.amount,
-        createdAt: creditLedgerMovements.createdAt,
-        expiresAt: creditLedgerMovements.expiresAt,
-        refundRestoredCredit: creditLedgerMovements.refundRestoredCredit,
-        regulationVersionId: creditLedgerMovements.regulationVersionId,
-      })
-      .from(creditLedgerMovements)
-      .where(
-        and(
-          eq(creditLedgerMovements.studentProfileId, studentProfileId),
-          inArray(creditLedgerMovements.movementType, ["RECOVERY_CONSUMPTION", "RECOVERY_REFUND"]),
-        ),
-      )
-      .orderBy(creditLedgerMovements.createdAt);
+    const ledgerRows = await selectRecoveryMovements(tx, studentProfileId);
 
     return {
       studentProfileId,

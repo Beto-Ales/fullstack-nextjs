@@ -319,6 +319,17 @@ Ambos casos se evalúan en [`evaluateCancellationSequence`](../src/domain/academ
 - Se evita crear duplicados de reserva activa para el mismo alumno y sesión.
 - La operación mantiene control administrativo (`SUPER_ADMIN`) y se ejecuta en transacción.
 
+## Perfil administrativo del alumno
+
+- `/admin/alumnos/[studentId]` usa el UUID de `student_profiles`. El listado incluye cuentas activas y desactivadas. Desde el detalle de una sesión se conserva la semana de origen al volver. La página y el servicio exigen `SUPER_ADMIN` y devuelven el mismo resultado de recurso no encontrado para UUID inválido, inexistente o ajeno al rol alumno.
+- La ficha consulta nombre, correo de la cuenta, contacto disponible, estado y fechas de alta y baja. Los horarios comparten el cálculo de vigencia de asignaciones del panel del alumno y muestran también los rangos cerrados. Las fechas y horas se presentan en `Europe/Copenhagen`.
+- Las próximas clases requieren reserva confirmada, sesión programada y comienzo futuro. Para el historial se conserva una fila por reserva, incluidas las cancelaciones ya registradas de sesiones futuras. El indicador de asistencia cuenta los resultados vigentes de reservas confirmadas en sesiones válidas y excluye registros sustituidos.
+- El origen de cancelación procede de la auditoría del 9.6 o del actor de la reserva si consta que el propio alumno la canceló. La ficha identifica las cancelaciones por baja mediante sus referencias a la reserva y las cancelaciones de sesión mediante la coincidencia de sesión, fecha y actor en la auditoría. Cuando falta evidencia suficiente, se conserva el tipo, la fecha y el responsable que consten y se muestra «Origen no determinado». El total de decisiones administrativas cuenta las cancelaciones individuales documentadas.
+- Los créditos comparten el saldo FIFO, las fechas de vencimiento y el cálculo de caducidad del servicio de créditos. La consulta proyecta los vencimientos pendientes y muestra los movimientos persistidos del ledger. El total de utilizados representa el consumo bruto en recuperaciones. Las devoluciones se leen del ledger y muestran si hubo abono.
+- Las recuperaciones comparten el criterio de reserva `MAKEUP` y la consulta de movimientos de consumo y devolución. Una recuperación figura como realizada si tiene asistencia vigente. Las sesiones pasadas sin registro y las ausencias se identifican por separado.
+- El servicio usa una transacción PostgreSQL de solo lectura con una instantánea consistente para todos los datos de la ficha. Los totales académicos se calculan en PostgreSQL sobre el historial completo. Horarios, próximas clases, historial, movimientos y recuperaciones tienen paginación independiente de 20 filas y orden estable con el identificador como desempate. Créditos muestra hasta cinco fechas de vencimiento próximas.
+- La edición y las estadísticas avanzadas quedan pendientes. La discrepancia ya identificada en la racha de cancelaciones queda pendiente de un incremento propio y la ficha omite ese indicador. [Cobertura de pruebas](testing.md#incremento-97--perfil-administrativo-del-alumno)
+
 ## Siguiente tarea de generación de sesiones
 
 Durante la generación y sus reintentos, el servicio devuelve las sesiones afectadas dentro del horizonte en `habitualCapacityConflicts` y el CLI imprime sus identificadores. La prioridad entre alumnos elegibles sigue pendiente para una futura asignación automática.

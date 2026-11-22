@@ -72,11 +72,17 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
           <SessionCancellationPanel sessionId={sessionId}>
             {session.enrollments.length === 0 ? <p>No hay inscritos en esta sesión.</p> : (
               <ul className="space-y-2">
-                {session.enrollments.map(({ reservationId, origin, firstName, lastName, attendanceOutcome }) => {
+                {session.enrollments.map(({ reservationId, origin, studentProfileId, firstName, lastName, attendanceOutcome }) => {
                   const studentName = `${firstName} ${lastName}`;
                   return (
                     <li key={reservationId} className="rounded border p-3 wrap-break-word">
-                      <p className="font-medium">{studentName}</p>
+                      <p className="font-medium">
+                        {studentProfileId ? (
+                          <Link className="underline" href={`/admin/alumnos/${studentProfileId}?sesion=${sessionId}&week=${week.toISODate()}`} prefetch={false}>
+                            {studentName}
+                          </Link>
+                        ) : studentName}
+                      </p>
                       <p>{origin === "MAKEUP" ? "Recuperación" : "Ordinaria"}</p>
                       <p>Estado: <strong>{attendanceOutcome ? attendanceLabels[attendanceOutcome] : "Sin registrar"}</strong></p>
                       {session.capacityOverview.bookingStatus === "UPCOMING" && origin === "ORDINARY" && !attendanceOutcome && reservationId && (
