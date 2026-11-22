@@ -41,18 +41,17 @@ La aplicación y el CLI comparten la reserva habitual y se coordinan por plantil
 
 ## Orden global de bloqueo (concurrencia)
 
-Para operaciones que combinan reservas, sesiones y ledger se sigue este orden para minimizar interbloqueos:
+Los flujos de H02 adquieren estos bloqueos en orden. Los perfiles se bloquean con `FOR UPDATE`.
 
-1. `class_sessions` (fila de sesión, `FOR UPDATE`) cuando la operación depende de capacidad/estado de sesión.
-2. `student_profiles` (fila de alumno, `FOR UPDATE`) cuando la operación consume/devuelve/retira créditos.
-3. `class_reservations` (fila de reserva, `FOR UPDATE`) cuando se cancela o muta una reserva concreta.
-4. `credit_ledger_movements` (filas de consumo/refund, `FOR UPDATE`) para idempotencia y trazabilidad de consumo/devolución.
+| Flujo | Orden de bloqueo y escritura |
+| --- | --- |
+| Concesión y retirada manual nuevas | Cuenta administrativa `FOR SHARE` → clave única de solicitud → sesión `FOR KEY SHARE` si se indicó → perfil → movimientos del ledger. Una retirada distribuida mantiene los bloqueos hasta confirmar todos los movimientos. |
+| Reenvío manual | Cuenta administrativa `FOR SHARE` → comprobación de la clave única. Si la solicitud se confirmó, se leen los movimientos iniciales sin bloquear sesión ni perfil. Si la primera transacción se revierte, la clave vuelve a estar disponible. |
+| Cancelación global | Sesión `FOR UPDATE` → perfiles ordenados por ID → reservas → movimiento de consumo y devolución si hay recuperaciones. |
+| Reprogramación | Sesión `FOR UPDATE` → perfiles ordenados por ID si cambia el horario → actualización y auditoría de sesión → reevaluación de cancelaciones pendientes. |
+| Alta de recuperación | Cuenta del alumno `FOR SHARE` → sesión `FOR UPDATE` → perfil → inserción de reserva y consumo. |
+| Cancelación individual de recuperación | Sesión `FOR NO KEY UPDATE` → reserva `FOR UPDATE` → perfil → actualización de reserva y, si corresponde, consumo `FOR UPDATE` y devolución. |
 
-Notas:
+Antes de 10.3, el ajuste tomaba el perfil y su inserción en el ledger solicitaba `FOR KEY SHARE` sobre la sesión al comprobar la clave foránea. Si una operación académica ya tenía `FOR UPDATE` sobre la sesión y esperaba el mismo perfil, ambas transacciones esperaban entre sí. PostgreSQL 15 devolvió `40P01` en la prueba con la cancelación global. Tomar `FOR KEY SHARE` antes del perfil protege la referencia frente a borrados o cambios de clave y es compatible con `FOR NO KEY UPDATE`. La comprobación posterior de la clave foránea usa el mismo modo.
 
-- `reserveRecovery` comprueba y bloquea la cuenta activa antes de sesión→perfil del alumno→reserva→consumo.
-- `cancelRecoveryReservation` usa sesión→reserva→perfil del alumno→consumo/devolución.
-- `cancelClassSession` usa sesión→reservas→alumno→consumo/devolución.
-- La baja bloquea la cuenta, las plantillas y las sesiones afectadas en orden estable antes de modificar reservas. Las sesiones se bloquean con `FOR NO KEY UPDATE`, que permite las comprobaciones referenciales de movimientos de crédito concurrentes. La baja usa la misma lógica de cancelación y devolución de una recuperación individual, con el instante y la normativa de la baja.
-- Los ajustes manuales bloquean en modo compartido la cuenta administrativa activa y reclaman la clave única de solicitud antes de bloquear el perfil. Un reintento espera la resolución de la clave sin bloquear el perfil ni la sesión. Si la primera transacción se confirma, el reintento recupera sus movimientos. Si se revierte, la clave vuelve a estar disponible. Las nuevas concesiones y retiradas se serializan por perfil con los demás movimientos del ledger.
-- H02 sigue pendiente para los ajustes con una sesión asociada. La clave foránea del movimiento puede esperar por la sesión mientras otra operación de esa sesión espera por el perfil. El reclamo de solicitud del 10.2 carece de referencias a sesión y perfil, por lo que no incorpora esos bloqueos al camino de reintento.
+La clave primaria de solicitud sigue coordinando los reenvíos. Los índices únicos por clave de movimiento, consumo, devolución y reserva activa siguen respaldando los flujos académicos. La baja conserva su orden de cuenta, plantillas y sesiones en orden estable. La prueba del 10.3 verifica el ciclo de H02. [Pruebas de concurrencia](testing.md#incremento-103--orden-de-bloqueos-en-ajustes-de-créditos)

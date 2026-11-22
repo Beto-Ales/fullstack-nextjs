@@ -385,6 +385,13 @@ npm.cmd run test:e2e -- --workers=1
 - Ejecutar en PostgreSQL 15 con el journal hasta `0013` en bases desechables verificadas. Pasar la conexión explícitamente en `TEST_DATABASE_URL` para evitar la alternativa a DEV en Playwright y usar `--maxWorkers=1` en Vitest. La regresión de créditos pendientes del 9.10 requiere el escenario de normativa revisada en su base desechable.
 - En PostgreSQL **15.20** pasaron **45 pruebas focalizadas** y **216 pruebas de Vitest** en la suite completa. Chromium pasó **37 casos** en la suite completa con la normativa anterior. El único caso omitido, de créditos pendientes, pasó por separado con una versión sintética de la normativa revisada. Se comprobó la actualización `0012` → `0013` en otra base desechable con un movimiento histórico sintético que conservó todos sus valores originales. Pasaron TypeScript y `drizzle-kit check`. ESLint registró cero errores y tres avisos preexistentes.
 
+### Incremento 10.3 — Orden de bloqueos en ajustes de créditos
+
+- [Integración PostgreSQL](../src/application/credits/credit-service.integration.test.ts). Una conexión independiente bloquea brevemente la escritura del ledger mientras el ajuste conserva sus bloqueos de fila. `pg_blocking_pids` confirma dónde espera la operación académica antes de liberar la conexión. En el código de 10.2, la cancelación global esperaba el perfil y PostgreSQL devolvió `40P01`. El 10.3 hace que la espera se produzca en la sesión en ese mismo escenario.
+- Los casos dirigidos también comprueban reprogramación y retirada distribuida, alta y cancelación de recuperación, ajustes sin referencia o en otra sesión, reenvíos concurrentes y confirmados, conflicto de UUID y rollback de una referencia inexistente. El cierre revierte la transacción de sincronización y espera a que terminen las operaciones.
+- Ejecutar Vitest y Chromium en bases desechables separadas con journal hasta `0013` y `TEST_DATABASE_URL` explícita. Los límites de espera para reproducir la regresión se aplican solo a las conexiones de prueba. H02 no requiere una migración nueva.
+- En PostgreSQL **15.20** pasaron las **6 pruebas dirigidas** tras la corrección, las **117 pruebas focalizadas** de créditos y sesiones y las **222 pruebas de Vitest** en la suite completa. Chromium pasó **37 casos** con la normativa anterior. El único caso omitido en esa ejecución, de créditos pendientes, pasó por separado con una versión sintética de la normativa revisada. TypeScript y `drizzle-kit check` pasaron. ESLint registró cero errores y tres avisos preexistentes.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

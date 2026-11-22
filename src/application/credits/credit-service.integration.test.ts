@@ -66,6 +66,220 @@ describe.runIf(Boolean(process.env.TEST_DATABASE_URL))("credits integration (pos
     return rows;
   }
 
+  async function seedFutureSession() {
+    const classSessionId = randomUUID();
+    const { rows: [session] } = await client.query<{ starts_at_utc: Date; ends_at_utc: Date }>(`
+      insert into class_sessions (id, local_date, starts_at_utc, ends_at_utc, max_capacity)
+      values ($1, (now() at time zone 'Europe/Copenhagen')::date + 14, now() + interval '14 days',
+        now() + interval '14 days 1 hour', 12) returning starts_at_utc, ends_at_utc`, [classSessionId]);
+    return { classSessionId, ...session };
+  }
+
+  async function observeWait(blockingPid: number, queryPattern: string) {
+    let waiting: { pid: number; query: string } | undefined;
+    await expect.poll(async () => {
+      const { rows } = await client.query<{ pid: number; query: string }>(`
+        select pid, query from pg_stat_activity
+        where datname = current_database() and state = 'active' and query ilike $2
+          and $1 = any(pg_blocking_pids(pid))`, [blockingPid, queryPattern]);
+      waiting = rows[0];
+      return rows.length;
+    }, { interval: 30, timeout: 3_000 }).toBe(1);
+    return waiting!;
+  }
+
+  async function withLockGate(run: (gate: {
+    blocker: Awaited<ReturnType<typeof createVerifiedTestClient>>;
+    pid: number;
+    release: () => Promise<void>;
+    track: <T>(operation: Promise<T>) => Promise<T>;
+  }) => Promise<void>) {
+    const blocker = await createVerifiedTestClient();
+    const tasks: Promise<unknown>[] = [];
+    let released = false;
+    async function release() {
+      if (!released) {
+        await blocker.query("rollback");
+        released = true;
+      }
+    }
+    try {
+      await blocker.query("begin");
+      const { rows: [{ pid }] } = await blocker.query<{ pid: number }>("select pg_backend_pid() as pid");
+      await run({ blocker, pid, release, track: (operation) => {
+        tasks.push(operation);
+        void operation.catch(() => {});
+        return operation;
+      } });
+    } finally {
+      try {
+        await release();
+      } finally {
+        await blocker.end();
+        await Promise.allSettled(tasks);
+      }
+    }
+  }
+
+  async function runLinkedAdjustmentBefore(
+    adjust: () => Promise<unknown>,
+    operateOnSession: () => Promise<unknown>,
+  ) {
+    await withLockGate(async ({ blocker, pid, track, release }) => {
+      // SELECTs can read the ledger, but the manual INSERT waits while its row locks are held.
+      await blocker.query("lock table credit_ledger_movements in share mode");
+      const manual = track(adjust());
+      const manualWait = await observeWait(pid, 'insert into "credit_ledger_movements"%');
+      const academic = track(operateOnSession());
+      const academicWait = await observeWait(manualWait.pid, "%select%");
+      await release();
+
+      const outcomes = (await Promise.allSettled([manual, academic])).map((result) => {
+        if (result.status === "fulfilled") return result.status;
+        const error = result.reason as { code?: string; cause?: { code?: string } };
+        return error.cause?.code ?? error.code ?? String(result.reason);
+      });
+      expect(outcomes, academicWait.query).toEqual(["fulfilled", "fulfilled"]);
+      expect(academicWait.query).toMatch(/from\s+"?class_sessions"?\s/i);
+    });
+  }
+
+  describe("H02 session lock order", () => {
+    it("serializes a linked grant and global cancellation, including the recovery refund", async () => {
+      const { cancelClassSession } = await import("@/src/application/academic/academic-service");
+      const { reserveRecovery } = await import("@/src/application/recovery/recovery-service");
+      const student = await seedManualAccount();
+      const { studentProfileId } = student;
+      const { classSessionId } = await seedFutureSession();
+      await service.grantManualCredits(adminActor, { requestId: randomUUID(), studentProfileId, amount: 2, reason: "Saldo inicial" });
+      const { reservationId, consumedMovementId } = await reserveRecovery(student, { classSessionId });
+      const input = { requestId: randomUUID(), studentProfileId, classSessionId, amount: 1, reason: "Ajuste y cancelación" };
+
+      await runLinkedAdjustmentBefore(() => service.grantManualCredits(adminActor, input), () => cancelClassSession(adminActor, { classSessionId }));
+
+      expect(await movementsForRequest(input.requestId)).toEqual([expect.objectContaining({
+        class_session_id: classSessionId, admin_user_id: adminActor.userId, reason: input.reason, amount: 1,
+      })]);
+      const { rows } = await client.query(`select r.status, m.source_movement_id, m.refund_restored_credit
+        from class_reservations r join credit_ledger_movements m on m.related_reservation_id = r.id
+        where r.id = $1 and m.movement_type = 'RECOVERY_REFUND'`, [reservationId]);
+      expect(rows).toEqual([{ status: "CANCELLED", source_movement_id: consumedMovementId, refund_restored_credit: true }]);
+      await expect(service.getCreditOverview(adminActor, { studentProfileId })).resolves.toMatchObject({ availableCredits: 3 });
+    });
+
+    it("serializes a linked multi-grant withdrawal and rescheduling with an existing reservation", async () => {
+      const { updateClassSession } = await import("@/src/application/academic/academic-service");
+      const { studentProfileId } = await seedManualAccount();
+      const session = await seedFutureSession();
+      const { classSessionId } = session;
+      const reservationId = randomUUID();
+      await client.query("insert into class_reservations (id, class_session_id, student_profile_id) values ($1, $2, $3)",
+        [reservationId, classSessionId, studentProfileId]);
+      const seedGrant = () => service.grantManualCredits(adminActor,
+        { requestId: randomUUID(), studentProfileId, amount: 1, reason: "Saldo para retirada" });
+      const first = await seedGrant();
+      const second = await seedGrant();
+      const input = { requestId: randomUUID(), studentProfileId, classSessionId, amount: 2, reason: "Retirada y reprogramación" };
+      const startsAtUtc = new Date(session.starts_at_utc.getTime() + 60 * 60 * 1000);
+      const endsAtUtc = new Date(session.ends_at_utc.getTime() + 60 * 60 * 1000);
+
+      await runLinkedAdjustmentBefore(() => service.withdrawManualCredits(adminActor, input),
+        () => updateClassSession(adminActor, { classSessionId, startsAtUtc, endsAtUtc }));
+
+      expect(await movementsForRequest(input.requestId)).toEqual(expect.arrayContaining([first, second].map(({ movementId }) =>
+        expect.objectContaining({ amount: 1, class_session_id: classSessionId,
+          movement_type: "MANUAL_WITHDRAWAL", source_grant_movement_id: movementId }))));
+      const replay = await service.withdrawManualCredits(adminActor, input);
+      expect(replay.movementIds).toHaveLength(2);
+      const { rows } = await client.query(`select r.status, e.starts_at_utc, e.edited_by_user_id
+        from class_reservations r join class_session_edits e on e.class_session_id = r.class_session_id
+        where r.id = $1`, [reservationId]);
+      expect(rows).toEqual([{ status: "CONFIRMED", starts_at_utc: startsAtUtc, edited_by_user_id: adminActor.userId }]);
+      await expect(service.getCreditOverview(adminActor, { studentProfileId })).resolves.toMatchObject({ availableCredits: 0 });
+    });
+
+    it("serializes a linked grant and a recovery booking that immediately spends that credit", async () => {
+      const { reserveRecovery } = await import("@/src/application/recovery/recovery-service");
+      const student = await seedManualAccount();
+      const { studentProfileId } = student;
+      const { classSessionId } = await seedFutureSession();
+      const input = { requestId: randomUUID(), studentProfileId, classSessionId, amount: 1, reason: "Ajuste y recuperación" };
+
+      await runLinkedAdjustmentBefore(() => service.grantManualCredits(adminActor, input), () => reserveRecovery(student, { classSessionId }));
+
+      const { movementId } = await service.grantManualCredits(adminActor, input);
+      const { rows } = await client.query(`select r.status, m.source_grant_movement_id from class_reservations r
+        join credit_ledger_movements m on m.related_reservation_id = r.id and m.movement_type = 'RECOVERY_CONSUMPTION'
+        where r.class_session_id = $1 and r.student_profile_id = $2`, [classSessionId, studentProfileId]);
+      expect(rows).toEqual([{ status: "CONFIRMED", source_grant_movement_id: movementId }]);
+      await expect(service.getCreditOverview(adminActor, { studentProfileId })).resolves.toMatchObject({ availableCredits: 0 });
+    });
+
+    it("shares the session key with a recovery cancellation already waiting on the profile", async () => {
+      const { reserveRecovery, cancelRecoveryReservation } = await import("@/src/application/recovery/recovery-service");
+      const student = await seedManualAccount();
+      const { studentProfileId } = student;
+      const { classSessionId } = await seedFutureSession();
+      const input = { requestId: randomUUID(), studentProfileId, classSessionId, amount: 1, reason: "Ajuste y devolución" };
+      await service.grantManualCredits(adminActor, { ...input, requestId: randomUUID(), classSessionId: undefined });
+      const { reservationId } = await reserveRecovery(student, { classSessionId });
+
+      await withLockGate(async ({ blocker, pid, track, release }) => {
+        await blocker.query("select id from student_profiles where id = $1 for update", [studentProfileId]);
+        const cancellation = track(cancelRecoveryReservation(student, { reservationId }));
+        const cancellationWait = await observeWait(pid, "%from student_profiles%for update%");
+        const grant = track(service.grantManualCredits(adminActor, input));
+        // A second writer queues on the row behind the first after taking the compatible session key lock.
+        await observeWait(cancellationWait.pid, "%from student_profiles%for update%");
+        await release();
+        await expect(cancellation).resolves.toMatchObject({ cancelled: true, refunded: true });
+        await expect(grant).resolves.toMatchObject({ movementId: expect.any(String) });
+      });
+      await expect(service.getCreditOverview(adminActor, { studentProfileId })).resolves.toMatchObject({ availableCredits: 2 });
+    });
+
+    it("keeps other adjustments and confirmed replays independent of an exclusively locked session", async () => {
+      const { studentProfileId } = await seedManualAccount();
+      const { classSessionId } = await seedFutureSession();
+      const other = await seedFutureSession();
+      const input = { requestId: randomUUID(), studentProfileId, classSessionId, amount: 1, reason: "Sesión bloqueada" };
+      const confirmed = { ...input, requestId: randomUUID() };
+      const original = await service.grantManualCredits(adminActor, confirmed);
+
+      await withLockGate(async ({ blocker, pid, track, release }) => {
+        await blocker.query("select id from class_sessions where id = $1 for update", [classSessionId]);
+        const first = track(service.grantManualCredits(adminActor, input));
+        const waiting = await observeWait(pid, "%from%class_sessions%for key share%");
+        const replay = track(service.grantManualCredits(adminActor, input));
+        await observeWait(waiting.pid, 'insert into "manual_credit_adjustment_requests"%');
+
+        await expect(track(service.grantManualCredits(adminActor, { ...input, requestId: randomUUID(), classSessionId: undefined })))
+          .resolves.toMatchObject({ movementId: expect.any(String) });
+        await expect(track(service.withdrawManualCredits(adminActor, { ...input, requestId: randomUUID(), classSessionId: undefined })))
+          .resolves.toMatchObject({ movementIds: [expect.any(String)] });
+        await expect(track(service.grantManualCredits(adminActor, { ...input, requestId: randomUUID(), classSessionId: other.classSessionId })))
+          .resolves.toMatchObject({ movementId: expect.any(String) });
+
+        await blocker.query("select id from student_profiles where id = $1 for update", [studentProfileId]);
+        await expect(track(service.grantManualCredits(adminActor, confirmed))).resolves.toEqual(original);
+        await expect(track(service.grantManualCredits(adminActor, { ...confirmed, amount: 2 })))
+          .rejects.toMatchObject({ code: "manual_credit_request_conflict" });
+        await release();
+        expect(await replay).toEqual(await first);
+      });
+      await expect(movementsForRequest(input.requestId)).resolves.toHaveLength(1);
+      await expect(service.getCreditOverview(adminActor, { studentProfileId })).resolves.toMatchObject({ availableCredits: 3 });
+    });
+
+    it("rolls back the request when its linked session does not exist", async () => {
+      const { studentProfileId } = await seedManualAccount();
+      const input = { requestId: randomUUID(), studentProfileId, classSessionId: randomUUID(), amount: 1, reason: "Referencia inexistente" };
+      await expect(service.grantManualCredits(adminActor, input)).rejects.toMatchObject({ code: "session_not_found" });
+      await expect(movementsForRequest(input.requestId)).resolves.toEqual([]);
+      expect((await client.query("select id from manual_credit_adjustment_requests where id = $1", [input.requestId])).rowCount).toBe(0);
+    });
+  });
+
   async function withBlockedProfile<T>(studentProfileId: string, start: () => Promise<T>, sameRequest: boolean) {
     const blocker = await createVerifiedTestClient();
     let result: Promise<T> | undefined;

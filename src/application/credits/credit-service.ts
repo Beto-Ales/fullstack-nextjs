@@ -734,15 +734,17 @@ async function applyManualCreditRequest(
       return movements.map(({ id }) => id).sort();
     }
 
+    if (classSessionId) {
+      // Take the ledger's foreign-key lock before the profile to preserve session → profile order.
+      const [session] = await tx.select({ id: classSessions.id }).from(classSessions)
+        .where(eq(classSessions.id, classSessionId)).for("key share");
+      if (!session) throw new ApplicationError("No se encontró la sesión asociada.", "session_not_found", 404, true);
+    }
     await lockStudentProfile(tx, studentProfileId);
     const [student] = await tx.select({ id: users.id }).from(studentProfiles)
       .innerJoin(users, eq(studentProfiles.userId, users.id))
       .where(and(eq(studentProfiles.id, studentProfileId), eq(users.role, "STUDENT"), eq(users.status, "ACTIVE")));
     if (!student) throw new ApplicationError("El alumno debe tener una cuenta activa.", "student_not_active", 409, true);
-    if (classSessionId) {
-      const [session] = await tx.select({ id: classSessions.id }).from(classSessions).where(eq(classSessions.id, classSessionId));
-      if (!session) throw new ApplicationError("No se encontró la sesión asociada.", "session_not_found", 404, true);
-    }
     return (await adjust(tx, payload)).sort();
   });
 }

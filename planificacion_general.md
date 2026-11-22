@@ -59,7 +59,9 @@ Fase 10 — Seguridad y pruebas
 
 Tests unitarios, integración, E2E, autorización, concurrencia y revisión de posibles vulnerabilidades.
 
-El incremento 10.2 corrige H01. La redirección de éxito de los ajustes quedaba atrapada después de confirmar la transacción. Los formularios ahora muestran un resultado estructurado y actualizan el panel tras la confirmación. Conservan el UUID cuando se pierde la respuesta y PostgreSQL registra el ajuste completo de forma idempotente. H02 queda pendiente para la revisión de bloqueos del 10.3. [Modelo](docs/academic-model.md#solicitudes-de-ajustes-manuales-de-créditos) · [Pruebas](docs/testing.md#incremento-102--ajustes-manuales-de-créditos)
+El incremento 10.2 corrige H01. La redirección de éxito de los ajustes quedaba atrapada después de confirmar la transacción. Los formularios ahora muestran un resultado estructurado y actualizan el panel tras la confirmación. Conservan el UUID cuando se pierde la respuesta y PostgreSQL registra el ajuste completo de forma idempotente. [Modelo](docs/academic-model.md#solicitudes-de-ajustes-manuales-de-créditos) · [Pruebas](docs/testing.md#incremento-102--ajustes-manuales-de-créditos)
+
+El incremento 10.3 corrige H02. PostgreSQL reprodujo el interbloqueo entre un ajuste vinculado a sesión y la cancelación global. El ajuste adquiere ahora `FOR KEY SHARE` sobre la sesión antes del perfil. Las peticiones sin sesión y los reenvíos confirmados conservan su camino anterior. [Orden de bloqueos](docs/architecture.md#orden-global-de-bloqueo-concurrencia) · [Pruebas](docs/testing.md#incremento-103--orden-de-bloqueos-en-ajustes-de-créditos)
 
 Fase 11 — Preparación para producción
 
