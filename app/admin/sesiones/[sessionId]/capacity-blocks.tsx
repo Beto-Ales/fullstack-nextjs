@@ -1,16 +1,13 @@
 import { randomUUID } from "node:crypto";
 
+import { HistoryTime } from "@/app/components/history-time";
 import type { getAdminCalendarSessionDetails } from "@/src/application/academic/admin-calendar-service";
-import { formatInCenterTimeZone } from "@/src/domain/time/timezone";
+import { formatHistoryInteger } from "@/src/interfaces/presentation/history-format";
 
 import { submitCapacityBlockForm } from "./capacity-block-action";
 import { CapacityBlockForm } from "./capacity-block-form";
 
 type CapacityBlocks = NonNullable<Awaited<ReturnType<typeof getAdminCalendarSessionDetails>>>["capacityBlocks"];
-
-function BlockDate({ at }: { at: Date }) {
-  return <time dateTime={at.toISOString()}>{formatInCenterTimeZone(at, "es-ES", { dateStyle: "short", timeStyle: "short" })}</time>;
-}
 
 export function SessionCapacityBlocks({ sessionId, blocks, canBlock }: { sessionId: string; blocks: CapacityBlocks; canBlock: boolean }) {
   return (
@@ -21,12 +18,12 @@ export function SessionCapacityBlocks({ sessionId, blocks, canBlock }: { session
         <ul className="space-y-2">
           {blocks.map((block) => (
             <li key={block.id} className="rounded border p-3 wrap-break-word">
-              <p className="font-medium">{block.isActive ? "Activo" : "Desactivado"} · {block.blockedSpots} {block.blockedSpots === 1 ? "plaza" : "plazas"}</p>
+              <p className="font-medium">{block.isActive ? "Activo" : "Desactivado"} · {formatHistoryInteger(block.blockedSpots)} {block.blockedSpots === 1 ? "plaza" : "plazas"}</p>
               <p>{block.reason ?? "Sin motivo de bloqueo registrado"}</p>
-              <p>Bloqueado el <BlockDate at={block.createdAt} />{block.createdBy && <> por {block.createdBy}</>}</p>
+              <p>Bloqueado el <HistoryTime value={block.createdAt} />{block.createdBy && <> por {block.createdBy}</>}</p>
               {block.releasedAt && (
                 <>
-                  <p>Desbloqueado el <BlockDate at={block.releasedAt} />{block.releasedBy && <> por {block.releasedBy}</>}</p>
+                  <p>Desbloqueado el <HistoryTime value={block.releasedAt} />{block.releasedBy && <> por {block.releasedBy}</>}</p>
                   <p>{block.releaseReason}</p>
                 </>
               )}

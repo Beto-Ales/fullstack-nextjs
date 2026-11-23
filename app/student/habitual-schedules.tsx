@@ -1,5 +1,6 @@
 import { DateTime, Info } from "luxon";
 
+import { CalendarDate } from "@/app/components/history-time";
 import type { listStudentHabitualSchedules } from "@/src/application/academic/academic-service";
 
 type HabitualSchedulesProps = {
@@ -7,7 +8,6 @@ type HabitualSchedulesProps = {
 };
 
 const weekdays = Info.weekdays("long", { locale: "es" });
-const formatDate = (date: string) => DateTime.fromISO(date).toFormat("dd/MM/yyyy");
 
 export function HabitualSchedules({ schedules }: HabitualSchedulesProps) {
   return (
@@ -32,9 +32,9 @@ export function HabitualSchedules({ schedules }: HabitualSchedulesProps) {
                   </p>
                   <p>
                     {schedule.upcoming ? "Próximo" : "Vigente"} · Desde{" "}
-                    <time dateTime={schedule.effectiveFrom}>{formatDate(schedule.effectiveFrom)}</time>
+                    <CalendarDate value={schedule.effectiveFrom} />
                     {schedule.effectiveTo && (
-                      <> hasta <time dateTime={schedule.effectiveTo}>{formatDate(schedule.effectiveTo)}</time></>
+                      <> hasta <CalendarDate value={schedule.effectiveTo} /></>
                     )}
                   </p>
                 </li>

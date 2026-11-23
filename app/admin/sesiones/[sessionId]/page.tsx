@@ -3,10 +3,10 @@ import { DateTime } from "luxon";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { CalendarTimeRange } from "@/app/components/weekly-calendar";
+import { HistoryTime } from "@/app/components/history-time";
 import { getAdminCalendarSessionDetails } from "@/src/application/academic/admin-calendar-service";
 import { resolveCenterWeek } from "@/src/domain/time/center-week";
-import { formatInCenterTimeZone } from "@/src/domain/time/timezone";
+import { formatHistoryInstant, formatHistoryInteger } from "@/src/interfaces/presentation/history-format";
 import { requireRole } from "@/src/interfaces/auth/session";
 
 import { submitAttendanceForm } from "./attendance-action";
@@ -39,20 +39,15 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
   const { week } = resolveCenterWeek(query.week, DateTime.fromJSDate(session.startsAtUtc));
   const cancelled = session.sessionStatus === "CANCELLED";
   const ended = session.endsAtUtc <= now;
-  const sessionLabel = `${session.name ?? "Clase única"} · ${formatInCenterTimeZone(session.startsAtUtc, "es-ES", {
-    dateStyle: "short", timeStyle: "short",
-  })} · Hora de Copenhague`;
+  const sessionLabel = `${session.name ?? "Clase única"} · ${formatHistoryInstant(session.startsAtUtc) ?? "Fecha sin registrar"} · Hora de Copenhague`;
 
   return (
     <main id="contenido-principal" tabIndex={-1} className="space-y-3">
       <Link className="underline" href={`/admin?week=${week.toISODate()}#calendario-semanal`}>Volver al calendario</Link>
       <h1>Inscritos en {session.name ?? "clase única"}</h1>
       <p>
-        <time dateTime={session.startsAtUtc.toISOString()}>
-          {formatInCenterTimeZone(session.startsAtUtc, "es-ES", { dateStyle: "full" })}
-        </time>
-        {" · "}
-        <CalendarTimeRange start={session.startsAtUtc} end={session.endsAtUtc} />
+        Inicio: <HistoryTime value={session.startsAtUtc} />
+        {" · Fin: "}<HistoryTime value={session.endsAtUtc} />
         {" · Hora de Copenhague"}
       </p>
       <SessionCapacity capacity={session.capacityOverview}>
@@ -68,7 +63,7 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
         {!cancelled && !ended && <p>El registro y la corrección estarán disponibles cuando finalice la clase.</p>}
         <section aria-labelledby="confirmed-enrollments" className="space-y-2">
           <h3 id="confirmed-enrollments" tabIndex={-1}>Reservas confirmadas</h3>
-          <p>Total de inscritos: {session.enrollments.length}</p>
+          <p>Total de inscritos: {formatHistoryInteger(session.enrollments.length)}</p>
           <SessionCancellationPanel sessionId={sessionId}>
             {session.enrollments.length === 0 ? <p>No hay inscritos en esta sesión.</p> : (
               <ul className="space-y-2">
@@ -109,11 +104,7 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
               <li key={cancellation.reservationId} className="rounded border p-2 wrap-break-word">
                 <p>{cancellation.firstName} {cancellation.lastName}</p>
                 <p>{cancellation.origin === "MAKEUP" ? "Recuperación" : "Ordinaria"}</p>
-                <p>{cancellation.cancelledAt ? (
-                  <time dateTime={cancellation.cancelledAt.toISOString()}>
-                    {formatInCenterTimeZone(cancellation.cancelledAt, "es-ES", { dateStyle: "short", timeStyle: "short" })}
-                  </time>
-                ) : "Fecha de cancelación sin registrar."}</p>
+                <p>{cancellation.cancelledAt ? <HistoryTime value={cancellation.cancelledAt} /> : "Fecha de cancelación sin registrar."}</p>
                 {cancellation.cancellationSource === "ADMIN_DECISION" && (
                   <>
                     <p>Decisión administrativa{cancellation.cancelledByEmail ? ` · ${cancellation.cancelledByEmail}` : ""}</p>

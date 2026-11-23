@@ -488,4 +488,6 @@ No crear documentación duplicada innecesariamente.
 
 El incremento 10.10 revisa la navegación y el teclado en los paneles existentes. Añade accesos a las secciones, conserva la semana al consultar créditos, mejora el foco en formularios y paginación de recuperaciones y corrige el desbordamiento móvil. El calendario y el bloque de perfiles del panel administrativo siguen siendo los puntos de entrada a sesiones y alumnos. [Cobertura y mejoras menores pendientes](docs/testing.md#incremento-1010--navegación-móvil-y-teclado)
 
+El incremento 10.11 unifica los formatos visibles de los historiales de ambos roles. Las fechas de calendario conservan su día. Los instantes se presentan en español en la hora de Copenhague y muestran el desplazamiento horario. Las cantidades distinguen los movimientos del saldo, los vencimientos y las solicitudes pendientes. [Convenciones y pruebas](docs/testing.md#incremento-1011--fechas-horas-y-créditos-en-los-historiales)
+
 Este documento define los requisitos funcionales de referencia. Las decisiones técnicas definitivas deberán respetar el estado real del repositorio y quedar documentadas antes de implementar cambios importantes.

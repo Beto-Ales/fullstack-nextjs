@@ -191,9 +191,7 @@ test("shows confirmed enrollments and cancellation history for one session and p
         await expect(entries.nth(0)).toContainText("Por administración");
         const latestTime = entries.nth(0).locator("time");
         await expect(latestTime).toHaveAttribute("datetime", latestCancellation.toJSDate().toISOString());
-        await expect(latestTime).toHaveText(new Intl.DateTimeFormat("es-ES", {
-          timeZone: CENTER_TIME_ZONE, dateStyle: "short", timeStyle: "short",
-        }).format(latestCancellation.toJSDate()));
+        await expect(latestTime).toHaveText(latestCancellation.setZone(CENTER_TIME_ZONE).toFormat("dd/MM/yyyy, HH:mm 'GMT'ZZ"));
         await expect(entries.nth(1)).toContainText(cancelledName);
         await expect(entries.nth(1)).toContainText("Ordinaria");
         await expect(entries.nth(1)).toContainText("Por el alumno");
@@ -551,8 +549,8 @@ test("enrolls one student by keyboard on mobile, preserves a block and refreshes
           await expect(page).toHaveURL((url) => url.pathname === "/admin" && url.searchParams.get("week") === session.week);
           await expect(card.locator("dd")).toHaveText(["2", "1", "1", "0"]);
           await studentPage.reload();
-          await expect(upcoming.getByRole("listitem")).toContainText(startsAt.toJSDate().toISOString());
-          await expect(studentPage.getByText("Disponibles: 0", { exact: true })).toBeVisible();
+          await expect(upcoming.locator("time")).toHaveAttribute("datetime", startsAt.toJSDate().toISOString());
+          await expect(studentPage.getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
           const { rows } = await admin.client.query(`select student_profile_id, origin, status, created_by_user_id
             from class_reservations where class_session_id = $1`, [session.id]);
           expect(rows).toEqual([{

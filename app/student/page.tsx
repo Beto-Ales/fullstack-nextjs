@@ -25,6 +25,8 @@ import { WeeklyCalendar } from "./weekly-calendar";
 import { ActionFeedback } from "@/app/components/action-feedback";
 import { PendingSubmit } from "@/app/components/pending-submit";
 import { SectionNavigation } from "@/app/components/section-navigation";
+import { HistoryTime } from "@/app/components/history-time";
+import { formatCreditMovement, formatCreditQuantity, formatPendingCreditRequests, recoveryReservationLabels } from "@/src/interfaces/presentation/history-format";
 
 type StudentHomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -126,7 +128,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
         {upcomingClasses.length === 0 ? <p>No tienes próximas clases reservadas.</p> : <ul>
           {upcomingClasses.map((reservation) => (
             <li key={reservation.reservationId}>
-              {reservation.localDate} · {reservation.startsAtUtc.toISOString()}
+              <HistoryTime value={reservation.startsAtUtc} />
               <form action={cancelClass}>
                 <input type="hidden" name="reservationId" value={reservation.reservationId} />
                 <PendingSubmit label="Cancelar clase" pendingLabel="Cancelando clase…" />
@@ -151,18 +153,18 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
             : streak.currentConsecutiveCancellations < maximum && (
               <p>Si continúa la racha, la próxima cancelación estaría dentro del límite. También se aplican la antelación y el cupo mensual.</p>
             )}
-          {streak.pendingCredits > 0 && <p>Solicitudes de crédito pendientes · {streak.pendingCredits}</p>}
+          {streak.pendingCredits > 0 && <p>{formatPendingCreditRequests(streak.pendingCredits)}</p>}
         </section>
       )}
-      <p>Disponibles: {creditOverview.availableCredits}</p>
-      <p>Caducados: {creditOverview.expiredCredits}</p>
+      <p>Disponibles: {formatCreditQuantity(creditOverview.availableCredits)}</p>
+      <p>Caducados: {formatCreditQuantity(creditOverview.expiredCredits)}</p>
       <CreditExpirations expirations={creditOverview.availableExpirations} />
       <h3>Historial de movimientos</h3>
       {creditOverview.history.length === 0 ? <p>Todavía no hay movimientos de crédito.</p> : <ul>
         {creditOverview.history.map((movement) => (
           <li key={movement.id}>
-            {movement.movementType} · +/−{movement.amount} · {movement.createdAt.toISOString()}
-            {movement.expiresAt ? ` · caduca ${movement.expiresAt.toISOString()}` : ""}
+            {formatCreditMovement(movement)} · <HistoryTime value={movement.createdAt} />
+            {movement.expiresAt && <> · Vencimiento del crédito: <HistoryTime value={movement.expiresAt} /></>}
             {movement.reason ? ` · motivo: ${movement.reason}` : ""}
           </li>
         ))}
@@ -173,7 +175,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
         <h3 id="available-recoveries">Clases futuras disponibles</h3>
         <RecoveryOptions
           initialPage={recoveryOptions}
-          nextGrantId={creditOverview.nextUsableGrantMovementId}
+          hasAvailableCredit={creditOverview.nextUsableGrantMovementId !== null}
           nextGrantExpiresAt={creditOverview.nextUsableExpiresAt}
           reserveAction={reserveRecovery}
         />
@@ -184,7 +186,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
         {pendingRecoveries.length === 0 ? <p>No tienes recuperaciones reservadas.</p> : <ul>
           {pendingRecoveries.map((reservation) => (
             <li key={reservation.reservationId}>
-              {reservation.localDate} · {reservation.startsAtUtc.toISOString()} · estado: {reservation.status}
+              <HistoryTime value={reservation.startsAtUtc} /> · {recoveryReservationLabels[reservation.status]}
               <form action={cancelRecovery}>
                 <input type="hidden" name="reservationId" value={reservation.reservationId} />
                 <p>El crédito se devuelve si sigue vigente y cancelas con al menos {regulation.cancellationNoticeDays} días naturales de antelación.</p>

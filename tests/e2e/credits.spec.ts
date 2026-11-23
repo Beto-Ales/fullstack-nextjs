@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { expect, test, type Page, type Request } from "@playwright/test";
 import { DateTime } from "luxon";
 import { CENTER_TIME_ZONE } from "../../src/domain/time/timezone";
-import { seedHabitualCreditScenario, seedRecoveryCapacityScenario, seedRecoveryPaginationSessions, withCreditsAccount } from "./credits-fixtures";
+import { calendarLabel, seedHabitualCreditScenario, seedRecoveryCapacityScenario, seedRecoveryPaginationSessions, withCreditsAccount } from "./credits-fixtures";
+
+function sessionTime(page: Page, timestamp: string) {
+  return page.locator(`time[datetime="${timestamp}"]`);
+}
 
 async function login(page: Page, email: string, password: string) {
   await page.goto("/login");
@@ -20,18 +24,18 @@ test.describe("credits flows", () => {
       await login(page, fixture.email, fixture.password);
       await expect(page).toHaveURL(/\/student$/, { timeout: 10_000 });
       await expect(page.getByRole("heading", { name: "Área de alumno" })).toBeVisible();
-      await expect(page.getByText("Disponibles: 0", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
 
       const classes = page.getByRole("region", { name: "Mis próximas clases" });
-      const habitualClass = classes.getByRole("listitem").filter({ hasText: scenario.habitualDate });
+      const habitualClass = classes.getByRole("listitem").filter({ hasText: calendarLabel(scenario.habitualDate) });
       const options = page.getByRole("region", { name: "Clases futuras disponibles" });
-      const releasedClass = options.getByRole("listitem").filter({ hasText: scenario.habitualDate });
+      const releasedClass = options.getByRole("listitem").filter({ hasText: calendarLabel(scenario.habitualDate) });
       await expect(releasedClass).toHaveCount(0);
       await habitualClass.getByRole("button", { name: "Cancelar clase" }).click();
       await expect(page.getByRole("status")).toHaveText("Clase cancelada.");
       await expect(habitualClass).toHaveCount(0);
       await expect(releasedClass).toContainText("plazas: 1");
-      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
       const { rows: [cancellation] } = await client.query(
         `select r.status, r.cancelled_by_user_id, c.cancellation_type, c.sequence_position
          from class_reservations r join reservation_cancellations c on c.reservation_id = r.id where r.id = $1`,
@@ -41,17 +45,17 @@ test.describe("credits flows", () => {
         status: "CANCELLED", cancelled_by_user_id: userId, cancellation_type: "ON_TIME", sequence_position: 3,
       });
 
-      const recoveryOption = options.getByRole("listitem").filter({ hasText: scenario.recoveryDate });
+      const recoveryOption = options.getByRole("listitem").filter({ hasText: calendarLabel(scenario.recoveryDate) });
       await expect(recoveryOption).toContainText("plazas: 1");
       await recoveryOption.getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" }).click();
       await expect(page.getByRole("status")).toHaveText("Recuperación reservada.");
       await page.goto("/student");
 
       const recoveries = page.getByRole("region", { name: "Mis recuperaciones" });
-      await expect(recoveries.getByRole("listitem").filter({ hasText: scenario.recoveryDate })).toContainText("estado: CONFIRMED");
-      await expect(page.getByText("Disponibles: 0", { exact: true })).toBeVisible();
-      await expect(page.getByText(/AUTO_CANCELLATION_GRANT/)).toHaveCount(1);
-      await expect(page.getByText(/RECOVERY_CONSUMPTION/)).toHaveCount(1);
+      await expect(recoveries.getByRole("listitem").filter({ hasText: calendarLabel(scenario.recoveryDate) })).toContainText("Confirmada");
+      await expect(page.getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
+      await expect(page.getByText(/Concesión por cancelación · \+1 crédito/)).toHaveCount(1);
+      await expect(page.getByText(/Consumo por recuperación · −1 crédito/)).toHaveCount(1);
       const { rows: ledger } = await client.query(
         `select m.movement_type, m.amount, m.id, m.source_grant_movement_id, r.status
          from credit_ledger_movements m left join class_reservations r on r.id = m.related_reservation_id
@@ -72,27 +76,27 @@ test.describe("credits flows", () => {
       const { habitualDate, recoveryDate, recoverySessionId, profileId, regulationVersionId } = await seedHabitualCreditScenario(fixture);
       await login(page, fixture.email, fixture.password);
       const upcoming = page.getByRole("region", { name: "Mis próximas clases" });
-      await upcoming.getByRole("listitem").filter({ hasText: habitualDate })
+      await upcoming.getByRole("listitem").filter({ hasText: calendarLabel(habitualDate) })
         .getByRole("button", { name: "Cancelar clase" }).click();
-      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
       const options = page.getByRole("region", { name: "Clases futuras disponibles" });
-      await options.getByRole("listitem").filter({ hasText: recoveryDate })
+      await options.getByRole("listitem").filter({ hasText: calendarLabel(recoveryDate) })
         .getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" }).click();
       await expect(page.getByRole("status")).toHaveText("Recuperación reservada.");
 
       const recovery = page.getByRole("region", { name: "Mis recuperaciones" })
-        .getByRole("listitem").filter({ hasText: recoveryDate });
+        .getByRole("listitem").filter({ hasText: calendarLabel(recoveryDate) });
       await recovery.getByRole("button", { name: "Cancelar recuperación" }).click();
       await expect(page).toHaveURL(/\/student\?recovery=cancelled$/);
       await expect(page.getByRole("status")).toHaveText("Recuperación cancelada.");
       await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
       await expect(recovery).toHaveCount(0);
       const historyEntry = page.getByRole("region", { name: "Historial de clases" })
-        .getByRole("listitem").filter({ hasText: DateTime.fromISO(recoveryDate).toFormat("dd/MM/yyyy") });
+        .getByRole("listitem").filter({ hasText: calendarLabel(recoveryDate) });
       await expect(historyEntry).toContainText("Recuperación");
       await expect(historyEntry).toContainText("Reserva cancelada");
-      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
-      await expect(options.getByRole("listitem").filter({ hasText: recoveryDate })).toContainText("plazas: 1");
+      await expect(page.getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
+      await expect(options.getByRole("listitem").filter({ hasText: calendarLabel(recoveryDate) })).toContainText("plazas: 1");
 
       const { rows: records } = await fixture.client.query(
         `select r.status, r.cancelled_by_user_id, r.cancellation_regulation_version_id,
@@ -115,8 +119,8 @@ test.describe("credits flows", () => {
         refunded_grant_id: record.source_grant_movement_id, regulation_version_id: regulationVersionId,
       });
       await page.reload();
-      await expect(page.getByText(/RECOVERY_REFUND/)).toHaveCount(1);
-      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+      await expect(page.getByText(/Devolución de recuperación · \+1 crédito/)).toHaveCount(1);
+      await expect(page.getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
     });
   });
 
@@ -134,9 +138,9 @@ test.describe("credits flows", () => {
         values ($1,$2,$3,$4,1)`, [classSessionId, start.toISODate(), start.toJSDate(), start.plus({ hours: 1 }).toJSDate()]);
       await login(page, email, password);
       await expect(page).toHaveURL(/\/student$/);
-      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
       const options = page.getByRole("region", { name: "Clases futuras disponibles" });
-      const entry = options.getByRole("listitem").filter({ hasText: start.toJSDate().toISOString() });
+      const entry = options.getByRole("listitem").filter({ has: sessionTime(page, start.toJSDate().toISOString()) });
       await expect(entry.getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" })).toBeVisible();
       await client.query(`update class_sessions set starts_at_utc=clock_timestamp()-interval '1 minute',
         ends_at_utc=clock_timestamp()+interval '59 minutes' where id=$1`, [classSessionId]);
@@ -145,7 +149,7 @@ test.describe("credits flows", () => {
       await expect(page.getByRole("main").getByRole("alert")).toHaveText("La sesión de recuperación ya ha comenzado.");
       await expect(page.getByText("Recuperación reservada.", { exact: true })).toHaveCount(0);
       await expect(entry).toHaveCount(0);
-      await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
       expect((await client.query("select id from class_reservations where class_session_id=$1", [classSessionId])).rows).toEqual([]);
       expect((await client.query("select id from credit_ledger_movements where student_profile_id=$1", [profileId])).rows).toEqual([{ id: movementId }]);
     });
@@ -163,11 +167,12 @@ test.describe("credits flows", () => {
             await Promise.all([login(page, first.email, first.password), login(otherPage, second.email, second.password)]);
 
             const options = pages.map((tab) => tab.getByRole("region", { name: "Clases futuras disponibles" }));
-            const lastSeat = options.map((list) => list.getByRole("listitem").filter({ hasText: scenario.contested.timestamp }));
+            const lastSeat = options.map((list, index) => list.getByRole("listitem")
+              .filter({ has: sessionTime(pages[index], scenario.contested.timestamp) }));
             for (const [index, list] of options.entries()) {
-              await expect(pages[index].getByText("Disponibles: 1", { exact: true })).toBeVisible();
-              await expect(list.getByRole("listitem").filter({ hasText: scenario.full.timestamp })).toHaveCount(0);
-              await expect(list.getByRole("listitem").filter({ hasText: scenario.blocked.timestamp })).toHaveCount(0);
+              await expect(pages[index].getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
+              await expect(list.getByRole("listitem").filter({ has: sessionTime(pages[index], scenario.full.timestamp) })).toHaveCount(0);
+              await expect(list.getByRole("listitem").filter({ has: sessionTime(pages[index], scenario.blocked.timestamp) })).toHaveCount(0);
               await expect(lastSeat[index]).toContainText("plazas: 1");
             }
 
@@ -210,13 +215,13 @@ test.describe("credits flows", () => {
               related_reservation_id: reservation.id, source_grant_movement_id: scenario.grantIds[winner],
             }]);
             await expect(pages[winner].getByRole("status")).toHaveText("Recuperación reservada.");
-            await expect(pages[winner].getByText("Disponibles: 0", { exact: true })).toBeVisible();
+            await expect(pages[winner].getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
             await expect(pages[winner].getByRole("region", { name: "Mis recuperaciones" })
-              .getByRole("listitem").filter({ hasText: scenario.contested.timestamp })).toContainText("estado: CONFIRMED");
+              .getByRole("listitem").filter({ has: sessionTime(pages[winner], scenario.contested.timestamp) })).toContainText("Confirmada");
             await expect(pages[loser].getByRole("main").getByRole("alert")).toHaveText("La plaza ya no está disponible.");
-            await expect(pages[loser].getByText("Disponibles: 1", { exact: true })).toBeVisible();
+            await expect(pages[loser].getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
             await expect(pages[loser].getByRole("region", { name: "Mis recuperaciones" })
-              .getByRole("listitem").filter({ hasText: scenario.contested.timestamp })).toHaveCount(0);
+              .getByRole("listitem").filter({ has: sessionTime(pages[loser], scenario.contested.timestamp) })).toHaveCount(0);
             await Promise.all(lastSeat.map((item) => expect(item).toHaveCount(0)));
           } finally {
             await otherContext.close();
@@ -243,14 +248,15 @@ test.describe("credits flows", () => {
           const more = options.getByRole("button", { name: "Ver más clases" });
           await expect(items).toHaveCount(100);
           expect(await getIds()).toEqual(expected.slice(0, 100));
-          await expect(items.last()).toContainText(later.sharedTimestamp);
+          const sharedTime = sessionTime(page, later.sharedTimestamp);
+          await expect(items.last().locator(sharedTime)).toBeVisible();
           await expect(more).toBeVisible();
           await more.press("Enter");
 
           await expect(items).toHaveCount(101);
           expect(await getIds()).toEqual(expected);
-          await expect(items.nth(99)).toContainText(later.sharedTimestamp);
-          await expect(items.nth(100)).toContainText(later.sharedTimestamp);
+          await expect(items.nth(99).locator(sharedTime)).toBeVisible();
+          await expect(items.nth(100).locator(sharedTime)).toBeVisible();
           await expect(more).toHaveCount(0);
           await expect(items.last()).toBeFocused();
 
@@ -328,7 +334,7 @@ test.describe("credits flows", () => {
         await grant.getByRole("button", { name: "Reintentar" }).press("Enter");
         await expect(grant.getByRole("status")).toHaveText("Concesión de créditos confirmada.");
         await expect(grant.getByRole("alert")).toHaveCount(0);
-        await expect(page.getByText("Disponibles: 2", { exact: true })).toBeVisible();
+        await expect(page.getByText("Disponibles: 2 créditos", { exact: true })).toBeVisible();
         await expect(page.getByRole("listitem").filter({ hasText: "Concesión de prueba" })).toHaveCount(1);
         expect((await ledger()).rows).toEqual(firstRows);
 
@@ -348,7 +354,7 @@ test.describe("credits flows", () => {
         await withdraw.getByRole("button", { name: "Retirar" }).press("Enter");
         await expect(withdraw.getByRole("status")).toHaveText("Retirada de créditos confirmada.");
         await expect(withdraw.getByRole("alert")).toHaveCount(0);
-        await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+        await expect(page.getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
         await expect(page.getByRole("listitem").filter({ hasText: "Retirada de prueba" })).toHaveCount(1);
 
         const studentContext = await browser.newContext({ baseURL });
@@ -409,15 +415,15 @@ test.describe("credits flows", () => {
         await expect(page.getByText("Máximo de cancelaciones consecutivas elegibles", { exact: true })).toBeVisible();
         await page.getByRole("link", { name: "Volver a mi área" }).press("Enter");
         const upcoming = page.getByRole("region", { name: "Mis próximas clases" });
-        await upcoming.getByRole("listitem").filter({ hasText: future.toISODate()! })
+        await upcoming.getByRole("listitem").filter({ hasText: calendarLabel(future.toISODate()!) })
           .getByRole("button", { name: "Cancelar clase" }).press("Enter");
         await expect(page.getByText("Clase cancelada.", { exact: true })).toBeVisible();
         const streak = page.getByRole("region", { name: "Racha de cancelaciones habituales" });
         await expect(streak).toContainText("La racha actual está pendiente");
-        await expect(streak).toContainText("Solicitudes de crédito pendientes · 1");
+        await expect(streak).toContainText("1 solicitud de crédito pendiente");
         await expect(page.getByText("Crédito pendiente de evaluación", { exact: true })).toBeVisible();
-        await expect(page.getByText("Disponibles: 0", { exact: true })).toBeVisible();
-        await expect(upcoming.getByText(future.toISODate()!, { exact: false })).toHaveCount(0);
+        await expect(page.getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
+        await expect(upcoming.getByText(calendarLabel(future.toISODate()!), { exact: false })).toHaveCount(0);
 
         const context = await browser.newContext({ baseURL });
         try {
@@ -435,7 +441,7 @@ test.describe("credits flows", () => {
         await page.reload();
         await expect(streak).toContainText("Cancelaciones consecutivas contabilizadas · 1");
         await expect(page.getByText("Crédito pendiente de evaluación", { exact: true })).toHaveCount(0);
-        await expect(page.getByText("Disponibles: 1", { exact: true })).toBeVisible();
+        await expect(page.getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
         expect((await student.client.query("select id from credit_ledger_movements where student_profile_id = $1", [profileId])).rowCount).toBe(1);
       });
     });

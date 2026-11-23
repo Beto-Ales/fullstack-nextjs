@@ -211,7 +211,8 @@ test("pages the audit of a disabled student by keyboard and keeps other audit re
         const event = audit.getByRole("listitem").first();
         await expect(audit.getByRole("listitem")).toHaveCount(20);
         await expect(event).toContainText(admin.email);
-        await expect(event.locator("time")).toContainText("15:30");
+        await expect(event.locator("time")).toHaveText("15/01/2026, 15:30 GMT+01:00");
+        await expect(event.locator("time")).toHaveAttribute("datetime", "2026-01-15T14:30:00.000Z");
         await expect(event).toContainText("Actualización del perfil");
         await expect(event).toContainText("Anterior · Campo vacío");
         await expect(event).toContainText("Nuevo · <b>Texto literal</b>");

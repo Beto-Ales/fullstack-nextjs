@@ -8,7 +8,8 @@ import {
   getAdminStudentProfile, type ProfileClassEntry, type ProfilePageKey,
 } from "@/src/application/academic/admin-student-profile-service";
 import { resolveCenterWeek } from "@/src/domain/time/center-week";
-import { formatInCenterTimeZone } from "@/src/domain/time/timezone";
+import { CalendarDate, HistoryTime } from "@/app/components/history-time";
+import { formatCreditMovement, formatCreditQuantity, formatHistoryInteger } from "@/src/interfaces/presentation/history-format";
 import { requireRole } from "@/src/interfaces/auth/session";
 
 import styles from "./profile.module.css";
@@ -21,14 +22,6 @@ type StudentProfilePageProps = {
 };
 
 const weekdays = Info.weekdays("long", { locale: "es" });
-const movementLabels = {
-  AUTO_CANCELLATION_GRANT: "Concesión por cancelación",
-  MANUAL_GRANT: "Concesión manual",
-  MANUAL_WITHDRAWAL: "Retirada manual",
-  EXPIRATION: "Caducidad",
-  RECOVERY_CONSUMPTION: "Consumo por recuperación",
-  RECOVERY_REFUND: "Devolución de recuperación",
-};
 const editFieldLabels = {
   firstName: "Nombre",
   lastName: "Apellidos",
@@ -44,22 +37,11 @@ function auditValueLabel(value: string | null | undefined) {
   return value;
 }
 
-function Timestamp({ value, dateOnly = false }: { value: Date; dateOnly?: boolean }) {
-  return <time dateTime={value.toISOString()}>{formatInCenterTimeZone(value, "es-ES", {
-    day: "2-digit", month: "2-digit", year: "numeric",
-    ...(!dateOnly && { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
-  })}</time>;
-}
-
-function LocalDate({ value }: { value: string }) {
-  return <time dateTime={value}>{DateTime.fromISO(value, { zone: "UTC" }).toFormat("dd/MM/yyyy")}</time>;
-}
-
 function ClassDetails({ entry }: { entry: ProfileClassEntry }) {
   return (
     <>
       <p className={styles.label}>{entry.className ?? "Clase única"}</p>
-      <p><Timestamp value={entry.startsAtUtc} /> · {entry.origin === "MAKEUP"
+      <p><HistoryTime value={entry.startsAtUtc} /> · {entry.origin === "MAKEUP"
         ? "Recuperación" : entry.habitual ? "Clase habitual" : "Inscripción ordinaria individual"}</p>
     </>
   );
@@ -92,14 +74,14 @@ function ClassAudit({ entry }: { entry: ProfileClassEntry }) {
       {cancelled && !entry.cancellationSource && !entry.withdrawalCancellation && !entry.sessionCancellation && <p>Origen no determinado</p>}
       {cancelled && (entry.cancelledAt || entry.cancellationActorEmail) && (
         <p>
-          {entry.cancelledAt && <>Cancelada el <Timestamp value={entry.cancelledAt} /></>}
+          {entry.cancelledAt && <>Cancelada el <HistoryTime value={entry.cancelledAt} /></>}
           {entry.cancelledAt && entry.cancellationActorEmail && " · "}
           {entry.cancellationActorEmail && <>Responsable registrado {entry.cancellationActorEmail}</>}
         </p>
       )}
       {entry.administrativeReason && <p>Motivo registrado · {entry.administrativeReason}</p>}
       {entry.attendanceRecordedAt && (
-        <p>{entry.attendanceSource === "AUTO" ? "Registro automático" : "Registro manual"} · <Timestamp value={entry.attendanceRecordedAt} />
+        <p>{entry.attendanceSource === "AUTO" ? "Registro automático" : "Registro manual"} · <HistoryTime value={entry.attendanceRecordedAt} />
           {entry.attendanceActorEmail && <> · {entry.attendanceActorEmail}</>}
         </p>
       )}
@@ -191,8 +173,8 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
         <dl className={styles.account}>
           <div><dt>Estado de la cuenta</dt><dd>{student.status === "ACTIVE" ? "Activa" : "Desactivada"}</dd></div>
           <div><dt>Correo de la cuenta</dt><dd>{student.email}</dd></div>
-          <div><dt>Fecha de alta</dt><dd><Timestamp value={student.createdAt} dateOnly /></dd></div>
-          {student.deactivatedAt && <div><dt>Fecha de baja</dt><dd><Timestamp value={student.deactivatedAt} dateOnly /></dd></div>}
+          <div><dt>Fecha de alta</dt><dd><HistoryTime value={student.createdAt} dateOnly /></dd></div>
+          {student.deactivatedAt && <div><dt>Fecha de baja</dt><dd><HistoryTime value={student.deactivatedAt} dateOnly /></dd></div>}
           {student.contactEmail && <div><dt>Correo de contacto</dt><dd>{student.contactEmail}</dd></div>}
           {student.contactPhone && <div><dt>Teléfono de contacto</dt><dd>{student.contactPhone}</dd></div>}
         </dl>
@@ -214,7 +196,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
         <h2 id="resumen">Resumen académico</h2>
         <dl className={styles.indicators}>
           {indicators.map(([label, value]) => (
-            <div className={styles.card} key={label}><dt>{label}</dt><dd>{value}</dd></div>
+            <div className={styles.card} key={label}><dt>{label}</dt><dd>{formatHistoryInteger(value)}</dd></div>
           ))}
         </dl>
         <p>El total administrativo cuenta decisiones individuales documentadas.</p>
@@ -229,7 +211,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
             <p>{schedule.courseStatus === "INACTIVE" ? "Curso inactivo"
               : !schedule.currentOrUpcoming ? "Vigencia finalizada" : schedule.upcoming ? "Próximo" : "Vigente"}</p>
             {schedule.assignmentStatus === "ENDED" && <p>Asignación cerrada</p>}
-            <p>Desde <LocalDate value={schedule.effectiveFrom} />{schedule.effectiveTo && <> hasta <LocalDate value={schedule.effectiveTo} /></>}</p>
+            <p>Desde <CalendarDate value={schedule.effectiveFrom} />{schedule.effectiveTo && <> hasta <CalendarDate value={schedule.effectiveTo} /></>}</p>
           </li>
         )} />
         <Pagination label="horarios habituales" {...schedules} href={(number) => pageHref("horarios", number)} />
@@ -256,18 +238,18 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
       <section aria-labelledby="creditos">
         <h2 id="creditos">Créditos</h2>
         <dl className={styles.indicators}>
-          <div className={styles.card}><dt>Disponibles</dt><dd>{credits.availableCredits}</dd></div>
-          <div className={styles.card}><dt>Utilizados en recuperaciones</dt><dd>{credits.usedCredits}</dd></div>
-          <div className={styles.card}><dt>Caducados</dt><dd>{credits.expiredCredits}</dd></div>
+          <div className={styles.card}><dt>Disponibles</dt><dd>{formatCreditQuantity(credits.availableCredits)}</dd></div>
+          <div className={styles.card}><dt>Utilizados en recuperaciones</dt><dd>{formatCreditQuantity(credits.usedCredits)}</dd></div>
+          <div className={styles.card}><dt>Caducados</dt><dd>{formatCreditQuantity(credits.expiredCredits)}</dd></div>
         </dl>
         {credits.pendingExpirationUnits > 0 && (
-          <p>{credits.pendingExpirationUnits} créditos vencidos pendientes de registro en el ledger.</p>
+          <p>Vencimientos pendientes de registro: {formatCreditQuantity(credits.pendingExpirationUnits)}.</p>
         )}
         <h3>Próximos vencimientos</h3>
         {credits.nextExpirations.length ? (
           <ul>
             {credits.nextExpirations.map(({ amount, expiresAt }) => expiresAt && (
-              <li key={expiresAt.toISOString()}>{amount} {amount === 1 ? "crédito" : "créditos"} · <Timestamp value={expiresAt} /></li>
+              <li key={expiresAt.getTime()}>{formatCreditQuantity(amount)} · <HistoryTime value={expiresAt} /></li>
             ))}
           </ul>
         ) : <p>No hay créditos disponibles con vencimiento programado.</p>}
@@ -275,15 +257,14 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
         <h3 id="movimientos" tabIndex={-1}>Movimientos del ledger</h3>
         <ProfileList page={movements} empty="No hay movimientos de créditos." render={(movement) => (
           <li key={movement.id} className={styles.card}>
-            <p className={styles.label}>{movementLabels[movement.movementType]} · {movement.amount}</p>
-            <p><Timestamp value={movement.createdAt} /></p>
+            <p className={styles.label}>{formatCreditMovement(movement)}</p>
+            <p><HistoryTime value={movement.createdAt} /></p>
             {movement.reason && <p>Motivo · {movement.reason}</p>}
             {movement.classSessionId && movement.classStartsAt && (
               <Link href={`/admin/sesiones/${movement.classSessionId}`} prefetch={false}>
-                {movement.className ?? "Clase única"} · <Timestamp value={movement.classStartsAt} />
+                {movement.className ?? "Clase única"} · <HistoryTime value={movement.classStartsAt} />
               </Link>
             )}
-            {movement.movementType === "RECOVERY_REFUND" && movement.refundRestoredCredit === false && <p>Devolución sin abono al saldo</p>}
           </li>
         )} />
         <Pagination label="movimientos del ledger" {...movements} href={(number) => pageHref("movimientos", number)} />
@@ -299,9 +280,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
             {entry.movements.length > 0 && (
               <ul>
                 {entry.movements.map((movement) => (
-                  <li key={movement.id}>{movement.movementType === "RECOVERY_CONSUMPTION"
-                    ? "Créditos utilizados" : movement.refundRestoredCredit ? "Créditos devueltos" : "Devolución registrada sin abono"}
-                    {" · "}{movement.amount}</li>
+                  <li key={movement.id}>{formatCreditMovement(movement)}</li>
                 ))}
               </ul>
             )}
@@ -315,7 +294,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
         <ProfileList page={edits} empty="El alumno no tiene modificaciones registradas." render={(event) => (
           <li key={event.id} className={styles.card}>
             <h3>{event.operation === "UPDATE_STUDENT_DETAILS" ? "Actualización del perfil" : "Operación no disponible"}</h3>
-            <p><Timestamp value={event.editedAt} /></p>
+            <p><HistoryTime value={event.editedAt} /></p>
             <p>Administrador · {event.actorEmail ?? `No disponible (ID ${event.actorId})`}</p>
             {event.changes.length > 0 ? (
               <dl className={styles.account}>

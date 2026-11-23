@@ -7,6 +7,10 @@ import { BCRYPT_COST } from "../../src/domain/auth/password-policy";
 import { CENTER_TIME_ZONE } from "../../src/domain/time/timezone";
 import { createVerifiedTestClient } from "../../src/test-support/postgres-test-db";
 
+export function calendarLabel(localDate: string): string {
+  return DateTime.fromISO(localDate, { zone: "UTC" }).toFormat("dd/MM/yyyy");
+}
+
 export async function withCreditsAccount<T>(
   role: "STUDENT" | "SUPER_ADMIN",
   run: (fixture: { client: Client; userId: string; email: string; password: string; sessionIds: string[]; templateIds: string[] }) => Promise<T>,

@@ -1,4 +1,5 @@
-import { formatInCenterTimeZone } from "@/src/domain/time/timezone";
+import { HistoryTime } from "@/app/components/history-time";
+import { formatCreditQuantity } from "@/src/interfaces/presentation/history-format";
 
 type CreditExpiration = { amount: number; expiresAt: Date | null };
 
@@ -11,16 +12,8 @@ export function CreditExpirations({ expirations }: { expirations: CreditExpirati
           <p>Hora de Copenhague</p>
           <ul className="space-y-1">
             {expirations.map(({ amount, expiresAt }) => (
-              <li key={expiresAt?.toISOString() ?? "without-expiration"} className="wrap-break-word">
-                {amount} {amount === 1 ? "crédito" : "créditos"} ·{" "}
-                {expiresAt ? (
-                  <time dateTime={expiresAt.toISOString()}>
-                    {formatInCenterTimeZone(expiresAt, "es-ES", {
-                      day: "2-digit", month: "2-digit", year: "numeric",
-                      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-                    })}
-                  </time>
-                ) : "Sin vencimiento"}
+              <li key={expiresAt?.getTime() ?? "without-expiration"} className="wrap-break-word">
+                {formatCreditQuantity(amount)} · {expiresAt ? <HistoryTime value={expiresAt} /> : "Sin vencimiento"}
               </li>
             ))}
           </ul>

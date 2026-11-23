@@ -3,18 +3,20 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 
 import { PendingSubmit } from "@/app/components/pending-submit";
+import { HistoryTime } from "@/app/components/history-time";
 import { listFutureRecoveryOptionsAction } from "@/src/interfaces/recovery/actions";
+import { formatHistoryInteger } from "@/src/interfaces/presentation/history-format";
 
 type RecoveryOptionsPage = Awaited<ReturnType<typeof listFutureRecoveryOptionsAction>>;
 
 type RecoveryOptionsProps = {
   initialPage: RecoveryOptionsPage;
-  nextGrantId: string | null;
+  hasAvailableCredit: boolean;
   nextGrantExpiresAt: Date | null;
   reserveAction: (formData: FormData) => Promise<void>;
 };
 
-export function RecoveryOptions({ initialPage, nextGrantId, nextGrantExpiresAt, reserveAction }: RecoveryOptionsProps) {
+export function RecoveryOptions({ initialPage, hasAvailableCredit, nextGrantExpiresAt, reserveAction }: RecoveryOptionsProps) {
   const [loaded, setLoaded] = useState<{
     initialPage: RecoveryOptionsPage;
     options: RecoveryOptionsPage;
@@ -63,12 +65,13 @@ export function RecoveryOptions({ initialPage, nextGrantId, nextGrantExpiresAt, 
       {options.sessions.length === 0 ? <p>No hay clases de recuperación disponibles.</p> : <ul>
         {options.sessions.map((session) => (
           <li key={session.id} tabIndex={-1} ref={current?.firstNewId === session.id ? newOption : undefined}>
-            {session.localDate} · {session.startsAtUtc.toISOString()} · plazas: {session.availableSpots} · cupo mensual:{" "}
-            {session.monthlyRecoveryRemaining}
-            {nextGrantId ? (
+            <HistoryTime value={session.startsAtUtc} /> · plazas: {formatHistoryInteger(session.availableSpots)} · cupo mensual:{" "}
+            {formatHistoryInteger(session.monthlyRecoveryRemaining)}
+            {hasAvailableCredit ? (
               <p>
-                Crédito FIFO estimado: {nextGrantId}
-                {nextGrantExpiresAt ? ` (caduca ${nextGrantExpiresAt.toISOString()})` : ""}
+                Crédito que se usaría: {nextGrantExpiresAt
+                  ? <>vence el <HistoryTime value={nextGrantExpiresAt} /></>
+                  : "sin vencimiento"}
               </p>
             ) : (
               <p>Sin créditos utilizables.</p>

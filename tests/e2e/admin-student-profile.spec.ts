@@ -97,7 +97,9 @@ test("admin reads the full profile at 360 px and returns to the list and session
       await expect(page.getByRole("region", { name: "Horarios habituales" })).toContainText("Acuarela de perfil");
       const upcomingRegion = page.getByRole("region", { name: "Próximas clases" });
       await expect(upcomingRegion.getByRole("listitem")).toHaveCount(2);
-      await expect(upcomingRegion).toContainText("17:15 · Clase habitual");
+      await expect(upcomingRegion.locator(`time[datetime="${start.toJSDate().toISOString()}"]`))
+        .toHaveText(start.toFormat("dd/MM/yyyy, HH:mm 'GMT'ZZ"));
+      await expect(upcomingRegion).toContainText("Clase habitual");
       const history = page.getByRole("region", { name: "Historial académico" });
       await expect(history.getByText("Asistió", { exact: true })).toBeVisible();
       await expect(history.getByText("Ausente", { exact: true })).toBeVisible();
@@ -105,12 +107,12 @@ test("admin reads the full profile at 360 px and returns to the list and session
       await expect(history).toContainText("Cambio de sala");
       await expect(history).toContainText("Origen no determinado");
       const credits = page.getByRole("region", { name: "Créditos" });
-      await expect(credits).toContainText("Concesión manual · 3");
+      await expect(credits).toContainText("Concesión manual · +3 créditos");
       await expect(credits).toContainText("Ajuste de perfil");
       const recoveries = page.getByRole("region", { name: "Recuperaciones" });
       await expect(recoveries).toContainText("Realizada · Asistió");
       await expect(recoveries).toContainText("Futura confirmada");
-      await expect(recoveries.getByText("Créditos utilizados · 1", { exact: true })).toHaveCount(2);
+      await expect(recoveries.getByText("Consumo por recuperación · −1 crédito", { exact: true })).toHaveCount(2);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
       await expect(page.getByRole("main").locator("form")).toHaveCount(0);
 

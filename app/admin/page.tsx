@@ -17,6 +17,8 @@ import Link from "next/link";
 import { ActionFeedback } from "@/app/components/action-feedback";
 import { PendingSubmit } from "@/app/components/pending-submit";
 import { SectionNavigation } from "@/app/components/section-navigation";
+import { HistoryTime } from "@/app/components/history-time";
+import { formatCreditMovement, formatCreditQuantity, recoveryReservationLabels } from "@/src/interfaces/presentation/history-format";
 import { AdminWeeklyCalendar } from "./weekly-calendar";
 import { AdminWeeklySummary } from "./weekly-summary";
 import { CourseAdministration } from "./course-administration";
@@ -172,9 +174,9 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
 
       {creditOverview ? (
         <section>
-          <p>Disponibles: {creditOverview.availableCredits}</p>
-          <p>Caducados: {creditOverview.expiredCredits}</p>
-          <p>Total concedidos: {creditOverview.totalCreditsGranted}</p>
+          <p>Disponibles: {formatCreditQuantity(creditOverview.availableCredits)}</p>
+          <p>Caducados: {formatCreditQuantity(creditOverview.expiredCredits)}</p>
+          <p>Total concedidos: {formatCreditQuantity(creditOverview.totalCreditsGranted)}</p>
 
           {activeStudents.some(({ id }) => id === creditOverview.studentProfileId) ? (
             <>
@@ -189,8 +191,8 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
           <ul>
             {creditOverview.history.map((movement) => (
               <li key={movement.id}>
-                {movement.movementType} · +/−{movement.amount} · {movement.createdAt.toISOString()}
-                {movement.expiresAt ? ` · caduca ${movement.expiresAt.toISOString()}` : ""}
+                {formatCreditMovement(movement)} · <HistoryTime value={movement.createdAt} />
+                {movement.expiresAt && <> · Vencimiento del crédito: <HistoryTime value={movement.expiresAt} /></>}
                 {movement.reason ? ` · motivo: ${movement.reason}` : ""}
                 {movement.regulationVersionId && (
                   <> · <Link href={`/normativa#version-${movement.regulationVersionId}`}>Normativa aplicada</Link></>
@@ -203,7 +205,7 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
           <ul>
             {recoveryHistory?.reservations.map((reservation) => (
               <li key={reservation.reservationId}>
-                {reservation.classLocalDate} · {reservation.classStartsAtUtc.toISOString()} · estado: {reservation.status}
+                <HistoryTime value={reservation.classStartsAtUtc} /> · {recoveryReservationLabels[reservation.status]}
                 {reservation.regulationVersionId && (
                   <> · <Link href={`/normativa#version-${reservation.regulationVersionId}`}>Normativa de reserva</Link></>
                 )}
@@ -217,8 +219,8 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
           <ul>
             {recoveryHistory?.ledgerRows.map((movement) => (
               <li key={movement.id}>
-                {movement.movementType} · reserva: {movement.relatedReservationId ?? "n/a"} · {movement.createdAt.toISOString()} ·
-                restaura saldo: {movement.refundRestoredCredit === null ? "n/a" : String(movement.refundRestoredCredit)}
+                {formatCreditMovement(movement)} · <HistoryTime value={movement.createdAt} /> ·{" "}
+                Reserva: {movement.relatedReservationId ?? "Sin referencia"}
               </li>
             ))}
           </ul>

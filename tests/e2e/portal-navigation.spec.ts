@@ -51,7 +51,7 @@ test("student reaches credits, recoveries and history by keyboard without horizo
       await expect(target).toBeFocused();
       await expect(target).toBeInViewport();
     }
-    await expect(page.getByText("Disponibles: 0", { exact: true })).toBeVisible();
+    await expect(page.getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
     await expectResponsive(page);
     await page.goto("/admin");
     await expect(page).toHaveURL(/\/student$/);
@@ -101,7 +101,7 @@ test("admin can use long-name lists and return from profiles and sessions at mob
       await page.keyboard.press("Tab");
       await page.keyboard.press("Enter");
       await expect(page).toHaveURL(new RegExp(`week=${week}.*studentProfileId=${profileId}#creditos$`));
-      await expect(page.getByText("Disponibles: 0", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
       await navigation.getByRole("link", { name: "Calendario", exact: true }).press("Enter");
       await page.locator(`a[href^="/admin/sesiones/${sessionId}?"]`).press("Enter");
       await expect(page.getByRole("heading", { name: "Inscritos en clase única" })).toBeVisible();

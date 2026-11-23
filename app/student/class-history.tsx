@@ -1,5 +1,5 @@
 import type { listStudentClassHistory } from "@/src/application/academic/academic-service";
-import { formatInCenterTimeZone } from "@/src/domain/time/timezone";
+import { HistoryTime } from "@/app/components/history-time";
 
 type ClassHistoryEntry = Awaited<ReturnType<typeof listStudentClassHistory>>["history"][number];
 
@@ -30,12 +30,7 @@ export function ClassHistory({ entries }: { entries: ClassHistoryEntry[] }) {
               <li key={entry.reservationId} className="min-w-0 rounded border p-3 wrap-break-word">
                 <p className="font-semibold">{entry.className ?? "Clase única"}</p>
                 <p>
-                  <time dateTime={entry.startsAtUtc.toISOString()}>
-                    {formatInCenterTimeZone(entry.startsAtUtc, "es-ES", {
-                      day: "2-digit", month: "2-digit", year: "numeric",
-                      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-                    })}
-                  </time>
+                  <HistoryTime value={entry.startsAtUtc} />
                   {" · "}
                   {entry.origin === "MAKEUP" ? "Recuperación" : entry.habitual ? "Clase habitual" : "Clase ordinaria"}
                 </p>

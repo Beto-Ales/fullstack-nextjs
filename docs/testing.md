@@ -384,6 +384,14 @@ npm.cmd run test:e2e -- --workers=1
 - `npm run test:verify` completó 322 pruebas Vitest, 45 escenarios Chromium y un escenario adicional con normativa sintética mediante H08. Se repitió la suite completa después de un fallo de manifiesto durante una recarga de Next dev. Pasaron TypeScript, ESLint y `drizzle-kit check`. El journal sigue en `0014`.
 - P2. Unificar la presentación de horas y cantidades en las listas de saldo e historial y revisar los textos de opciones extensas. La revisión se limita a Chromium y a los recorridos indicados. Sigue pendiente la validación manual con tecnologías de asistencia en varios navegadores.
 
+### Incremento 10.11 — Fechas, horas y créditos en los historiales
+
+- Los portales de alumno y administración, el perfil administrativo y el detalle de sesión comparten los formatos de historiales, auditoría, reservas, recuperaciones y créditos. Las vigencias de tipo PostgreSQL `DATE` muestran `dd/mm/aaaa` conservando su día. Los instantes muestran la fecha y hora de `Europe/Copenhagen` en español, con desplazamiento GMT para distinguir la hora repetida de otoño. El atributo `datetime` mantiene el valor ISO completo.
+- Las cantidades usan singular y plural. El tipo de movimiento identifica su sentido con una etiqueta y un signo. Las devoluciones sin abono confirmado mantienen su cantidad registrada sin aparentar un aumento del saldo. El saldo disponible y las solicitudes pendientes se muestran por separado. Se conservan los cálculos, los parámetros de navegación y las consultas de solo lectura.
+- Las 19 pruebas unitarias cubren fechas inválidas y ausentes, cambios de mes y año, medianoche, ambos cambios de hora y los tipos de movimiento. La revisión focalizada ejercitó 30 escenarios Chromium. Dos aserciones se ajustaron a la representación de `datetime` y al texto localizado y pasaron en la repetición dirigida.
+- El caso de ambos paneles usa un navegador con zona `Pacific/Honolulu`, compara el HTML inicial con el texto del navegador y verifica los dos desplazamientos de otoño a 320 y 360 px. Comprueba también que el ledger persista intacto tras las lecturas. El texto muestra precisión hasta el minuto y las pruebas de navegador se concentran en Chromium.
+- `npm run test:verify` pasó 341 pruebas Vitest, 46 escenarios Chromium y un escenario adicional con normativa sintética, con PostgreSQL desechable mediante H08. Pasaron TypeScript, ESLint y `drizzle-kit check`. El journal sigue en `0014`.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

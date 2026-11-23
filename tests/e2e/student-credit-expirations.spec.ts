@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { DateTime } from "luxon";
 
 import { CENTER_TIME_ZONE } from "../../src/domain/time/timezone";
-import { seedHabitualCreditScenario, withCreditsAccount } from "./credits-fixtures";
+import { calendarLabel, seedHabitualCreditScenario, withCreditsAccount } from "./credits-fixtures";
 
 test("shows only available credit expirations and updates them on recovery and refund", async ({ page }) => {
   await withCreditsAccount("STUDENT", async (student) => {
@@ -49,7 +49,7 @@ test("shows only available credit expirations and updates them on recovery and r
       await page.goto(`/student?studentProfileId=${foreignProfile}`);
       const expirations = page.getByRole("region", { name: "Vencimientos de créditos" });
       await expect(expirations.getByText("No tienes créditos disponibles.")).toBeVisible();
-      await expect(page.getByText("Disponibles: 0", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
 
       const earliestGrant = await seedGrant(scenario.profileId, 1, soon);
       await withdrawUnit(await seedGrant(scenario.profileId, 2, later));
@@ -98,8 +98,8 @@ test("shows only available credit expirations and updates them on recovery and r
       await expect(items.nth(0)).toContainText("00:15");
       await expect(items.nth(1)).toContainText("2 créditos");
       await expect(items.nth(2)).toHaveText("1 crédito · Sin vencimiento");
-      await expect(page.getByText("Disponibles: 4", { exact: true })).toBeVisible();
-      await expect(page.getByText("Caducados: 1", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 4 créditos", { exact: true })).toBeVisible();
+      await expect(page.getByText("Caducados: 1 crédito", { exact: true })).toBeVisible();
       expect(await readLedger()).toEqual(originalLedger);
       await withCreditsAccount("SUPER_ADMIN", async (admin) => {
         const adminPage = await page.context().browser()!.newPage();
@@ -110,7 +110,7 @@ test("shows only available credit expirations and updates them on recovery and r
           await adminPage.getByRole("button", { name: "Iniciar sesión" }).click();
           await expect(adminPage).toHaveURL(/\/admin$/);
           await adminPage.goto(new URL(`/admin?studentProfileId=${scenario.profileId}`, page.url()).href);
-          await expect(adminPage.getByText("Caducados: 1", { exact: true })).toBeVisible();
+          await expect(adminPage.getByText("Caducados: 1 crédito", { exact: true })).toBeVisible();
           expect(await readLedger()).toEqual(originalLedger);
         } finally {
           await adminPage.close();
@@ -118,31 +118,31 @@ test("shows only available credit expirations and updates them on recovery and r
       });
 
       const options = page.getByRole("region", { name: "Clases futuras disponibles" });
-      await options.getByRole("listitem").filter({ hasText: scenario.recoveryDate })
+      await options.getByRole("listitem").filter({ hasText: calendarLabel(scenario.recoveryDate) })
         .getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" }).click();
       await expect(page.getByRole("status")).toHaveText("Recuperación reservada.");
       await expect(items).toHaveCount(2);
       expect(await expirationInstants()).toEqual(initialDates.slice(1));
       await expect(items.nth(0)).toContainText("2 créditos");
       await expect(items.nth(1)).toHaveText("1 crédito · Sin vencimiento");
-      await expect(page.getByText("Disponibles: 3", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 3 créditos", { exact: true })).toBeVisible();
 
       const recoveries = page.getByRole("region", { name: "Mis recuperaciones" });
-      const newRecovery = recoveries.getByRole("listitem").filter({ hasText: scenario.recoveryDate });
+      const newRecovery = recoveries.getByRole("listitem").filter({ hasText: calendarLabel(scenario.recoveryDate) });
       await newRecovery.getByRole("button", { name: "Cancelar recuperación" }).click();
       await expect(newRecovery).toHaveCount(0);
       await expect(items).toHaveCount(3);
       expect(await expirationInstants()).toEqual(initialDates);
       await expect(items.nth(0)).toContainText("1 crédito");
       await expect(items.nth(1)).toContainText("2 créditos");
-      await expect(page.getByText("Disponibles: 4", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 4 créditos", { exact: true })).toBeVisible();
 
-      const expiredRecovery = recoveries.getByRole("listitem").filter({ hasText: expiredRecoveryDate.toISODate()! });
+      const expiredRecovery = recoveries.getByRole("listitem").filter({ hasText: calendarLabel(expiredRecoveryDate.toISODate()!) });
       await expiredRecovery.getByRole("button", { name: "Cancelar recuperación" }).click();
       await expect(expiredRecovery).toHaveCount(0);
       await expect(items).toHaveCount(3);
       expect(await expirationInstants()).toEqual(initialDates);
-      await expect(page.getByText("Disponibles: 4", { exact: true })).toBeVisible();
+      await expect(page.getByText("Disponibles: 4 créditos", { exact: true })).toBeVisible();
       const { rows: refunds } = await student.client.query(
         `select source_grant_movement_id, refund_restored_credit from credit_ledger_movements
          where student_profile_id=$1 and movement_type='RECOVERY_REFUND'`, [scenario.profileId],
