@@ -352,3 +352,193 @@ El cambio del identificador de transacción por sí solo no demuestra la rotaci�
 ### Siguiente acción
 
 Aplicar a PostgreSQL **DEV** el mismo procedimiento ya ensayado en TEST: respaldo verificado, ensayo de restauración, cambio interactivo de la contraseña del rol, actualización de su consumidor local, validación desde el host por la ruta que exige contraseña y registro de la evidencia sin valores. Ese trabajo no forma parte de este incremento y no se inició.
+
+## Incremento 10.28 — Preparación de la rotación de PostgreSQL DEV
+
+Este incremento **solo prepara** la rotación independiente de la credencial PostgreSQL DEV persistente. Se ejecutaron comprobaciones de solo lectura: no se cambió ninguna contraseña, no se crearon ni descifraron respaldos, no se aplicaron migraciones, no se escribieron datos, no se detuvieron procesos, no se reiniciaron ni recrearon contenedores y no se modificaron los archivos de entorno. La rotación de DEV **no está autorizada** y queda pendiente de aprobación expresa tras presentar el plan y sus riesgos.
+
+### Alcance ejecutado
+
+| Fase | Estado |
+| --- | --- |
+| A · Inventario de metadatos de DEV | Ejecutada, solo lectura |
+| B · Mapa de consumidores de la credencial | Ejecutada por lectura de repositorio |
+| C · Procesos activos e interrupción previsible | Ejecutada, sin detener nada |
+| D · Separación DEV/TEST | Verificada |
+| E · Respaldo y ensayo de restauración | Diseñados, **no ejecutados** |
+| F · Rotación y actualización de configuración | Diseñadas, **no ejecutadas** |
+| G · Documentación y commit local | Ejecutada, sin push |
+
+### Inventario del servicio DEV
+
+| Comprobación | Resultado |
+| --- | --- |
+| Contenedor | `fullstack_nextjs_postgres_dev`, identificador `ad882b9f55a9` |
+| Imagen y versión del servidor | `postgres:15`, PostgreSQL 15.20 (Debian) |
+| Creación | 2026-11-20, anterior a la intervención de TEST |
+| Arranque actual | 2026-11-23 08:11 UTC, anterior a la rotación de TEST |
+| Estado | `running`, saludable, cero reinicios |
+| Política de reinicio | `unless-stopped` |
+| Volumen persistente | `fullstack-nextjs_postgres_dev_data`, montado en el directorio de datos |
+| Publicación de puerto | `127.0.0.1:5432` hacia `5432`, solo loopback |
+| Tamaño | 49 MB de volumen; 47 MB de directorio de datos |
+| Cifrado de contraseñas | `scram-sha-256` |
+| Reglas de autenticación | Confianza para el socket local y el loopback interno; `host all all scram-sha-256` para el resto |
+| Variables de inicialización en el contenedor | Usuario, contraseña y base presentes; la contraseña coincide con la configuración local actual |
+
+### Rol y privilegios
+
+- El único acceso es el rol **`app_dev_user`**, que es además **superusuario** del clúster, con herencia, creación de roles y bases, replicación, omisión de seguridad por fila y sin límite de conexiones.
+- Conserva inicio de sesión, no tiene caducidad y almacena un único verificador `SCRAM-SHA-256`. No se leyó ni comparó el contenido del verificador en este incremento.
+- Hay 13 roles en total: el acceso de aplicación y los roles internos del sistema. No existe un rol administrativo separado, por lo que el mismo rol que usa la aplicación es el que administra el clúster.
+- Línea base capturada en este incremento, sin leer el verificador: identificador de transacción **755**, inicio de sesión, superusuario y sin caducidad. Es el valor de referencia que una rotación posterior debe cambiar, igual que ocurrió en TEST con 742 → 38941. La huella del verificador deberá capturarse en memoria justo antes del cambio.
+
+### Bases, esquema y migraciones
+
+| Base | Propietario | Tamaño | Tablas públicas | Diario Drizzle |
+| --- | --- | --- | --- | --- |
+| `fullstack_nextjs` | `app_dev_user` | 8,5 MB | 12 | 6 migraciones aplicadas |
+| `postgres` | `app_dev_user` | 7,6 MB | 0 | Sin diario |
+
+- DEV tiene **dos** bases, no tres: no existe base residual de demostración como en TEST.
+- Las 12 tablas públicas pertenecen todas a `app_dev_user`; solo hay dos esquemas propios, `public` y `drizzle`.
+- Tablas presentes: `app_metadata`, `class_reservations`, `class_sessions`, `class_templates`, `credit_ledger_movements`, `reservation_attendance_records`, `reservation_cancellations`, `session_capacity_blocks`, `sessions`, `student_profiles`, `student_template_assignments`, `users`.
+- **Desfase de esquema:** el diario del repositorio tiene 17 migraciones (última `0016_habitual_reservation_provenance`, del 2026-11-23) y DEV conserva **6**, con la última aplicada el 2026-11-18. TEST quedó en 7 tras su propio historial. DEV no está al día y esa diferencia no se corrige aquí: aplicar migraciones sigue fuera de alcance.
+- La base de aplicación está **sin datos de negocio**: 0 usuarios y 0 sesiones de clase. No existe dato privado de alumnos que proteger en una rotación, pero el respaldo previo sigue siendo obligatorio porque el volumen también contiene la configuración de roles y el estado de las migraciones.
+
+
+### Consumidores de la credencial
+
+| Consumidor | Campo exacto | Naturaleza | Efecto tras la rotación |
+| --- | --- | --- | --- |
+| Aplicación Next.js en desarrollo | `DATABASE_URL` de `.env`, leída por la validación de entorno y por el módulo de base | Pool de 10 conexiones, inactividad de 30 s, instancia memoizada en el ámbito global | Requiere **reiniciar el proceso**: el pool se crea una vez con la cadena vigente en ese momento |
+| Drizzle CLI | `DATABASE_URL` en `drizzle.config.ts` | Proceso de un solo uso; rechaza nombres de base de test | Sin cambios: lee la variable en cada ejecución |
+| `npm run db:migrate:dev` | `DATABASE_URL` mediante el cargador de entorno | Selecciona destino, verifica que no sea TEST ni coincida con su identidad, lanza Drizzle | Sin cambios; no se ejecuta en este incremento |
+| `npm run db:inspect -- dev` | Ninguna contraseña | Entra por el socket local del contenedor como superusuario con confianza | Sigue funcionando sin secreto: útil para validar después de la rotación |
+| `npm run db:inspect -- connection` / `ready` | `DATABASE_INSPECTION_URL`, `DB_EXPECTED_NAME`, `DB_EXPECTED_SYSTEM_ID` | Conexión TCP real desde el host | Ejercita `scram-sha-256`: sirve como validación de contraseña nueva |
+| `npm run admin:create-super-admin` | `DATABASE_URL`, `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD` | Escritura administrativa | Sin cambios |
+| `npm run academic:generate-sessions` | `DATABASE_URL` | Transacción con bloqueo consultivo y escritura | Sin cambios; no se ejecuta |
+| Suites y ensayo de base desechable | Contenedor desechable con su propia `DATABASE_URL` | Independiente de DEV | No le afecta |
+| `psql` 17.12 del host | Contraseña introducida por el propietario | Cliente TCP al puerto publicado | Vía válida de validación desde Windows |
+
+- La credencial vive en **dos lugares locales**: la cadena completa en `.env` y la variable de contraseña de DEV en `.env.compose.local`. Ambas contienen el mismo valor, comparado en memoria y sin imprimirlo, y ese valor coincide además con el que el contenedor guarda como variable de inicialización: son tres copias del mismo secreto.
+- En Compose, las variables de usuario, contraseña y base solo se aplican al **inicializar** el volumen; el puerto sí se interpola en la publicación. Cambiar la contraseña en el archivo no altera el contenedor en marcha ni la copia almacenada en sus metadatos.
+- `TEST_DATABASE_URL` en `.env` apunta a otro puerto y otra base; no comparte destino con `DATABASE_URL`.
+
+### Procesos activos e interrupción previsible
+
+- **No hay aplicación Next.js en ejecución**: no existen procesos de Node y el puerto de la interfaz no está a la escucha.
+- **No hay conexiones establecidas** hacia los puertos publicados de PostgreSQL, ni sesiones de cliente de la aplicación. Las únicas sesiones observadas son las de estas comprobaciones, de solo lectura y sin transacciones abiertas mantenidas.
+- No hay migraciones, generadores de sesiones ni herramientas de administración en curso.
+- Una rotación de contraseña **no cierra las sesiones ya establecidas**; como hoy no hay ninguna, la interrupción esperada es nula en este momento.
+- Riesgo real: si el propietario inicia `next dev` entre la actualización parcial de archivos y la rotación, el pool arrancaría con un valor desfasado y fallaría al conectar. El procedimiento debe actualizar los dos campos seguidos y validar antes de abrir la aplicación.
+- No se pueden descartar tareas programadas, demostraciones manuales o terminales abiertas fuera del repositorio; se registran como riesgo no evaluable y la ventana de intervención debe confirmarlos.
+
+### Separación respecto a TEST
+
+| Elemento | DEV | TEST | Independencia |
+| --- | --- | --- | --- |
+| Contenedor | `fullstack_nextjs_postgres_dev` | `fullstack_nextjs_postgres_test` | Identificadores distintos |
+| Volumen | `fullstack-nextjs_postgres_dev_data` | `fullstack-nextjs_postgres_test_data` | Sin montajes compartidos |
+| Base principal | `fullstack_nextjs` | `fullstack_nextjs_test` | Nombres distintos |
+| Puerto publicado | `127.0.0.1:5432` | `127.0.0.1:5433` | Sin solapamiento |
+| Rol | `app_dev_user` | `app_test_user` | Nombres y secretos distintos |
+| Contraseña | Valor propio | Valor nuevo de 10.27 | Comparación booleana: no coinciden |
+| Consumidores | `DATABASE_URL` y la variable de contraseña de DEV | `TEST_DATABASE_URL` y la variable de contraseña de TEST | Campos separados en los mismos archivos |
+
+- Los scripts de migración aceptan un único destino y rechazan nombres de base de test; la inspección fija base y puerto por modo y valida la identidad del contenedor antes de consultar. Ninguno recorre ambos entornos.
+- No existe en el repositorio una utilidad de rotación: la de 10.26 se mantuvo fuera del repositorio, con destino TEST declarado y sin posibilidad de escribir variables de DEV. Cualquier reutilización para DEV debe reescribirse con destino explícito, autoprueba con datos ficticios y comprobación de cableado sin conexión.
+
+
+### Plan de respaldo y ensayo de restauración propuesto
+
+1. Capturar la línea base en memoria: tamaño de cada base, 12 tablas con recuentos, 6 migraciones, identificador de transacción y huella del verificador del rol. Sin registrar huellas ni valores.
+2. Volcar en formato personalizado las **dos** bases con el cliente `pg_dump` del propio contenedor y añadir un volcado **solo de roles** del clúster, porque los roles no pertenecen a ninguna base y son la vía de recuperación administrativa.
+3. Copiar los archivos a un directorio fuera del repositorio, con permisos restringidos a la cuenta del propietario y sin nombres que revelen contenido.
+4. Comprobar el índice de cada volcado antes de cifrar y calcular un resumen SHA-256 por archivo, guardando el índice de resúmenes junto al conjunto.
+5. Cifrar con la protección de datos del perfil de Windows y verificar el descifrado por comparación de resumen, sin conservar copias en texto claro.
+6. Ensayar la restauración en un contenedor `postgres:15` desechable, con datos en memoria temporal, sin puertos publicados y sin relación con los volúmenes persistentes: restaurar las dos bases y los roles.
+7. Comparar 12 de 12 tablas con recuentos idénticos, las 6 migraciones del diario, los propietarios y los privilegios del rol restaurado.
+8. Destruir el contenedor de ensayo y verificar que no quedan recursos ni archivos temporales.
+9. Documentar que la recuperación depende del perfil de Windows del propietario: si se pierde, los respaldos no son recuperables, y la alternativa sería un nuevo volcado antes de cualquier cambio destructivo.
+
+Este plan **no se ejecutó**. DEV no tiene hoy ningún respaldo conocido, por lo que el respaldo es condición previa imprescindible de la rotación.
+
+### Procedimiento de rotación previsto
+
+**Antes del cambio**
+
+- Respaldo verificado y ensayo de restauración superado, con la línea base del rol capturada en memoria.
+- Consumidores revisados y ventana de intervención aprobada por el propietario, con confirmación de que no hay tareas ni terminales activas fuera del repositorio.
+- Nueva contraseña única, generada y guardada por el propietario en su gestor; no reutilizada de TEST ni de ningún otro servicio.
+- Recuperación administrativa confirmada: el socket local del contenedor sigue siendo de confianza y el rol es superusuario, de modo que un propietario con acceso a Docker puede restablecer la contraseña sin conocer la anterior.
+
+**Cambio efectivo**
+
+- Sesión interactiva del propietario: `docker exec -it fullstack_nextjs_postgres_dev psql -U app_dev_user -d postgres` y a continuación `\password app_dev_user`.
+- La contraseña se introduce en el aviso interactivo, que no muestra eco. No viaja en argumentos de proceso, no se escribe en archivos y no se comunica al asistente.
+- Ninguna variante automatizada: ni sentencias con el literal, ni variables de entorno persistentes, ni historiales.
+
+**Actualización de configuración**
+
+- Dos ediciones acotadas: el componente de contraseña de `DATABASE_URL` en `.env` y `POSTGRES_DEV_PASSWORD` en `.env.compose.local`.
+- Se conservan intactas el resto de las líneas, las variables de TEST, los demás secretos y el orden de claves; se verifica que no aparezcan claves duplicadas.
+- No se modifica `compose.yaml`: la contraseña de Compose solo afecta a la inicialización de un volumen vacío.
+
+**Verificación**
+
+- Conexión nueva desde Windows a `127.0.0.1:5432`, que se resuelve contra la puerta de enlace de Docker y por tanto exige `scram-sha-256`; confirma rol `app_dev_user`, base `fullstack_nextjs` y las 12 tablas.
+- Comparación en memoria del verificador con la línea base: debe ser distinto, con la fila del rol cambiada de identificador de transacción y los atributos intactos.
+- `db:inspect -- connection` con la cadena nueva como comprobación independiente por TCP.
+- Reinicio del proceso de desarrollo por el propietario y comprobación de que el pool conecta con conexiones nuevas; después, arranque de la aplicación y una página que consulte la base.
+- TEST sin cambios: mismo identificador, misma hora de arranque, saludable.
+
+**Recuperación**
+
+- Si el cambio de contraseña no llega a ejecutarse, revertir los dos campos al valor respaldado restaura el servicio sin tocar el clúster.
+- Si la rotación se ejecuta y el secreto nuevo se pierde, el restablecimiento se hace por el socket local de confianza con una sentencia interactiva del propietario; los datos y el esquema no dependen de la contraseña.
+- Si el pool falla tras la rotación, la causa esperada es configuración desfasada o proceso no reiniciado, no pérdida de datos.
+
+
+### Copia antigua en los metadatos de Docker
+
+- El contenedor DEV guarda hoy una variable de contraseña cuyo valor **coincide** con la configuración local vigente: es la credencial activa y no una copia residual como en TEST.
+- Esa variable solo se aplica al inicializar un volumen vacío. Con el volumen ya poblado el script de entrada no la reutiliza, así que tras la rotación quedará como copia del valor anterior, inoperante pero almacenada.
+- Eliminarla exige **recrear el contenedor** conservando su volumen, con `docker compose up -d --force-recreate` limitado al servicio de DEV. Requiere autorización específica, una parada breve y verificación posterior.
+- Riesgos de la recreación: aplicar por error variables de otro servicio, recrear ambos servicios a la vez, cambiar de proyecto o de volumen si el entorno no está cargado, y reinicializar el volumen si estuviera vacío.
+- Se documenta como riesgo **separado** de la rotación del rol y no se ejecuta aquí.
+
+### Incidencia de este incremento
+
+Durante una comprobación booleana de consistencia, una interpolación defectuosa en el intérprete de órdenes imprimió **una vez** el valor literal de la credencial DEV en la salida de esta sesión de trabajo. No se escribió en archivos, no entró en Git, no se envió a ningún servicio externo y no afectó a TEST. Consecuencia: el secreto de DEV debe considerarse expuesto en la transcripción de la sesión y la rotación pasa a ser la acción recomendada de máxima prioridad; ese valor no debe reutilizarse en ningún otro servicio. La comprobación se repitió después devolviendo únicamente booleanos.
+
+### Comprobaciones de solo lectura ejecutadas
+
+- Todas las sentencias fueron `select` y `show` a través del socket local del contenedor: ninguna escritura, ningún cambio de rol, de privilegios ni de esquema.
+- La credencial vigente **autenticó por TCP desde el host** contra `127.0.0.1:5432` con la contraseña leída en memoria desde el archivo local y transmitida por variable de entorno, retirada al terminar. Eso confirma dos cosas: la contraseña de DEV no se modificó en este incremento y la vía de validación prevista en el plan funciona hoy.
+- Una contraseña **sintética inválida** fue rechazada por la misma ruta con error de autenticación. La validación futura medirá autenticación real y no un acceso de confianza del loopback.
+- Línea base del rol: identificador de transacción 755, sin caducidad, con inicio de sesión y superusuario.
+- Diario en 6 migraciones, tamaños de base sin cambios (8,5 MB y 7,6 MB), cero sesiones de cliente ajenas a las comprobaciones. DEV y TEST siguen saludables, sin reinicios y con arranques anteriores a este incremento.
+- `.env` y `.env.compose.local` conservan su fecha de modificación previa. No se crearon respaldos, directorios ni archivos temporales nuevos.
+- En el repositorio solo cambiaron los dos documentos de este incremento; los cambios ajenos preexistentes siguen intactos y el diff no contiene contraseñas, cadenas de conexión ni verificadores.
+
+### Riesgos residuales
+
+- El rol es **superusuario** y protege todo el clúster DEV; no existe separación de privilegios entre aplicación y administración. Corregirlo exige cambios de privilegios, fuera de alcance.
+- El secreto se almacena en claro en dos archivos locales ignorados por Git y en los metadatos del contenedor; no hay gestor de secretos integrado.
+- DEV no tiene respaldo previo y su esquema está desfasado (6 de 17 migraciones): un respaldo tomado ahora reproduce ese estado, no el del repositorio.
+- Los respaldos dependerán del perfil de Windows del propietario.
+- No se han confirmado copias externas, checkpoints de agentes ni reutilización histórica de contraseñas.
+- Persisten procesos no inventariables fuera del repositorio y la incidencia de exposición descrita arriba.
+
+### Estado
+
+**POSTGRESQL DEV — SIN ROTAR; PREPARACIÓN COMPLETA Y NO AUTORIZADA.** El inventario, el mapa de consumidores, la separación respecto a TEST y los procedimientos de respaldo, rotación, validación y recuperación están definidos. No se ejecutó ninguna fase que modifique DEV.
+
+**H03 GLOBAL — PENDIENTE DE ACCIÓN OPERATIVA.** Quedan la rotación de DEV, la confirmación de reutilización histórica, la evaluación de copias externas y checkpoints, y la aceptación documentada del riesgo residual.
+
+### Acción que requiere aprobación
+
+1. Autorizar el **respaldo con ensayo de restauración** de DEV, sin cambio de contraseña.
+2. Autorizar la **rotación interactiva** de `app_dev_user`, la actualización de los dos campos locales y la validación desde el host, en una ventana confirmada por el propietario.
+3. Decidir por separado si se **recrea el contenedor** para eliminar de sus metadatos la copia de la contraseña anterior, con su parada breve y su verificación.
