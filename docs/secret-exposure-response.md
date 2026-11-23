@@ -205,3 +205,66 @@ Preparación completada y verificada en solo lectura. **Rotación pendiente de a
 - No se comprobó la contraseña vigente ni histórica; la identidad se verificó por metadatos del contenedor y por el socket administrativo local.
 - La existencia de copias de la credencial fuera de esta máquina no puede demostrarse desde el repositorio.
 - El estado del rol como superusuario se documenta, pero no se corrige en este incremento.
+
+## Incremento 10.26 — Respaldo verificado y restauración ensayada de PostgreSQL TEST
+
+El propietario autorizó la rotación completa de la credencial **TEST** persistente. Este incremento ejecutó el respaldo y el ensayo de restauración, y se detuvo antes del cambio de contraseña porque ese paso exige una entrada interactiva sin eco que solo el propietario puede realizar. **No se modificó la contraseña, no se cambiaron privilegios, no se migró el esquema, no se escribió en las bases, no se recreó el contenedor y no se tocó DEV ni producción.** Los dos archivos de configuración locales siguen con el valor anterior.
+
+### Alcance ejecutado
+
+| Fase | Estado |
+| --- | --- |
+| A · Respaldo lógico verificado | Ejecutada y verificada |
+| B · Ensayo de restauración aislado | Ejecutada y superada |
+| C · Cambio de contraseña del rol | Pendiente del paso manual del propietario |
+| D · Actualización de consumidores | Pendiente; la utilidad quedó preparada y probada con datos ficticios |
+| E · Validación desde el host | Pendiente de la credencial nueva |
+| F · Evidencia de sustitución | Línea base capturada; comparación pendiente |
+| G · Integridad final | Verificada: sin cambios respecto a 10.25 |
+
+### Respaldo (Fase A)
+
+- Tres volcados lógicos en formato personalizado: base principal (155 entradas de índice, unos 63 KB), base residual de demostración (160 entradas, unos 69 KB) y base de mantenimiento `postgres` (15 entradas, unos 1 KB).
+- Copiados al host **fuera del repositorio**, en un directorio con la herencia de permisos retirada y acceso limitado a la cuenta del propietario, al sistema y a los administradores locales.
+- Índice comprobado con `pg_restore -l` en los tres archivos y temporales del contenedor eliminados.
+- Cifrado en reposo: el cifrado de archivos del sistema no admite esa ubicación y no hay herramientas de archivo cifrado instaladas, así que se aplicó protección de datos del perfil de Windows a cada volcado. Se verificó el descifrado comparando el resumen SHA-256 con el original antes de borrar el texto claro. Los volcados solo se pueden abrir con la cuenta de Windows del propietario y el resumen SHA-256 queda junto a ellos para verificar extracciones futuras.
+- No se exportaron roles ni verificadores de contraseña: los metadatos no sensibles del rol ya estaban documentados en 10.25.
+- Los respaldos se conservan; su periodo de retención y su destrucción segura son una decisión posterior del propietario.
+
+### Ensayo de restauración (Fase B)
+
+- Contenedor `postgres:15` desechable, con datos en tmpfs, **sin puertos publicados**, arrancado con autenticación de confianza y retirado al terminar el ensayo.
+- Restauración de ambas bases con `pg_restore --no-owner --exit-on-error`: sin errores en ninguna de las dos.
+- Comparación automática contra el origen: **14 de 14 tablas** de la base principal con recuentos idénticos, **15 de 15** en la base residual y **7** migraciones en el diario restaurado. No hubo advertencias que ocultaran pérdida de objetos.
+
+### Línea base para la evidencia de sustitución (Fase F)
+
+- Identificador de transacción de la fila del rol: **742**; debe cambiar tras el cambio de contraseña.
+- Un único verificador `SCRAM-SHA-256` en el rol.
+- Huella SHA-256 del verificador almacenada localmente fuera del repositorio solo para comparar antes y después. Ni el verificador ni su huella se registran en este documento.
+
+### Motivo técnico de la parada antes de la Fase C
+
+El cambio debe hacerse con `\password app_test_user` dentro de una sesión interactiva, que pide el valor dos veces sin mostrarlo y envía al servidor el verificador ya calculado. Este asistente no dispone de terminal interactiva. Las alternativas automatizadas obligarían a que el secreto pasara por una sentencia SQL o por un archivo, es decir, por procesos y texto de consulta registrables en `pg_stat_activity` y en el historial de la terminal. Aunque `log_statement` está en `none` y la extensión de estadísticas de consultas no está instalada, el procedimiento no asume ese riesgo: se detuvo el incremento en lugar de degradar la confidencialidad. No se generó, propuso ni reutilizó ninguna contraseña.
+
+### Paso manual pendiente del propietario
+
+1. Abrir la sesión interactiva del contenedor de TEST con `psql` sobre la base principal y ejecutar `\password app_test_user`, introduciendo el valor del gestor de secretos dos veces. El valor no se muestra en pantalla ni queda en el historial.
+2. Ejecutar la utilidad preparada en este incremento, guardada fuera del repositorio: solicita el valor con lectura sin eco, valida la conexión nueva por `127.0.0.1:5433` con `scram-sha-256`, escribe únicamente la línea `TEST_DATABASE_URL` de `.env` y la línea `POSTGRES_TEST_PASSWORD` de `.env.compose.local`, y confirma el resultado con indicadores booleanos. La utilidad se validó con archivos ficticios: doce comprobaciones correctas, incluidas la codificación por ciento de caracteres especiales, la conservación del resto de líneas y la invariabilidad de `DATABASE_URL` de DEV. Si la validación falla, no escribe nada.
+3. Alternativa manual equivalente: editar ambos archivos con el editor del propietario. En la cadena de conexión el valor debe ir codificado por ciento y en la variable de Compose sin comillas simples.
+
+### Estado de TEST tras este incremento
+
+Sin cambios funcionales: el contenedor conserva su identificador, su hora de arranque, cero reinicios y su volumen; las tres bases siguen presentes con 14 tablas, 7 migraciones aplicadas y ninguna sesión de cliente; la publicación sigue limitada al loopback. El rol `app_test_user` mantiene la contraseña anterior y sus privilegios. DEV no se tocó y su hora de arranque tampoco cambió.
+
+### Condiciones de parada que siguen vigentes
+
+- La validación desde el host no confirma la credencial nueva.
+- Aparecen sesiones de cliente inesperadas o algún consumidor desconocido de la credencial.
+- Cambia el identificador del contenedor, su hora de arranque o el volumen.
+- Disminuyen las tablas, las filas representativas o las migraciones aplicadas.
+- Cualquier indicación de que la operación afectaría a DEV o a producción.
+
+### Acción que requiere el propietario
+
+Completar los pasos manuales anteriores y comunicarlo. Después se repiten las fases E, F y G, se confirma la sustitución del verificador y la conservación de datos, y se registra la rotación verificada. Mientras eso no ocurra, **H03 sigue pendiente de acción operativa** y la contraseña anterior sigue vigente en TEST.
