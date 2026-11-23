@@ -243,6 +243,12 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
                 </p>
                 <p>Responsable registrado · {schedule.cancellation.cancelledByEmail ?? "No disponible"}</p>
                 <p>Motivo registrado · {schedule.cancellation.reason}</p>
+                {schedule.cancellation.cancelledCount > 0 && (
+                  <p>
+                    Reservas futuras canceladas al anular: {formatHistoryInteger(schedule.cancellation.cancelledCount)}.
+                    Dejaron de ocupar plaza sin alterar el aforo de las sesiones.
+                  </p>
+                )}
                 {schedule.cancellation.ambiguousCount > 0 && (
                   <p>
                     Reservas señaladas al anular: {formatHistoryInteger(schedule.cancellation.ambiguousReviews.historicalCount)}.

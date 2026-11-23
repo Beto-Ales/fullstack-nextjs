@@ -97,6 +97,7 @@ type AssignmentCancellationSummary = {
   cancelledAt: Date;
   reason: string;
   cancelledByEmail: string | null;
+  cancelledCount: number;
   ambiguousCount: number;
   ambiguousReviews: {
     historicalCount: number;
@@ -182,6 +183,7 @@ async function readAssignmentCancellations(
     cancelledAt: studentTemplateAssignmentCancellations.cancelledAt,
     reason: studentTemplateAssignmentCancellations.reason,
     cancelledByEmail: actor.email,
+    cancelledReservationIds: studentTemplateAssignmentCancellations.cancelledReservationIds,
     ambiguousReservationIds: studentTemplateAssignmentCancellations.ambiguousReservationIds,
   }).from(studentTemplateAssignmentCancellations)
     .leftJoin(actor, eq(actor.id, studentTemplateAssignmentCancellations.cancelledByUserId))
@@ -191,11 +193,12 @@ async function readAssignmentCancellations(
     reader, studentProfileId, rows.flatMap(({ ambiguousReservationIds }) => ambiguousReservationIds), now,
   );
 
-  return new Map(rows.map(({ ambiguousReservationIds, cancelledByEmail, ...row }) => {
+  return new Map(rows.map(({ ambiguousReservationIds, cancelledReservationIds, cancelledByEmail, ...row }) => {
     const items = reviewItems(reviews, ambiguousReservationIds);
     return [row.assignmentId, {
       ...row,
       cancelledByEmail: cancelledByEmail?.trim() || null,
+      cancelledCount: cancelledReservationIds.length,
       ambiguousCount: ambiguousReservationIds.length,
       ambiguousReviews: {
         historicalCount: ambiguousReservationIds.length,

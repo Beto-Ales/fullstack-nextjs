@@ -47,16 +47,24 @@ Cada fila con sesión legible enlaza a `/admin/sesiones/[sessionId]?week=...` co
 
 ## Implementación 10.20
 
-La migración aditiva `0016_habitual_reservation_provenance` añade `class_reservations.habitual_assignment_id`, una referencia anulable a `student_template_assignments` con `ON DELETE SET NULL`, y el índice `class_reservations_habitual_assignment_idx`. No hay relleno histórico ni cambios en cancelación, créditos o prioridad FIFO.
+La migración aditiva `0016_habitual_reservation_provenance` añade `class_reservations.habitual_assignment_id`, una referencia anulable a `student_template_assignments` con `ON DELETE SET NULL`, y el índice `class_reservations_habitual_assignment_idx`. No hay relleno histórico; en 10.20 no cambian la cancelación, los créditos ni la prioridad FIFO.
 
 El alta de una asignación escribe su propio identificador en las reservas que crea. La generación lo resuelve por alumno, plantilla y fecha local dentro de la misma transacción y solo cuando exactamente una asignación no anulada, vigente y de una cuenta activa cubre la sesión. Con dos o más coincidencias la reserva se crea sin referencia: el origen es ambiguo y no se elige al azar. La inscripción administrativa, el alta ordinaria y las recuperaciones no escriben la columna.
 
-La referencia no altera la elegibilidad ni el aforo: las reservas se crean con las mismas reglas y la cancelación conserva la columna. `ON DELETE SET NULL` impide que la procedencia bloquee o elimine reservas. La anulación de una asignación futura todavía no cancela reservas a partir de esta columna; la revisión administrativa del 10.17–10.19 sigue vigente y el inventario de reservas históricas sin procedencia continúa pendiente. [Pruebas](testing.md#incremento-1020--procedencia-de-reservas-habituales)
+La referencia no altera la elegibilidad ni el aforo: las reservas se crean con las mismas reglas y la cancelación de una reserva conserva la columna. `ON DELETE SET NULL` impide que la procedencia bloquee o elimine reservas. El inventario de reservas históricas sin procedencia continúa pendiente. [Pruebas](testing.md#incremento-1020--procedencia-de-reservas-habituales)
+
+## Implementación 10.21
+
+La anulación individual de una asignación futura usa `class_reservations.habitual_assignment_id` para cancelar únicamente las reservas `CONFIRMED` de sesiones futuras cuya procedencia es exactamente la asignación anulada. La cancelación de la reserva y la auditoría de la asignación se escriben en la misma transacción que el estado `CANCELLED`.
+
+No se cancelan las reservas ya canceladas, las de sesiones iniciadas, las de otro alumno ni las que otra asignación viva de la misma plantilla cubre en la fecha de la sesión. La procedencia explícita prevalece sobre el origen, por lo que una recuperación vinculada también se cancela. Las reservas `ORDINARY` sin referencia se conservan y se registran en `ambiguous_reservation_ids` para revisión administrativa; las cubiertas por otra asignación viva se conservan sin señalarse. La operación no modifica `max_capacity` ni el ledger, no crea solicitudes ni movimientos de crédito y no elimina filas; las reservas canceladas liberan su plaza mediante su estado.
+
+La ficha administrativa muestra el resultado auditado con dos recuentos: reservas futuras canceladas y reservas no canceladas automáticamente. Un reintento reutiliza los identificadores guardados en la auditoría, sin volver a cancelar ni duplicar el registro. [Pruebas](testing.md#incremento-1021--cancelación-de-reservas-vinculadas-al-anular-asignaciones)
 
 
-## Semántica propuesta
+## Semántica aprobada e implementada
 
-| Situación | Operación y efecto propuestos |
+| Situación | Operación y efecto |
 | --- | --- |
 | Inicia mañana o el próximo mes y aún no hay sesiones | Anulación individual por `SUPER_ADMIN` mientras el día local siga siendo anterior al inicio persistido. Mantener fechas, ID y rastro de auditoría. Excluir la asignación de la generación. |
 | Hay sesiones generadas sin reservas | Mantener las sesiones y su capacidad para los demás alumnos. |
@@ -66,9 +74,9 @@ La referencia no altera la elegibilidad ni el aforo: las reservas se crean con l
 | Hay asistencia, ausencia u otro resultado incompatible con una anulación anticipada | Conservar el historial y derivar el caso a revisión administrativa antes de modificarlo. |
 | Hay solicitudes pendientes | La anulación individual no crea solicitudes ni concede créditos por las reservas que libera. Conservar las solicitudes existentes y las decisiones consolidadas. Para la baja, aprobar expresamente si se mantiene la conciliación actual de solicitudes anteriores. |
 
-**Recomendación.** Incorporar una marca explícita de anulación en la asignación y un registro inmutable por asignación con actor, instante, motivo, origen individual o baja y reservas afectadas. El estado existente `ENDED` no separa estos casos porque su vigencia sigue siendo inclusiva. Un evento como única representación evita duplicar el estado, pero obliga a aplicar la exclusión por evento en todas las consultas de elegibilidad y capacidad. La marca explícita simplifica esas lecturas si se escribe atómicamente con la auditoría. Conservar la fila evita perder la trazabilidad.
+**Decisión implementada.** La asignación conserva una marca explícita de anulación y un registro inmutable por asignación con actor, instante, motivo, origen individual o baja y reservas afectadas. El estado existente `ENDED` no separa estos casos porque su vigencia sigue siendo inclusiva. La marca explícita evita duplicar la representación en consultas de elegibilidad y capacidad y se escribe atómicamente con la auditoría. Conservar la fila preserva la trazabilidad.
 
-**Dependencia principal.** El generador y el alta habitual insertan reservas con origen `ORDINARY`, igual que la inscripción puntual. La reserva carece de FK a la asignación. Alumno, plantilla y fecha permiten detectar coincidencias, pero no prueban procedencia. Registrar procedencia al crear reservas habituales y preservar las reservas ordinarias preexistentes cuya procedencia sea ambigua. Si otra asignación sigue cubriendo una reserva habitual, proponer conservarla sin duplicar plazas y registrar la relación que la sostiene. Se requiere aprobación sobre este tratamiento histórico, la frontera del día local, el comportamiento ante resultados inconsistentes y la política de pendientes en la baja.
+**Dependencia principal.** El generador y el alta habitual registran su asignación en las reservas que crean. La anulación usa esa referencia para cancelar solo las reservas atribuibles; las reservas históricas sin referencia se conservan para revisión y las que otra asignación viva cubre se conservan sin señalarse. No se deduce procedencia a partir de alumno, plantilla y fecha. El tratamiento histórico, la frontera del día local, los resultados inconsistentes y la política de pendientes de la baja conservan las decisiones ya implementadas en 10.17–10.21.
 
 La acción del panel debe mostrar confirmación con motivo, fechas y plazas afectadas, permitir revisión por teclado y reflejar el resultado auditado. Un reenvío devuelve la decisión existente sin duplicar auditoría ni efectos. Dos solicitudes distintas se serializan y comprueban de nuevo el estado y la fecha tras los bloqueos. La cuenta dada de baja conserva su auditoría de retirada y la distinción entre asignaciones finalizadas y anuladas.
 

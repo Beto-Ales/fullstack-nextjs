@@ -27,7 +27,7 @@ export function AssignmentCancellationPanel({
   const reasonId = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const reason = useRef<HTMLTextAreaElement>(null);
-  const feedback = useRef<HTMLParagraphElement>(null);
+  const feedback = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef(false);
   const reasonError = state.status === "error" ? state.reasonError : undefined;
   const showForm = canCancel && open && state.status !== "success";
@@ -72,12 +72,13 @@ export function AssignmentCancellationPanel({
             <p><strong>Inicio:</strong> <CalendarDate value={effectiveFrom} /></p>
             <p><strong>Fin:</strong> {effectiveTo ? <CalendarDate value={effectiveTo} /> : "Sin fecha de fin"}</p>
             <p>
-              La anulación impedirá nuevas reservas habituales de esta asignación. Las reservas ya existentes no se
-              cancelarán automáticamente y podrían requerir una revisión administrativa.
+              Las reservas futuras confirmadas vinculadas a esta asignación se cancelarán automáticamente y dejarán de
+              ocupar plaza. Las reservas sin procedencia demostrable se conservarán y quedarán señaladas para revisión
+              administrativa.
             </p>
             <p>
-              Se conservarán las fechas originales, el historial y el motivo. Esta anulación no libera las plazas que
-              ya están reservadas.
+              Se conservarán las fechas originales, el historial y el motivo. Esta anulación no modifica el aforo de las
+              sesiones ni crea movimientos de crédito.
             </p>
             <div>
               <label htmlFor={reasonId}>Motivo de anulación</label>
@@ -95,8 +96,30 @@ export function AssignmentCancellationPanel({
           </fieldset>
         </form>
       )}
-      {state.status === "success" && <p ref={feedback} role="status" tabIndex={-1}>{state.message}</p>}
-      {state.status === "error" && !reasonError && <p ref={feedback} role="alert" tabIndex={-1}>{state.message}</p>}
+      {state.status === "success" && (
+        <div ref={feedback} role="status" tabIndex={-1}>
+          <p>{state.message}</p>
+          <dl>
+            <div>
+              <dt>Reservas futuras canceladas</dt>
+              <dd>{state.cancelledReservations}</dd>
+            </div>
+            <div>
+              <dt>Reservas no canceladas automáticamente</dt>
+              <dd>{state.ambiguousReservations}</dd>
+            </div>
+          </dl>
+          {state.ambiguousReservations > 0 && (
+            <p>
+              Las reservas no canceladas automáticamente se conservan confirmadas y requieren revisión administrativa.
+            </p>
+          )}
+          <p>Las reservas canceladas dejan de ocupar plaza sin alterar el aforo de las sesiones.</p>
+        </div>
+      )}
+      {state.status === "error" && !reasonError && (
+        <div ref={feedback} role="alert" tabIndex={-1}><p>{state.message}</p></div>
+      )}
     </div>
   );
 }

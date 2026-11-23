@@ -38,16 +38,19 @@ describe("admin student profile (postgres)", () => {
 
   async function reserve(date: string, {
     templateId = null, origin = "ORDINARY", status = "CONFIRMED", sessionStatus = "SCHEDULED",
-    ownerProfileId = studentProfileId,
+    ownerProfileId = studentProfileId, habitualAssignmentId = null,
   }: { templateId?: string | null; origin?: "ORDINARY" | "MAKEUP"; status?: "CONFIRMED" | "CANCELLED";
-    sessionStatus?: "SCHEDULED" | "CANCELLED" | "COMPLETED"; ownerProfileId?: string } = {}) {
+    sessionStatus?: "SCHEDULED" | "CANCELLED" | "COMPLETED"; ownerProfileId?: string;
+    habitualAssignmentId?: string | null } = {}) {
     const sessionId = randomUUID();
     const reservationId = randomUUID();
     await client.query(`insert into class_sessions (id, template_id, local_date, starts_at_utc, ends_at_utc, status, max_capacity)
       values ($1, $2, $3::date, $3::date + time '16:00' at time zone 'UTC',
         $3::date + time '17:00' at time zone 'UTC', $4, 12)`, [sessionId, templateId, date, sessionStatus]);
-    await client.query(`insert into class_reservations (id, class_session_id, student_profile_id, origin, status)
-      values ($1, $2, $3, $4, $5)`, [reservationId, sessionId, ownerProfileId, origin, status]);
+    await client.query(`insert into class_reservations
+      (id, class_session_id, student_profile_id, origin, status, habitual_assignment_id)
+      values ($1, $2, $3, $4, $5, $6)`,
+    [reservationId, sessionId, ownerProfileId, origin, status, habitualAssignmentId]);
     return { classSessionId: sessionId, reservationId };
   }
 
@@ -278,6 +281,35 @@ describe("admin student profile (postgres)", () => {
       { id: withdrawal.assignmentId, status: "CANCELLED", effective_from: "2031-03-01", effective_to: null },
     ]);
   });
+
+  it("separates cancelled linked reservations from ambiguous administrative reviews", async () => {
+    const { assignmentId, templateId } = await createFutureAssignment("Reservas vinculadas", "2031-04-01");
+    const linked = await reserve("2031-04-02", { templateId, habitualAssignmentId: assignmentId });
+    const ambiguous = await reserve("2031-04-03", { templateId });
+
+    await cancelFutureAssignment(admin, {
+      assignmentId, reason: "El alumno cambia de horario",
+    });
+
+    const profile = await getProfile(admin, studentProfileId);
+    const schedule = profile!.schedules.items.find(({ courseName }) => courseName === "Reservas vinculadas");
+    expect(schedule?.cancellation).toMatchObject({
+      source: "ADMIN_INDIVIDUAL", cancelledCount: 1, ambiguousCount: 1,
+      ambiguousReviews: {
+        historicalCount: 1, needsReviewCount: 1,
+        items: [{
+          reservationId: ambiguous.reservationId, sessionId: ambiguous.classSessionId,
+          reservationStatus: "CONFIRMED", requiresReview: true,
+        }],
+      },
+    });
+    expect(schedule!.cancellation!.ambiguousReviews.items.map(({ reservationId }) => reservationId))
+      .not.toContain(linked.reservationId);
+    expect((await client.query(
+      "select status,cancelled_by_user_id from class_reservations where id=$1", [linked.reservationId],
+    )).rows).toEqual([{ status: "CANCELLED", cancelled_by_user_id: admin.userId }]);
+  });
+
 
   it("lists only the student's historically flagged reservations for current review", async () => {
     const { assignmentId, templateId } = await createFutureAssignment("Reservas ambiguas", "2031-02-01");

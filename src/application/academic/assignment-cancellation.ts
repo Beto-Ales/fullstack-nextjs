@@ -2,9 +2,9 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { and, eq, gt, gte, isNull, lte, ne, notExists, or } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, isNull, lte, ne, notExists, or, sql } from "drizzle-orm";
 
-import { regulationDate, resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
+import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import { cancelFutureAssignmentSchema } from "@/src/application/academic/schemas";
 import { requireActiveStudentForBooking } from "@/src/application/auth/active-student";
 import { lockStudentProfile } from "@/src/application/credits/credit-service";
@@ -72,10 +72,10 @@ function cancellationResult(
 /**
  * Cancels a habitual template assignment whose first local day has not begun yet.
  *
- * The assignment row and its immutable audit record are written together. Reservations
- * are never altered: without persisted provenance an ORDINARY reservation cannot be
- * attributed to one assignment, so future matches are reported for manual review.
- * Credits are intentionally left untouched.
+ * The assignment row, its immutable audit record and the future reservations that
+ * persist this exact assignment as their provenance are written together. Unlinked
+ * CONFIRMED reservations remain untouched and are reported for manual review.
+ * Credits, capacity and pending requests are intentionally left untouched.
  */
 export async function cancelFutureAssignment(
   actor: { userId: string; role: UserRole },
@@ -95,7 +95,8 @@ export async function cancelFutureAssignment(
       throw new ApplicationError("No se encontró la asignación.", "assignment_not_found", 404, true);
     }
 
-    // Lock order: student account, template, then profile.
+    // Lock order shared with booking, generation and withdrawal: account, template,
+    // sessions, then profile. Sessions are locked before touching reservation rows.
     await requireActiveStudentForBooking(tx, assignment.studentProfileId);
     await lockTemplateAssignments(tx, assignment.templateId);
 
@@ -126,20 +127,84 @@ export async function cancelFutureAssignment(
       return cancellationResult(existing, false);
     }
 
-    const cancelledAt = new Date();
-    const localDate = regulationDate(cancelledAt);
+    const withinWindow = current.effectiveTo
+      ? and(gte(classSessions.localDate, current.effectiveFrom), lte(classSessions.localDate, current.effectiveTo))
+      : gte(classSessions.localDate, current.effectiveFrom);
+    const candidates = tx.select({ id: classSessions.id }).from(classSessions)
+      .where(and(
+        eq(classSessions.templateId, current.templateId),
+        withinWindow,
+        gt(classSessions.startsAtUtc, sql`clock_timestamp()`),
+      ))
+      .orderBy(asc(classSessions.id));
+    await candidates.for("no key update");
+
+    await lockStudentProfile(tx, current.studentProfileId);
+
+    // Sample the database clock once, after every wait, so the local day cannot change
+    // between validation and the writes. The same instant is reused for the audit.
+    // Raw execute returns timestamps as text, so the instant is read as Unix epoch seconds.
+    const { rows: [clock] } = await tx.execute<{ localDate: string; cancelledAtEpoch: string }>(sql`
+      select to_char(clock_timestamp() at time zone 'Europe/Copenhagen', 'YYYY-MM-DD') as "localDate",
+        extract(epoch from clock_timestamp()) as "cancelledAtEpoch"
+    `);
+    const localDate = clock.localDate;
+    const cancelledAt = new Date(Number(clock.cancelledAtEpoch) * 1000);
     if (current.effectiveFrom <= localDate) {
       throw new ApplicationError(
         "La asignación ya ha comenzado. Usa la finalización ordinaria.",
         "assignment_already_started", 409, true,
       );
     }
+    // A reservation supported by another live assignment for the same course must stay:
+    // the annulled assignment is not its only provenance.
+    const hasNoOtherLiveAssignment = notExists(tx.select({ id: studentTemplateAssignments.id })
+      .from(studentTemplateAssignments).where(and(
+        eq(studentTemplateAssignments.studentProfileId, current.studentProfileId),
+        eq(studentTemplateAssignments.templateId, current.templateId),
+        ne(studentTemplateAssignments.id, current.id),
+        ne(studentTemplateAssignments.status, "CANCELLED"),
+        lte(studentTemplateAssignments.effectiveFrom, classSessions.localDate),
+        or(
+          isNull(studentTemplateAssignments.effectiveTo),
+          gte(studentTemplateAssignments.effectiveTo, classSessions.localDate),
+        ),
+      )));
+    // Only reservations that persist this exact assignment are attributable. Anything
+    // else stays CONFIRMED and is reported as ambiguous for administrative review.
+    const attributable = and(
+      eq(classReservations.studentProfileId, current.studentProfileId),
+      eq(classReservations.status, "CONFIRMED"),
+      eq(classReservations.habitualAssignmentId, current.id),
+      eq(classSessions.templateId, current.templateId),
+      withinWindow,
+      gt(classSessions.startsAtUtc, sql`clock_timestamp()`),
+      hasNoOtherLiveAssignment,
+    );
+    const attributableReservations = await tx.select({ id: classReservations.id })
+      .from(classReservations)
+      .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
+      .where(attributable)
+      .orderBy(asc(classReservations.id))
+      .for("no key update", { of: classReservations });
+    const cancelledReservationIds = attributableReservations.map(({ id }) => id);
+    const regulation = await resolveCurrentAcademicRegulation(tx, cancelledAt);
 
-    await lockStudentProfile(tx, current.studentProfileId);
+    if (cancelledReservationIds.length) {
+      await tx.update(classReservations)
+        .set({
+          status: "CANCELLED",
+          cancelledAt,
+          cancelledByUserId: actor.userId,
+          cancellationRegulationVersionId: regulation.id,
+          updatedAt: cancelledAt,
+        })
+        .where(and(
+          inArray(classReservations.id, cancelledReservationIds),
+          eq(classReservations.status, "CONFIRMED"),
+        ));
+    }
 
-    const withinWindow = current.effectiveTo
-      ? and(gte(classSessions.localDate, current.effectiveFrom), lte(classSessions.localDate, current.effectiveTo))
-      : gte(classSessions.localDate, current.effectiveFrom);
     const ambiguousReservations = await tx.select({ id: classReservations.id })
       .from(classReservations)
       .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
@@ -149,23 +214,11 @@ export async function cancelFutureAssignment(
         eq(classReservations.origin, "ORDINARY"),
         eq(classSessions.templateId, current.templateId),
         withinWindow,
-        gt(classSessions.startsAtUtc, cancelledAt),
-        // A reservation supported by another live assignment for the same course is not ambiguous.
-        notExists(tx.select({ id: studentTemplateAssignments.id }).from(studentTemplateAssignments).where(and(
-          eq(studentTemplateAssignments.studentProfileId, current.studentProfileId),
-          eq(studentTemplateAssignments.templateId, current.templateId),
-          ne(studentTemplateAssignments.id, current.id),
-          ne(studentTemplateAssignments.status, "CANCELLED"),
-          lte(studentTemplateAssignments.effectiveFrom, classSessions.localDate),
-          or(
-            isNull(studentTemplateAssignments.effectiveTo),
-            gte(studentTemplateAssignments.effectiveTo, classSessions.localDate),
-          ),
-        ))),
+        gt(classSessions.startsAtUtc, sql`clock_timestamp()`),
+        hasNoOtherLiveAssignment,
       ))
       .orderBy(classReservations.id);
     const ambiguousReservationIds = ambiguousReservations.map(({ id }) => id);
-    const regulation = await resolveCurrentAcademicRegulation(tx, cancelledAt);
     const cancellationId = randomUUID();
 
     await tx.update(studentTemplateAssignments)
@@ -182,7 +235,7 @@ export async function cancelFutureAssignment(
       reason: payload.reason,
       effectiveFrom: current.effectiveFrom,
       effectiveTo: current.effectiveTo,
-      cancelledReservationIds: [],
+      cancelledReservationIds,
       ambiguousReservationIds,
       regulationVersionId: regulation.id,
     }]);
@@ -193,7 +246,7 @@ export async function cancelFutureAssignment(
       cancelled: true,
       cancelledAt,
       source: "ADMIN_INDIVIDUAL" as const,
-      cancelledReservationIds: [] as string[],
+      cancelledReservationIds,
       ambiguousReservationIds,
       requiresAdministrativeReview: ambiguousReservationIds.length,
     };

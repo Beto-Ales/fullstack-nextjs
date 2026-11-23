@@ -9,7 +9,12 @@ import { requireRole } from "@/src/interfaces/auth/session";
 
 export type AssignmentCancellationState =
   | { status: "idle" }
-  | { status: "success"; message: string }
+  | {
+    status: "success";
+    message: string;
+    cancelledReservations: number;
+    ambiguousReservations: number;
+  }
   | { status: "error"; message: string; reasonError?: string };
 
 const invalidRequest = "La solicitud de anulación no es válida. Actualiza la ficha e inténtalo de nuevo.";
@@ -32,18 +37,31 @@ const stateCodes = new Set([
   "assignment_cancelled_without_audit",
 ]);
 
-function reviewMessage(count: number) {
-  if (count <= 0) return " Las reservas existentes no se cancelaron automáticamente.";
-  return count === 1
-    ? " Una reserva existente podría estar relacionada con la asignación y requiere revisión administrativa. No se canceló ni se liberó su plaza automáticamente."
-    : ` ${count} reservas existentes podrían estar relacionadas con la asignación y requieren revisión administrativa. No se cancelaron ni se liberaron sus plazas automáticamente.`;
+function reservationCount(count: number, singular: string, plural: string) {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function resultMessage(result: { cancelled: boolean; requiresAdministrativeReview: number }) {
+function resultMessage(result: {
+  cancelled: boolean;
+  cancelledReservationIds: string[];
+  ambiguousReservationIds: string[];
+}) {
   const base = result.cancelled
     ? "Asignación anulada. No generará nuevas reservas habituales. Se conservan las fechas originales y el historial."
     : "La asignación ya estaba anulada. No se registró una nueva operación.";
-  return `${base}${reviewMessage(result.requiresAdministrativeReview)}`;
+  const cancelled = result.cancelledReservationIds.length === 0
+    ? "No había reservas futuras vinculadas que cancelar."
+    : result.cancelled
+      ? result.cancelledReservationIds.length === 1
+        ? "Se canceló 1 reserva futura vinculada."
+        : `Se cancelaron ${result.cancelledReservationIds.length} reservas futuras vinculadas.`
+      : `La anulación registrada canceló ${reservationCount(result.cancelledReservationIds.length, "reserva futura vinculada", "reservas futuras vinculadas")}.`;
+  const ambiguous = result.ambiguousReservationIds.length === 0
+    ? "No quedaron reservas pendientes de revisión por procedencia ambigua."
+    : result.ambiguousReservationIds.length === 1
+      ? "Una reserva existente no se pudo atribuir con certeza, no se canceló y queda para revisión administrativa."
+      : `${result.ambiguousReservationIds.length} reservas existentes no se pudieron atribuir con certeza, no se cancelaron y quedan para revisión administrativa.`;
+  return `${base} ${cancelled} ${ambiguous}`;
 }
 
 function revalidateProfile(studentProfileId: string) {
@@ -72,7 +90,12 @@ export async function cancelAssignmentAction(
   try {
     const result = await cancelFutureAssignment(admin, { assignmentId, reason });
     revalidateProfile(studentProfileId);
-    return { status: "success", message: resultMessage(result) };
+    return {
+      status: "success",
+      message: resultMessage(result),
+      cancelledReservations: result.cancelledReservationIds.length,
+      ambiguousReservations: result.ambiguousReservationIds.length,
+    };
   } catch (error) {
     if (error instanceof ZodError) {
       const invalidReason = error.issues.some(({ path }) => path[0] === "reason");

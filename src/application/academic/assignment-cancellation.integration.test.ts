@@ -84,12 +84,14 @@ describe("future assignment cancellation (postgres)", () => {
     return classSessionId;
   }
 
-  async function seedReservation(classSessionId: string, studentProfileId: string, origin = "ORDINARY") {
+  async function seedReservation(
+    classSessionId: string, studentProfileId: string, origin = "ORDINARY", habitualAssignmentId: string | null = null,
+  ) {
     const reservationId = randomUUID();
     await client.query(
-      `insert into class_reservations (id,class_session_id,student_profile_id,status,origin)
-       values ($1,$2,$3,'CONFIRMED',$4)`,
-      [reservationId, classSessionId, studentProfileId, origin],
+      `insert into class_reservations (id,class_session_id,student_profile_id,status,origin,habitual_assignment_id)
+       values ($1,$2,$3,'CONFIRMED',$4,$5)`,
+      [reservationId, classSessionId, studentProfileId, origin, habitualAssignmentId],
     );
     return reservationId;
   }
@@ -269,11 +271,14 @@ describe("future assignment cancellation (postgres)", () => {
     const secondAssignment = await seedAssignment({
       studentProfileId: student.profileId, templateId, effectiveFrom: iso(2), effectiveTo: iso(10),
     });
-    const reservationId = await seedReservation(await seedSession(templateId, 3), student.profileId);
+    const reservationId = await seedReservation(
+      await seedSession(templateId, 3), student.profileId, "ORDINARY", firstAssignment,
+    );
 
     const first = await cancellation.cancelFutureAssignment(admin, {
       assignmentId: firstAssignment, reason: "Primera anulación",
     });
+    expect(first.cancelledReservationIds).toEqual([]);
     expect(first.ambiguousReservationIds).toEqual([]);
 
     const second = await cancellation.cancelFutureAssignment(admin, {
@@ -302,5 +307,185 @@ describe("future assignment cancellation (postgres)", () => {
     expect((await client.query(
       "select id from student_template_assignment_cancellations where assignment_id=$1", [assignmentId],
     )).rows).toEqual([]);
+  });
+  it("cancels only future reservations linked to the annulled assignment", async () => {
+    const student = await seedStudent();
+    const other = await seedStudent();
+    const templateId = await seedTemplate(iso(1), iso(20));
+    const assignmentId = await seedAssignment({
+      studentProfileId: student.profileId, templateId, effectiveFrom: iso(2), effectiveTo: iso(10),
+    });
+    const linked = await seedReservation(await seedSession(templateId, 3), student.profileId, "ORDINARY", assignmentId);
+    const linkedMakeup = await seedReservation(await seedSession(templateId, 4), student.profileId, "MAKEUP", assignmentId);
+    const unlinked = await seedReservation(await seedSession(templateId, 5), student.profileId);
+    const outsideWindow = await seedReservation(
+      await seedSession(templateId, 12), student.profileId, "ORDINARY", assignmentId,
+    );
+    const startedSessionId = await seedSession(templateId, 8);
+    await client.query(
+      `update class_sessions set starts_at_utc=clock_timestamp()-interval '1 hour',
+         ends_at_utc=clock_timestamp() where id=$1`, [startedSessionId],
+    );
+    const started = await seedReservation(startedSessionId, student.profileId, "ORDINARY", assignmentId);
+    const cancelledBefore = await seedReservation(
+      await seedSession(templateId, 6), student.profileId, "ORDINARY", assignmentId,
+    );
+    await client.query(
+      "update class_reservations set status='CANCELLED', cancelled_at=now() where id=$1", [cancelledBefore],
+    );
+    const otherStudent = await seedReservation(
+      await seedSession(templateId, 7), other.profileId, "ORDINARY", assignmentId,
+    );
+
+    const result = await cancellation.cancelFutureAssignment(admin, {
+      assignmentId, reason: "El alumno cambia de horario",
+    });
+
+    expect(new Set(result.cancelledReservationIds)).toEqual(new Set([linked, linkedMakeup]));
+    expect(result.ambiguousReservationIds).toEqual([unlinked]);
+    expect(result.requiresAdministrativeReview).toBe(1);
+
+    const { rows: reservations } = await client.query(
+      `select id,status,cancelled_at,cancelled_by_user_id,cancellation_regulation_version_id
+       from class_reservations
+       where id=any($1::text[]) order by id`,
+      [[linked, linkedMakeup, unlinked, outsideWindow, started, cancelledBefore, otherStudent]],
+    );
+    const byId = new Map(reservations.map((row) => [row.id, row]));
+    for (const id of [linked, linkedMakeup]) {
+      expect(byId.get(id)).toMatchObject({
+        status: "CANCELLED", cancelled_by_user_id: admin.userId, cancellation_regulation_version_id: "initial",
+      });
+      expect(byId.get(id)!.cancelled_at).toBeInstanceOf(Date);
+    }
+    for (const id of [unlinked, outsideWindow, started, otherStudent]) {
+      expect(byId.get(id)).toMatchObject({ status: "CONFIRMED", cancelled_at: null });
+    }
+    expect(byId.get(cancelledBefore)).toMatchObject({ status: "CANCELLED", cancelled_by_user_id: null });
+
+    const { rows: audit } = await client.query(
+      `select cancelled_reservation_ids,ambiguous_reservation_ids from student_template_assignment_cancellations
+       where assignment_id=$1`, [assignmentId],
+    );
+    expect(audit).toEqual([{
+      cancelled_reservation_ids: [linked, linkedMakeup].sort(), ambiguous_reservation_ids: [unlinked],
+    }]);
+    expect((await client.query("select id from reservation_cancellations")).rows).toEqual([]);
+    expect((await client.query("select id from credit_ledger_movements")).rows).toEqual([]);
+    expect((await client.query(
+      "select max_capacity from class_sessions where template_id=$1", [templateId],
+    )).rows.every(({ max_capacity }) => max_capacity === 12)).toBe(true);
+  });
+
+  it("is idempotent after releasing linked reservations", async () => {
+    const student = await seedStudent();
+    const templateId = await seedTemplate(iso(1), iso(20));
+    const assignmentId = await seedAssignment({
+      studentProfileId: student.profileId, templateId, effectiveFrom: iso(2), effectiveTo: iso(10),
+    });
+    const linked = await seedReservation(await seedSession(templateId, 3), student.profileId, "ORDINARY", assignmentId);
+
+    const first = await cancellation.cancelFutureAssignment(admin, { assignmentId, reason: "Anulación inicial" });
+    const replay = await cancellation.cancelFutureAssignment(admin, { assignmentId, reason: "Otra razón" });
+
+    expect(first).toMatchObject({ cancelled: true, cancelledReservationIds: [linked] });
+    expect(replay).toMatchObject({
+      cancelled: false, cancellationId: first.cancellationId, cancelledReservationIds: [linked],
+    });
+    expect((await client.query(
+      "select id from student_template_assignment_cancellations where assignment_id=$1", [assignmentId],
+    )).rows).toHaveLength(1);
+    expect((await client.query(
+      "select status from class_reservations where id=$1", [linked],
+    )).rows).toEqual([{ status: "CANCELLED" }]);
+  });
+
+  it("rolls back the assignment and its linked reservations when the audit cannot be written", async () => {
+    const student = await seedStudent();
+    const templateId = await seedTemplate(iso(1), iso(20));
+    const assignmentId = await seedAssignment({
+      studentProfileId: student.profileId, templateId, effectiveFrom: iso(2),
+    });
+    const linked = await seedReservation(await seedSession(templateId, 3), student.profileId, "ORDINARY", assignmentId);
+
+    await client.query(`create function test_reject_assignment_audit() returns trigger language plpgsql as $$
+      begin raise exception 'synthetic audit failure'; end; $$`);
+    await client.query(`create trigger test_reject_assignment_audit before insert
+      on student_template_assignment_cancellations for each row execute function test_reject_assignment_audit()`);
+    try {
+      await expect(cancellation.cancelFutureAssignment(admin, {
+        assignmentId, reason: "Anulación con fallo de auditoría",
+      })).rejects.toMatchObject({ cause: { message: expect.stringContaining("synthetic audit failure") } });
+    } finally {
+      await client.query("drop trigger test_reject_assignment_audit on student_template_assignment_cancellations");
+      await client.query("drop function test_reject_assignment_audit()");
+    }
+
+    expect((await client.query(
+      "select status from student_template_assignments where id=$1", [assignmentId],
+    )).rows).toEqual([{ status: "ACTIVE" }]);
+    expect((await client.query(
+      "select status,cancelled_at from class_reservations where id=$1", [linked],
+    )).rows).toEqual([{ status: "CONFIRMED", cancelled_at: null }]);
+    expect((await client.query("select id from student_template_assignment_cancellations")).rows).toEqual([]);
+    expect((await client.query("select id from credit_ledger_movements")).rows).toEqual([]);
+  });
+
+  it("serializes with session generation without losing linked reservations", async () => {
+    const student = await seedStudent();
+    const templateId = await seedTemplate(iso(1));
+    const assignmentId = await seedAssignment({
+      studentProfileId: student.profileId, templateId, effectiveFrom: iso(2),
+    });
+
+    const [generated] = await Promise.all([
+      academic.generateClassSessions(admin, { horizonMonths: 1 }),
+      cancellation.cancelFutureAssignment(admin, { assignmentId, reason: "Anulación concurrente" }),
+    ]);
+
+    expect(generated.inserted).toBeGreaterThan(0);
+    expect((await client.query(
+      "select status from student_template_assignments where id=$1", [assignmentId],
+    )).rows).toEqual([{ status: "CANCELLED" }]);
+    expect((await client.query(
+      "select status from class_reservations where habitual_assignment_id=$1", [assignmentId],
+    )).rows.every(({ status }) => status === "CANCELLED")).toBe(true);
+    expect((await client.query(
+      "select count(*)::int as count from student_template_assignment_cancellations where assignment_id=$1",
+      [assignmentId],
+    )).rows).toEqual([{ count: 1 }]);
+  });
+
+  it("serializes with withdrawal without a deadlock or duplicate audit", async () => {
+    const student = await seedStudent();
+    const templateId = await seedTemplate(iso(1), iso(20));
+    const assignmentId = await seedAssignment({
+      studentProfileId: student.profileId, templateId, effectiveFrom: iso(2), effectiveTo: iso(10),
+    });
+    const linked = await seedReservation(await seedSession(templateId, 3), student.profileId, "ORDINARY", assignmentId);
+
+    const results = await Promise.allSettled([
+      cancellation.cancelFutureAssignment(admin, { assignmentId, reason: "Anulación concurrente" }),
+      withdrawStudent(admin, { studentProfileId: student.profileId }),
+    ]);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        expect(result.reason).not.toMatchObject({ cause: { code: "40P01" } });
+      }
+    }
+
+    expect((await client.query(
+      "select status from users where id=$1", [student.userId],
+    )).rows).toEqual([{ status: "DISABLED" }]);
+    expect((await client.query(
+      "select status from student_template_assignments where id=$1", [assignmentId],
+    )).rows).toEqual([{ status: "CANCELLED" }]);
+    expect((await client.query(
+      "select status from class_reservations where id=$1", [linked],
+    )).rows).toEqual([{ status: "CANCELLED" }]);
+    expect((await client.query(
+      "select source from student_template_assignment_cancellations where assignment_id=$1", [assignmentId],
+    )).rows).toHaveLength(1);
+    expect((await client.query("select id from credit_ledger_movements")).rows).toEqual([]);
   });
 });
