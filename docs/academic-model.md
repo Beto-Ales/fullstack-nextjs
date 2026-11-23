@@ -181,6 +181,8 @@ Fórmula:
 - calculada en servidor con datos de PostgreSQL,
 - sin confiar en datos del cliente.
 - El aforo máximo inicial es de 12 plazas. Una reducción entra en vigor para nuevas reservas y bloqueos y conserva los compromisos existentes.
+- **Aforo físico y plazas reservables.** El calendario, el detalle administrativo y las dos consultas de disponibilidad de solo lectura (`getClassSessionAvailability` y `getRecoveryAvailabilityForSession`) publican las dos cifras por separado desde el mismo cálculo. **Aforo físico** es `max_capacity` de la sesión; las plazas físicamente libres restan reservas confirmadas y bloqueos activos sin aplicar la normativa. **Aforo efectivo** es el menor valor entre el aforo físico y el límite vigente de la normativa al consultar; las plazas reservables usan ese aforo efectivo y valen cero cuando la sesión ya empezó, terminó o está cancelada. Una sesión cerrada puede conservar plazas físicamente libres, pero ninguna es reservable.
+- Las consultas de disponibilidad devuelven además el estado de sesión, el inicio y el fin, para que el consumidor no tenga que deducir la ventana temporal. Son lecturas sin escrituras; la reserva y su revalidación transaccional siguen siendo la autoridad de admisión, de modo que una cifra favorable no otorga una plaza por sí sola.
 
 ### Resumen semanal administrativo
 

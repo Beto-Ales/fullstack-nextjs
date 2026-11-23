@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import { cancellationSource, cancelledReservation, currentClassAttendance, sessionCancellation, withdrawalCancellation } from "./student-class-queries";
-import { calculateAvailableSpots, getSessionBookingStatus } from "@/src/domain/academic/availability";
+import { calculateAvailableSpots, calculateReservableSpots, getSessionBookingStatus } from "@/src/domain/academic/availability";
 import type { UserRole } from "@/src/domain/auth/roles";
 import { resolveCenterWeek } from "@/src/domain/time/center-week";
 import { db } from "@/src/infrastructure/db/client";
@@ -77,7 +77,7 @@ function summarizeCapacity(session: AdminSession, regulationCapacity: number, no
     confirmedReservations,
     blockedSpots,
     physicallyFreeSpots: calculateAvailableSpots({ capacity: physicalCapacity, confirmedReservations, blockedSpots }),
-    reservableSpots: bookingStatus === "UPCOMING" ? availableSpots : 0,
+    reservableSpots: calculateReservableSpots({ bookingStatus, capacity, confirmedReservations, blockedSpots }),
     bookingStatus,
     habitualPending,
     capacityConflict: habitualPending !== null && habitualPending > availableSpots,

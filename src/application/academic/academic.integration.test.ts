@@ -133,7 +133,7 @@ describe("academic integration (postgres)", () => {
     });
     for (const classSessionId of sessionIds.slice(1, 3)) {
       await academicService.addSessionCapacityBlock(admin, { classSessionId, blockId: randomUUID(), blockedSpots: 1, reason: "Bloqueo de prueba" });
-      expect(await academicService.getClassSessionAvailability(classSessionId)).toMatchObject({ availableSpots: 0 });
+      expect(await academicService.getClassSessionAvailability(classSessionId)).toMatchObject({ physicallyFreeSpots: 0 });
     }
     const credit = await import("@/src/application/credits/credit-service");
     const recovery = await import("@/src/application/recovery/recovery-service");
@@ -143,7 +143,7 @@ describe("academic integration (postgres)", () => {
         localDate: today.plus({ days: daysAhead }).toISODate(), startsAtLocalTime: "18:00", durationMinutes: 60, maxCapacity: 1,
       });
       const booking = await recovery.reserveRecovery(student, { classSessionId });
-      expect(await academicService.getClassSessionAvailability(classSessionId)).toMatchObject({ availableSpots: 0 });
+      expect(await academicService.getClassSessionAvailability(classSessionId)).toMatchObject({ physicallyFreeSpots: 0 });
       return { ...booking, classSessionId };
     }
     const onTime = await reserveMakeup(9);
@@ -233,7 +233,7 @@ describe("academic integration (postgres)", () => {
       refund_restored_credit: true, regulation_version_id: "initial",
     }]);
     for (const classSessionId of [onTime.classSessionId, late.classSessionId]) {
-      expect(await academicService.getClassSessionAvailability(classSessionId)).toMatchObject({ availableSpots: 1 });
+      expect(await academicService.getClassSessionAvailability(classSessionId)).toMatchObject({ physicallyFreeSpots: 1 });
     }
     await expect(academicService.enrollStudentInAcademicOffering(admin, {
       targetType: "weekly", targetId: templateId, studentProfileId: departing.profileId,
@@ -253,9 +253,9 @@ describe("academic integration (postgres)", () => {
     );
     expect(replacementBookings.map(({ class_session_id }) => class_session_id).sort()).toEqual(sessionIds.slice(2).sort());
     expect(await academicService.getClassSessionAvailability(sessionIds[1]))
-      .toMatchObject({ confirmedReservations: 2, blockedSpots: 1, availableSpots: 0 });
+      .toMatchObject({ confirmedReservations: 2, blockedSpots: 1, physicallyFreeSpots: 0 });
     expect(await academicService.getClassSessionAvailability(sessionIds[2]))
-      .toMatchObject({ confirmedReservations: 1, blockedSpots: 1, availableSpots: 0 });
+      .toMatchObject({ confirmedReservations: 1, blockedSpots: 1, physicallyFreeSpots: 0 });
   });
 
   it("creates a one-off session through the admin service and rejects the thirteenth seat under concurrency", async () => {
@@ -279,7 +279,7 @@ describe("academic integration (postgres)", () => {
       status: "rejected", reason: expect.objectContaining({ code: "no_spots_available" }),
     }));
     expect(await academicService.getClassSessionAvailability(classSessionId))
-      .toMatchObject({ capacity: 12, confirmedReservations: 12, availableSpots: 0 });
+      .toMatchObject({ capacity: 12, confirmedReservations: 12, physicallyFreeSpots: 0 });
   });
 
   it("keeps a fixed course within its dates when the periodic generator uses a longer horizon", async () => {
@@ -354,9 +354,9 @@ describe("academic integration (postgres)", () => {
     );
     await academicService.cancelReservation({ userId: booking.user_id, role: "STUDENT" }, { reservationId: booking.id });
     expect(await academicService.getClassSessionAvailability(firstSession.id))
-      .toMatchObject({ confirmedReservations: 11, availableSpots: 1 });
+      .toMatchObject({ confirmedReservations: 11, physicallyFreeSpots: 1 });
     expect(await academicService.getClassSessionAvailability(secondSession.id))
-      .toMatchObject({ confirmedReservations: 12, availableSpots: 0 });
+      .toMatchObject({ confirmedReservations: 12, physicallyFreeSpots: 0 });
     expect(await enrollmentCount()).toBe(12);
 
     const recovering = students[13];
@@ -367,9 +367,9 @@ describe("academic integration (postgres)", () => {
     const reserved = await recoveryService.reserveRecovery(recoveringActor, { classSessionId: firstSession.id });
     expect(reserved.consumedMovementId).toBeTruthy();
     expect(await academicService.getClassSessionAvailability(firstSession.id))
-      .toMatchObject({ confirmedReservations: 12, availableSpots: 0 });
+      .toMatchObject({ confirmedReservations: 12, physicallyFreeSpots: 0 });
     expect(await academicService.getClassSessionAvailability(secondSession.id))
-      .toMatchObject({ confirmedReservations: 12, availableSpots: 0 });
+      .toMatchObject({ confirmedReservations: 12, physicallyFreeSpots: 0 });
     expect(await enrollmentCount()).toBe(12);
   });
 

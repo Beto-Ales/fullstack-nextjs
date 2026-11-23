@@ -180,7 +180,7 @@ describe("academic regulation (postgres)", () => {
     await expect(academicService.addSessionCapacityBlock(admin, { classSessionId: blockSessionId, blockId: randomUUID(), blockedSpots: 1, reason: "Bloqueo de prueba" }))
       .rejects.toMatchObject({ code: "capacity_conflict" });
     expect(await academicService.getClassSessionAvailability(blockSessionId))
-      .toMatchObject({ capacity: 2, blockedSpots: 1, confirmedReservations: 1, availableSpots: 0 });
+      .toMatchObject({ capacity: 2, blockedSpots: 1, confirmedReservations: 1, reservableSpots: 0 });
 
     const after = await recoveryService.getRecoveryHistory(student);
     expect(after.reservations).toEqual([{

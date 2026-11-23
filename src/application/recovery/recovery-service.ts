@@ -14,9 +14,10 @@ import { createRecoveryConsumption, createRecoveryRefund, lockStudentProfile, ma
 import { cancelRecoverySchema, recoveryHistorySchema, recoveryOptionsCursorSchema, reserveRecoverySchema } from "@/src/application/recovery/schemas";
 import { type UserRole } from "@/src/domain/auth/roles";
 import { classifyCancellationTiming } from "@/src/domain/academic/cancellation-rules";
-import { calculateAvailableSpots } from "@/src/domain/academic/availability";
+import { calculateAvailableSpots, calculateReservableSpots, getSessionBookingStatus } from "@/src/domain/academic/availability";
 import { CENTER_TIME_ZONE } from "@/src/domain/time/timezone";
 import { lockClassSessionForReservation } from "@/src/infrastructure/db/class-reservation-locks";
+import { readSessionUsage } from "@/src/infrastructure/db/habitual-reservations.mjs";
 import { db } from "@/src/infrastructure/db/client";
 import {
   classReservations,
@@ -631,6 +632,7 @@ export async function getRecoveryAvailabilityForSession(actor: Actor, classSessi
         id: classSessions.id,
         localDate: classSessions.localDate,
         startsAtUtc: classSessions.startsAtUtc,
+        endsAtUtc: classSessions.endsAtUtc,
         status: classSessions.status,
         maxCapacity: classSessions.maxCapacity,
       })
@@ -642,28 +644,18 @@ export async function getRecoveryAvailabilityForSession(actor: Actor, classSessi
       throw new ApplicationError("Class session not found.", "session_not_found", 404, true);
     }
 
-    const [aggregate] = await tx
-      .select({
-        confirmedReservations: sql<number>`
-          (
-            select count(*)::int
-            from class_reservations r
-            where r.class_session_id = ${classSessionId}
-              and r.status = 'CONFIRMED'
-          )
-        `,
-        blockedSpots: sql<number>`
-          (
-            select coalesce(sum(b.blocked_spots), 0)::int
-            from session_capacity_blocks b
-            where b.class_session_id = ${classSessionId}
-              and b.is_active = true
-          )
-        `,
-      })
-      .from(classSessions)
-      .where(eq(classSessions.id, classSessionId))
-      .limit(1);
+    const { confirmedReservations, blockedSpots } = await readSessionUsage(tx, classSessionId);
+    const capacity = Math.min(session.maxCapacity, regulation.maxClassCapacity);
+    const physicallyFreeSpots = calculateAvailableSpots({
+      capacity: session.maxCapacity,
+      confirmedReservations,
+      blockedSpots,
+    });
+    const bookingStatus = getSessionBookingStatus({
+      sessionStatus: session.status,
+      startsAtUtc: session.startsAtUtc,
+      endsAtUtc: session.endsAtUtc,
+    }, now);
 
     const monthlyRecoveries = await countMonthlyRecoveries(tx, studentProfileId, session.localDate);
     const { availableCredits } = await readCreditBalance(tx, studentProfileId, now);
@@ -672,12 +664,15 @@ export async function getRecoveryAvailabilityForSession(actor: Actor, classSessi
       classSessionId: session.id,
       localDate: session.localDate,
       startsAtUtc: session.startsAtUtc,
+      endsAtUtc: session.endsAtUtc,
       status: session.status,
-      availableSpots: calculateAvailableSpots({
-        capacity: Math.min(session.maxCapacity, regulation.maxClassCapacity),
-        confirmedReservations: Number(aggregate?.confirmedReservations ?? 0),
-        blockedSpots: Number(aggregate?.blockedSpots ?? 0),
-      }),
+      physicalCapacity: session.maxCapacity,
+      capacity,
+      confirmedReservations,
+      blockedSpots,
+      physicallyFreeSpots,
+      reservableSpots: calculateReservableSpots({ bookingStatus, capacity, confirmedReservations, blockedSpots }),
+      bookingStatus,
       availableCredits,
       monthlyRecoveryUsed: monthlyRecoveries,
       monthlyRecoveryRemaining: Math.max(0, regulation.monthlyRecoveries - monthlyRecoveries),

@@ -17,7 +17,7 @@ Se contrastaron la [planificación](../planificacion_general.md), la [arquitectu
 | 4. Horarios y sesiones | Hallazgo R14-01 | El alta y la edición de vigencia aplican criterios distintos. [Generación](../src/application/academic/session-generation.integration.test.ts) cubre CLI, conflictos de aforo y coordinación con cambios de asignación. La prioridad automática ante aforo insuficiente sigue siendo una decisión explícita. | Alta |
 | 5. Asistencia y cancelaciones | Sin hallazgos relevantes | [Servicio académico](../src/application/academic/academic-service.ts) valida sesión y reserva para asistencia, comprueba titularidad y cuenta activa en cancelaciones del alumno y distingue la normativa aplicable. La conciliación conserva la decisión original de habitualidad. | Alta en los caminos revisados |
 | 6. Créditos | Sin hallazgos relevantes | [Servicio de créditos](../src/application/credits/credit-service.ts) proyecta saldo FIFO y caducidad en lectura. Los ajustes y el consumo coordinan cambios mediante bloqueo, idempotencia y referencias del ledger. H01, H02 y H09 tienen cobertura documentada. | Alta en los caminos revisados |
-| 7. Recuperaciones | Hallazgo R14-02 | [Servicio de recuperación](../src/application/recovery/recovery-service.ts) comprueba aforo, límite mensual, saldo y tiempo antes de insertar. La [integración](../src/application/recovery/recovery.integration.test.ts) cubre última plaza, último crédito, reintentos y devoluciones. | Alta |
+| 7. Recuperaciones | Hallazgo R14-02 (contrato aclarado) | [Servicio de recuperación](../src/application/recovery/recovery-service.ts) comprueba aforo, límite mensual, saldo y tiempo antes de insertar. La [integración](../src/application/recovery/recovery.integration.test.ts) cubre última plaza, último crédito, reintentos y devoluciones. La consulta de disponibilidad separa aforo físico y plazas reservables desde 10.23. | Alta |
 
 ## Hallazgos
 
@@ -30,6 +30,8 @@ El incremento 10.15 reprodujo y corrigió la finalización con rango invertido. 
 Las pruebas existentes en [`regulation.integration.test.ts`](../src/application/academic/regulation.integration.test.ts) cubren fin, ampliación y rollback de conciliación. No se localizó cobertura para el intervalo invertido. Validar el rango tras resolver la fecha de fin y acordar cómo anular explícitamente una asignación futura antes de su inicio, preservando el contrato de baja. Confianza alta en la falta de validación y media en el impacto sobre casos existentes. Sin reproducción dinámica.
 
 ### R14-02 · Fases 4 y 7 · Bajo · Confirmado por inspección
+
+El incremento 10.23 aclaró el contrato en lugar de retirar las consultas: ambas devuelven la sesión completa y separan aforo físico de plazas reservables. [Reproducción y pruebas](testing.md#incremento-1023--aforo-físico-y-plazas-reservables-en-las-consultas-de-disponibilidad)
 
 [`getClassSessionAvailability`](../src/application/academic/academic-service.ts#L855) y [`getRecoveryAvailabilityForSession`](../src/application/recovery/recovery-service.ts#L619) calculan plazas libres para sesiones canceladas o ya iniciadas. La primera lee el estado pero devuelve solo cantidades. La segunda devuelve el estado y el inicio junto con una cifra que puede seguir siendo positiva. El listado de recuperaciones y el detalle administrativo aplican el filtro temporal y de estado. Las dos acciones antiguas de consulta carecen de consumidores en la UI inspeccionada. La discrepancia puede inducir a error si se reutilizan; la mutación sigue comprobando admisión.
 

@@ -475,8 +475,10 @@ describe("recovery integration (postgres)", () => {
     const { withdrawStudent } = await import("@/src/application/academic/student-withdrawal");
     await expect(withdrawStudent({ userId: admin.userId, role: "SUPER_ADMIN" }, { studentProfileId: student.profileId }))
       .resolves.toMatchObject({ cancelledRecoveries: 1 });
-    expect(await academicService.getClassSessionAvailability(startedSession)).toMatchObject({ availableSpots: 0 });
-    expect(await academicService.getClassSessionAvailability(futureSession)).toMatchObject({ availableSpots: 1 });
+    expect(await academicService.getClassSessionAvailability(startedSession))
+      .toMatchObject({ physicallyFreeSpots: 0, reservableSpots: 0 });
+    expect(await academicService.getClassSessionAvailability(futureSession))
+      .toMatchObject({ physicallyFreeSpots: 1, reservableSpots: 1 });
     const { rows: bookings } = await client.query("select id,status from class_reservations where student_profile_id=$1", [student.profileId]);
     expect(bookings).toHaveLength(2);
     expect(bookings).toContainEqual({ id: started.reservationId, status: "CONFIRMED" });

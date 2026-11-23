@@ -39,7 +39,7 @@ import {
 import { requireActiveStudentForBooking, requireActiveStudentForCancellation } from "@/src/application/auth/active-student";
 import { lockStudentProfile, resolvePendingCancellationCredits, tryGenerateAutoCreditFromCancellation } from "@/src/application/credits/credit-service";
 import { cancelRecoveriesForCancelledSession, cancelRecoveryReservation, reserveRecovery } from "@/src/application/recovery/recovery-service";
-import { calculateAvailableSpots, getSessionBookingStatus } from "@/src/domain/academic/availability";
+import { calculateAvailableSpots, calculateReservableSpots, getSessionBookingStatus, type BookingStatus } from "@/src/domain/academic/availability";
 import { classifyCancellationTiming, evaluateCancellationSequence, evaluateCancellationTimeline, type HabitualSequenceEvent } from "@/src/domain/academic/cancellation-rules";
 import {
   DEFAULT_CLASS_CAPACITY, SESSION_GENERATION_HORIZON_MONTHS, WEEKLY_COURSE_DURATION_MONTHS,
@@ -76,10 +76,18 @@ type Actor = {
 };
 
 type SessionAvailability = {
+  classSessionId: string;
+  localDate: string;
+  sessionStatus: "CANCELLED" | "COMPLETED" | "SCHEDULED";
+  startsAtUtc: Date;
+  endsAtUtc: Date;
+  physicalCapacity: number;
   capacity: number;
   confirmedReservations: number;
   blockedSpots: number;
-  availableSpots: number;
+  physicallyFreeSpots: number;
+  reservableSpots: number;
+  bookingStatus: BookingStatus;
 };
 
 function requireSuperAdmin(actor: Actor): void {
@@ -868,9 +876,13 @@ export async function releaseSessionCapacityBlock(actor: Actor, input: unknown) 
 }
 
 export async function getClassSessionAvailability(classSessionId: string): Promise<SessionAvailability> {
+  const now = new Date();
   const [session] = await db
     .select({
       id: classSessions.id,
+      localDate: classSessions.localDate,
+      startsAtUtc: classSessions.startsAtUtc,
+      endsAtUtc: classSessions.endsAtUtc,
       maxCapacity: classSessions.maxCapacity,
       status: classSessions.status,
     })
@@ -882,20 +894,33 @@ export async function getClassSessionAvailability(classSessionId: string): Promi
     throw new ApplicationError("Class session not found.", "session_not_found", 404, true);
   }
 
-  const regulation = await resolveCurrentAcademicRegulation(db);
+  const regulation = await resolveCurrentAcademicRegulation(db, now);
   const capacity = Math.min(session.maxCapacity, regulation.maxClassCapacity);
   const { confirmedReservations, blockedSpots } = await readSessionUsage(db, classSessionId);
-  const availableSpots = calculateAvailableSpots({
-    capacity,
+  const physicallyFreeSpots = calculateAvailableSpots({
+    capacity: session.maxCapacity,
     confirmedReservations,
     blockedSpots,
   });
+  const bookingStatus = getSessionBookingStatus({
+    sessionStatus: session.status,
+    startsAtUtc: session.startsAtUtc,
+    endsAtUtc: session.endsAtUtc,
+  }, now);
 
   return {
+    classSessionId: session.id,
+    localDate: session.localDate,
+    sessionStatus: session.status,
+    startsAtUtc: session.startsAtUtc,
+    endsAtUtc: session.endsAtUtc,
+    physicalCapacity: session.maxCapacity,
     capacity,
     confirmedReservations,
     blockedSpots,
-    availableSpots,
+    physicallyFreeSpots,
+    reservableSpots: calculateReservableSpots({ bookingStatus, capacity, confirmedReservations, blockedSpots }),
+    bookingStatus,
   };
 }
 
