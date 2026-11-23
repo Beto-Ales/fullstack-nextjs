@@ -607,3 +607,85 @@ Resultados de las pruebas ejecutadas:
 1. Autorizar el **respaldo con ensayo de restauración** de DEV, sin cambio de contraseña.
 2. Autorizar después la **rotación interactiva** de `app_dev_user`, la actualización de los dos campos locales y la validación desde el host.
 3. Decidir por separado si se **recrea el contenedor** para retirar de sus metadatos la copia de la contraseña anterior.
+
+## Incremento 10.30 — Respaldo, rotación y verificación de la credencial PostgreSQL DEV
+
+Con la autorización del propietario se completó la rotación efectiva de la credencial PostgreSQL DEV en el orden previsto: respaldo cifrado y ensayo de restauración, cambio de la credencial, actualización de los dos consumidores locales y verificación independiente de solo lectura. La contraseña no aparece en esta documentación, ni en archivos, ni en la transcripción.
+
+### Fase A — Respaldo lógico cifrado
+
+| Elemento | Resultado |
+| --- | --- |
+| Directorio | `%USERPROFILE%\Documents\h03-secure-backups\dev-20261123-183957`, fuera del repositorio |
+| Permisos | ACL protegida, solo la cuenta del propietario con control total |
+| Formato | `pg_dump` 15.20, formato personalizado `-Fc -Z 6` |
+| Base principal | 50 818 bytes en claro, 51 046 cifrados |
+| Base de mantenimiento | 1 096 bytes en claro, 1 318 cifrados |
+| Metadatos de roles | 367 bytes en claro, 582 cifrados; un `CREATE ROLE`, cero `GRANT`, `PASSWORD NULL`, ningún verificador exportado |
+| Integridad | SHA-256 del texto claro y del cifrado en `manifest.json`, descifrado verificado por comparación de resumen |
+| Cifrado | Protección de datos del perfil de Windows, ámbito del usuario actual, entropía etiquetada |
+| Contenido | 12 tablas públicas, 6 migraciones y todas las tablas de negocio con cero filas, idéntico al preflight de 10.29 |
+
+El texto claro se eliminó del disco tras cifrar y los temporales se retiraron del contenedor. El respaldo corresponde al estado **anterior** a la rotación.
+
+### Fase B — Ensayo de restauración
+
+Ensayo repetido sobre el respaldo anterior para confirmar que sigue siendo restaurable después de la rotación:
+
+- Descifrado de los tres artefactos con resumen idéntico al manifiesto.
+- Contenedor desechable `postgres` 15.20 con datos en memoria temporal de 768 MB, **sin volúmenes montados y sin puertos publicados**.
+- Restauración de ambas bases sin errores ni advertencias.
+### Fase F — Rotación ejecutada por el propietario
+
+La utilidad local se ejecutó en modo determinista: fija la contraseña en PostgreSQL por entrada estándar —sin sentencia en argumentos ni historial—, compara los atributos del rol antes y después para abortar si cambian, valida la credencial nueva desde el host y solo entonces actualiza los dos consumidores.
+
+Una incidencia previa obligó a corregir la captura: el primer intento se detuvo en una comprobación previa (longitud mínima o discrepancia entre las dos entradas) **sin escribir nada**; el identificador de transacción del rol siguió en 756 y ambos archivos conservaron su fecha de modificación. La captura se sustituyó por un ciclo de hasta tres intentos que informa la causa concreta de cada rechazo —longitud, caracteres no imprimibles, contraseña vigente, reutilización de la credencial de TEST o discrepancia— y solo continúa cuando la candidata es válida. Tras la corrección, el propietario obtuvo `ROTACION Y CONSUMIDORES DEV ACTUALIZADOS`.
+
+### Fase G — Verificación independiente
+
+Script de solo lectura, sin imprimir secretos, con 25 comprobaciones y resultado global correcto:
+
+| Comprobación | Resultado |
+| --- | --- |
+| Identidad del contenedor | mismo identificador, `running`, saludable, cero reinicios, misma hora de arranque |
+| Volumen | `fullstack-nextjs_postgres_dev_data`, sin cambios |
+| Rol | `app_dev_user` presente; identificador de transacción del rol de 755 a 760 respecto de la línea base |
+| Consumidores | claves únicas, `DATABASE_URL` igual a `POSTGRES_DEV_PASSWORD`, valor distinto del de TEST, 37 caracteres, rol/host/puerto/base correctos |
+| Tamaños de archivo | sin truncamiento |
+| Autenticación desde el host | conexión nueva por TCP al puerto publicado, cifrado y verificador `scram-sha-256`, cliente en la dirección de la puerta de enlace, lectura correcta |
+| Autenticación negativa | contraseña incorrecta rechazada con error `28P01` |
+| Reglas de autenticación | regla general `scram-sha-256`, sin confianza global |
+| Integridad de datos | 12 tablas, 50 índices, 12 enumerados, 6 migraciones, 0 usuarios, 0 sesiones, ninguna tabla con propietario ajeno |
+| Bases | `fullstack_nextjs` y `postgres`, sin bases nuevas |
+| TEST | mismo identificador, saludable, sin reinicios ni recreación |
+| Repositorio | `HEAD` en `6dc7bac`, documentación confirmada y archivos de entorno ignorados |
+| Metadatos de Docker | valor anterior conservado, distinto del vigente, sin exponerlo |
+| Restos | sin contenedores de ensayo, sin volúmenes añadidos, sin volcados ni temporales en claro en el host |
+
+
+- Comparación estructural y de recuentos: 12 tablas, 12 con propietario `app_dev_user`, 50 índices públicos, 12 tipos enumerados, 6 migraciones y recuentos exactos iguales al manifiesto; base de mantenimiento sin tablas; privilegio de lectura presente.
+- Contenedor eliminado, ningún volumen residual y ninguna copia en claro en el host.
+
+
+
+### Deuda y hallazgos abiertos
+
+1. **Copia en los metadatos del contenedor.** El entorno del contenedor expone `POSTGRES_PASSWORD` —el nombre que Compose genera al interpolar `POSTGRES_DEV_PASSWORD`— con el valor **anterior**, de 32 caracteres, que ya no autentica. Solo desaparece recreando el contenedor; se mantiene como deuda declarada.
+2. **Confianza en el loopback interno.** Las reglas de la imagen aceptan el loopback interno del contenedor sin contraseña; el acceso desde el host llega con la dirección de la puerta de enlace y sí exige `SCRAM-SHA-256`, como demuestran la prueba positiva y la negativa. Endurecer esa regla exige recargar la configuración y se deja para un incremento aparte.
+3. **Procesos con conexión memoizada.** El grupo de conexiones de la aplicación se resuelve al arrancar: no había ningún proceso de Next.js en ejecución, pero cualquier proceso que se inicie debe hacerlo después de la rotación.
+4. **Riesgos residuales ya declarados**: el rol conserva privilegio de superusuario, los respaldos dependen del perfil del propietario y de su protección de datos —no salen del equipo—, la reutilización de credenciales históricas sigue sin confirmar y las copias en puntos de control de agentes continúan sin verificar.
+
+Los dos archivos del árbol de trabajo modificados por el propietario (`app/admin/sesiones/[sessionId]/session-capacity.tsx` y `docs/database-drizzle.md`) no se tocaron en este incremento.
+
+### Estado
+
+**POSTGRESQL DEV — CREDENCIAL ROTADA, CONSUMIDORES ACTUALIZADOS Y VERIFICACIÓN SUPERADA.** Respaldo cifrado del estado anterior conservado y ensayo de restauración correcto.
+
+**H03 GLOBAL — PENDIENTE DE ACCIÓN OPERATIVA.** Quedan la recreación del contenedor DEV para retirar la copia anterior de sus metadatos, la decisión sobre la regla de confianza del loopback interno, la revisión de credenciales históricas y la aceptación documentada de los riesgos residuales.
+
+### Acciones pendientes
+
+1. Recrear el contenedor DEV cuando sea aceptable una interrupción breve, para eliminar el valor anterior de su configuración de arranque.
+2. Decidir si se endurece `pg_hba.conf` retirando la confianza del loopback interno, con recarga de la configuración.
+3. Revisar la reutilización de credenciales históricas y las copias en puntos de control de agentes.
+4. Retirar las utilidades temporales del directorio temporal cuando ya no se necesiten; los respaldos cifrados se conservan.
