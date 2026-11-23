@@ -8,7 +8,7 @@ import { lockStudentProfile, resolvePendingCancellationCredits } from "@/src/app
 import { cancelFutureRecoveriesForWithdrawal } from "@/src/application/recovery/recovery-service";
 import type { UserRole } from "@/src/domain/auth/roles";
 import { db } from "@/src/infrastructure/db/client";
-import { lockTemplateAssignments } from "@/src/infrastructure/db/habitual-reservations.mjs";
+import { lockTemplatesInOrder } from "@/src/infrastructure/db/habitual-reservations.mjs";
 import { classReservations, classSessions, classTemplates, sessions, studentProfiles, studentTemplateAssignments, studentWithdrawals, users } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
 
@@ -41,7 +41,7 @@ export async function withdrawStudent(actor: { userId: string; role: UserRole },
     const bookedTemplates = await tx.selectDistinct({ id: classSessions.templateId }).from(classSessions)
       .where(and(isNotNull(classSessions.templateId), exists(confirmedBookings)));
     const templateIds = new Set([...assignments, ...bookedTemplates].map(({ id }) => id).filter(id => id !== null));
-    for (const id of Array.from(templateIds).sort()) await lockTemplateAssignments(tx, id);
+    await lockTemplatesInOrder(tx, templateIds);
     await tx.select({ id: classSessions.id }).from(classSessions).where(exists(confirmedBookings))
       .orderBy(asc(classSessions.id)).for("no key update");
     await lockStudentProfile(tx, studentProfileId);

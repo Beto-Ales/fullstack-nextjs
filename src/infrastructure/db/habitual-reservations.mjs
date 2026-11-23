@@ -9,6 +9,28 @@ export async function lockTemplateAssignments(tx, templateId) {
   await tx.execute(sql`select pg_advisory_xact_lock(903000044, hashtext(${templateId}))`);
 }
 
+/** @param {QueryExecutor} tx @param {Iterable<string>} templateIds */
+export async function lockTemplatesInOrder(tx, templateIds) {
+  const keys = await tx.execute(sql`
+    select distinct hashtext(value) as key
+    from jsonb_array_elements_text(${JSON.stringify([...templateIds])}::jsonb)
+    order by key
+  `);
+  for (const { key } of keys.rows) await tx.execute(sql`select pg_advisory_xact_lock(903000044, ${key}::int)`);
+}
+
+/** @param {QueryExecutor} tx @param {{ templateId: string, localDate: string }[]} candidates */
+export async function lockExistingGeneratedSessions(tx, candidates) {
+  if (!candidates.length) return;
+  await tx.execute(sql`
+    select s.id from class_sessions s
+    join jsonb_to_recordset(${JSON.stringify(candidates.map(({ templateId, localDate }) => ({ templateId, localDate })))}::jsonb)
+      as candidate("templateId" text, "localDate" date)
+      on s.template_id = candidate."templateId" and s.local_date = candidate."localDate"
+    order by s.id for update of s
+  `);
+}
+
 /** @param {string | import("drizzle-orm").SQLWrapper} classSessionId */
 export function sessionUsageCounts(classSessionId) {
   return {
@@ -81,9 +103,32 @@ async function readHabitualStudentIds(tx, session) {
   return /** @type {{ student_profile_id: string }[]} */ (assignments.rows).map((row) => row.student_profile_id);
 }
 
-/** @param {QueryExecutor} tx @param {SessionSeats & { templateId: string, localDate: string }} session */
-export async function reserveGeneratedSessionHabitualSeats(tx, session) {
-  return reserveHabitualSeats(tx, session, await readHabitualStudentIds(tx, session));
+/** @typedef {SessionSeats & { templateId: string, localDate: string }} GeneratedSessionSeats */
+
+/** @param {QueryExecutor} tx @param {GeneratedSessionSeats[]} sessions */
+export async function reserveGeneratedSessionHabitualSeats(tx, sessions) {
+  const bookings = [];
+  const profileIds = new Set();
+  for (const session of sessions) {
+    const students = await readHabitualStudentIds(tx, session);
+    for (const id of students) profileIds.add(id);
+    bookings.push({ session, students });
+  }
+  if (profileIds.size) {
+    await tx.execute(sql`
+      select id from student_profiles
+      where id in (${sql.join([...profileIds], sql`, `)})
+      order by id for key share
+    `);
+  }
+  let reserved = 0;
+  const conflicts = [];
+  for (const { session, students } of bookings) {
+    const result = await reserveHabitualSeats(tx, session, students);
+    reserved += result.reserved;
+    if (result.capacityConflict) conflicts.push(session.classSessionId);
+  }
+  return { reserved, conflicts };
 }
 
 /** @param {QueryExecutor} tx @param {{ templateId: string, localDate: string, now: Date, maxClassCapacity: number }} candidate */
@@ -92,7 +137,6 @@ export async function findExistingHabitualCapacityConflict(tx, candidate) {
     select id, max_capacity from class_sessions
     where template_id = ${candidate.templateId} and local_date = ${candidate.localDate}
       and status = 'SCHEDULED' and starts_at_utc >= ${candidate.now}
-    for update
   `);
   const [existing] = /** @type {{ id: string, max_capacity: number }[]} */ (result.rows);
   if (!existing) return null;

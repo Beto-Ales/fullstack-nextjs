@@ -193,6 +193,19 @@ describe("login budgets and sessions (PostgreSQL)", () => {
     }
   });
 
+  it("rejects a residual session of a disabled account without deleting it", async () => {
+    const userId = await seedUser();
+    const { sessionToken } = await auth.authenticateUser(credentials);
+    await client.query("update users set status = 'DISABLED', deactivated_at = clock_timestamp() where id = $1", [userId]);
+    const readSessions = () => client.query("select * from sessions where user_id = $1", [userId]);
+    const before = await readSessions();
+    expect(before.rowCount).toBe(1);
+    await expect(auth.getAuthenticatedUserFromSessionToken(sessionToken)).resolves.toBeNull();
+    expect((await readSessions()).rows).toEqual(before.rows);
+    await auth.revokeSession(sessionToken);
+    expect((await readSessions()).rowCount).toBe(0);
+  });
+
   it("refuses to issue a session after waiting for a concurrent account deactivation to commit", async () => {
     const userId = await seedUser();
     const gate = await createVerifiedTestClient();

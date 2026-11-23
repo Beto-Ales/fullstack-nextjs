@@ -4,7 +4,7 @@ import { Client } from "pg";
 import { randomUUID } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
 import {
-  findExistingHabitualCapacityConflict, lockTemplateAssignments, reserveGeneratedSessionHabitualSeats,
+  findExistingHabitualCapacityConflict, lockExistingGeneratedSessions, lockTemplatesInOrder, reserveGeneratedSessionHabitualSeats,
 } from "../src/infrastructure/db/habitual-reservations.mjs";
 
 const CENTER_TIME_ZONE = "Europe/Copenhagen";
@@ -126,50 +126,49 @@ async function main() {
 
     let inserted = 0;
     let skipped = 0;
-    let habitualReservations = 0;
     const habitualCapacityConflicts = [];
+    const newSessions = [];
+    const candidates = templates.flatMap((template) => buildCandidates(template, now, horizonEnd));
+    await lockTemplatesInOrder(tx, new Set(candidates.map(({ templateId }) => templateId)));
+    await lockExistingGeneratedSessions(tx, candidates);
 
-    for (const template of templates) {
-      await lockTemplateAssignments(tx, template.id);
-      const candidates = buildCandidates(template, now, horizonEnd);
-      for (const candidate of candidates) {
-        const classSessionId = randomUUID();
-        const capacity = Math.min(candidate.maxCapacity, regulation.max_class_capacity);
-        const result = await client.query(
-          `
-            insert into class_sessions (
-              id, template_id, local_date, starts_at_utc, ends_at_utc, status, max_capacity,
-              is_manually_edited, regulation_version_id, created_at, updated_at
-            )
-            values ($1, $2, $3, $4, $5, 'SCHEDULED', $6, false, $7, now(), now())
-            on conflict do nothing
-          `,
-          [
-            classSessionId, candidate.templateId, candidate.localDate, candidate.startsAtUtc, candidate.endsAtUtc,
-            capacity, regulation.id,
-          ],
-        );
-        if (result.rowCount > 0) {
-          inserted += 1;
-          if (Date.parse(candidate.startsAtUtc) >= now.toMillis()) {
-            const seats = await reserveGeneratedSessionHabitualSeats(tx, {
-              classSessionId, templateId: template.id, localDate: candidate.localDate,
-              capacity, regulationVersionId: regulation.id,
-            });
-            habitualReservations += seats.reserved;
-            if (seats.capacityConflict) habitualCapacityConflicts.push(classSessionId);
-          }
-        } else {
-          skipped += 1;
-          const conflict = await findExistingHabitualCapacityConflict(tx, {
-            templateId: template.id, localDate: candidate.localDate, now: now.toJSDate(),
-            maxClassCapacity: regulation.max_class_capacity,
+    for (const candidate of candidates) {
+      const classSessionId = randomUUID();
+      const capacity = Math.min(candidate.maxCapacity, regulation.max_class_capacity);
+      const result = await client.query(
+        `
+          insert into class_sessions (
+            id, template_id, local_date, starts_at_utc, ends_at_utc, status, max_capacity,
+            is_manually_edited, regulation_version_id, created_at, updated_at
+          )
+          values ($1, $2, $3, $4, $5, 'SCHEDULED', $6, false, $7, now(), now())
+          on conflict do nothing
+        `,
+        [
+          classSessionId, candidate.templateId, candidate.localDate, candidate.startsAtUtc, candidate.endsAtUtc,
+          capacity, regulation.id,
+        ],
+      );
+      if (result.rowCount > 0) {
+        inserted += 1;
+        if (Date.parse(candidate.startsAtUtc) >= now.toMillis()) {
+          newSessions.push({
+            classSessionId, templateId: candidate.templateId, localDate: candidate.localDate,
+            capacity, regulationVersionId: regulation.id,
           });
-          if (conflict) habitualCapacityConflicts.push(conflict);
         }
+      } else {
+        skipped += 1;
+        const conflict = await findExistingHabitualCapacityConflict(tx, {
+          templateId: candidate.templateId, localDate: candidate.localDate, now: now.toJSDate(),
+          maxClassCapacity: regulation.max_class_capacity,
+        });
+        if (conflict) habitualCapacityConflicts.push(conflict);
       }
     }
 
+    const { reserved: habitualReservations, conflicts } = await reserveGeneratedSessionHabitualSeats(tx, newSessions);
+    habitualCapacityConflicts.push(...conflicts);
     await client.query("commit");
     console.log(`Class sessions generation complete. Inserted=${inserted}, skipped=${skipped}, habitualReservations=${habitualReservations}, horizonEnd=${horizonEnd.toISO()}`);
     if (habitualCapacityConflicts.length) {

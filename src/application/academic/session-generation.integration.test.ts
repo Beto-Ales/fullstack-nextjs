@@ -177,4 +177,76 @@ describe("session generation (postgres)", () => {
       student_profile_id: student, origin: "ORDINARY", status: "CONFIRMED", regulation_version_id: versionId,
     }]);
   });
+
+  it("locks the later template before taking a profile reference for the first template", async () => {
+    const student = await createStudent();
+    await assign(student);
+    const laterTemplate = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+    await client.query(`insert into class_templates
+      (id, name, iso_weekday, starts_at_local_time, duration_minutes, effective_from, effective_to, max_capacity)
+      select $1, name, iso_weekday, starts_at_local_time, duration_minutes, effective_from, effective_to, max_capacity
+      from class_templates where id = $2`, [laterTemplate, templateId]);
+    const { assignmentId } = await service.assignStudentToTemplate(admin, {
+      templateId: laterTemplate, studentProfileId: student, effectiveFrom: date,
+    });
+
+    const blocker = await createVerifiedTestClient();
+    try {
+      await blocker.query("begin");
+      await blocker.query("select pg_advisory_xact_lock(903000044, hashtext($1))", [laterTemplate]);
+      const generation = generate("cli-date").then(() => null, (error: unknown) => error);
+      try {
+        const { rows: [owner] } = await blocker.query("select pg_backend_pid() as pid");
+        await expect.poll(async () => {
+          const { rowCount } = await client.query(`select 1 from pg_stat_activity
+            where $1 = any(pg_blocking_pids(pid)) and query like '%pg_advisory_xact_lock%'`, [owner.pid]);
+          return rowCount;
+        }, { timeout: 5000 }).toBe(1);
+        // This is the next lock an assignment ending on the later template would take.
+        await blocker.query("set local lock_timeout = '3s'");
+        await blocker.query("select id from student_profiles where id = $1 for update", [student]);
+      } finally {
+        await blocker.query("rollback");
+        expect(await generation).toBeNull();
+      }
+      const [created] = await sessions();
+      expect(await reservations(created.id)).toEqual([expect.objectContaining({ student_profile_id: student })]);
+
+      await blocker.query("begin");
+      const { rows: [{ pid }] } = await blocker.query("select pg_backend_pid() as pid");
+      await blocker.query("select id from student_profiles where id = $1 for update", [student]);
+      const ending = service.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: date })
+        .then(() => null, (error: unknown) => error);
+      let regeneration: Promise<unknown> | undefined;
+      try {
+        let endingPid: number;
+        await expect.poll(async () => {
+          const { rows } = await client.query(`select pid from pg_stat_activity
+            where $1 = any(pg_blocking_pids(pid)) and query like '%from student_profiles%for update%'`, [pid]);
+          endingPid = rows[0]?.pid;
+          return rows.length;
+        }).toBe(1);
+        regeneration = generate("cli-date").then(() => null, (error: unknown) => error);
+        await expect.poll(async () => (await client.query(`select pid from pg_stat_activity
+          where $1 = any(pg_blocking_pids(pid)) and query like '%pg_advisory_xact_lock%'`, [endingPid])).rowCount).toBe(1);
+      } finally {
+        await blocker.query("rollback");
+        expect(await ending).toBeNull();
+        if (regeneration) expect(await regeneration).toBeNull();
+      }
+
+      await client.query("delete from class_sessions where template_id in ($1, $2)", [templateId, laterTemplate]);
+      await client.query(`alter table class_sessions add constraint h09_generation_failure
+        check (template_id <> 'ffffffff-ffff-ffff-ffff-ffffffffffff') not valid`);
+      try {
+        await expect(generate("cli-date")).rejects.toThrow("Failed to generate class sessions");
+        expect(await sessions()).toEqual([]);
+        expect((await client.query("select id from class_sessions where template_id = $1", [laterTemplate])).rows).toEqual([]);
+      } finally {
+        await client.query("alter table class_sessions drop constraint h09_generation_failure");
+      }
+    } finally {
+      await blocker.end();
+    }
+  });
 });

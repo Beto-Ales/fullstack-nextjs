@@ -366,6 +366,14 @@ npm.cmd run test:e2e -- --workers=1
 - El ensayo valida el formato personalizado, SHA-256, contenido del TOC y restauración completa. Rechaza el archivo truncado, un destino persistente, un destino de restauración ya ocupado, la deriva de catálogo y una configuración de arranque incompatible. La inspección de DEV y TEST persistente solo accede a identidad, catálogo y journal. [Inventario y procedimiento](postgres-upgrade-recovery.md)
 - Pasaron los cuatro ensayos de H07 y la verificación completa con 310 pruebas Vitest, 43 escenarios Chromium y uno adicional con normativa sintética. También pasaron TypeScript, ESLint y `drizzle-kit check`.
 
+### Incremento 10.9 — Conciliación transaccional y lecturas de créditos
+
+- La reproducción dirigida bloqueó la segunda plantilla desde una conexión independiente y observó al CLI esperando mediante `pg_blocking_pids`. En la versión anterior, al pedir el perfil desde esa conexión PostgreSQL abortó el CLI mientras esperaba el bloqueo asesor. Una segunda reproducción con las mismas operaciones SQL capturó `40P01`. Con el orden nuevo, la conexión pudo tomar el perfil y el CLI terminó tras liberarlo. La prueba también cruza el fin real de la asignación con el CLI y fuerza un fallo en otra plantilla para verificar el rollback del comando completo.
+- Las integraciones comprueban el acortamiento con fecha final inclusiva, la ampliación con asistencia, el alta retroactiva con ausencia, el rollback de la asignación si falla el ledger y la conservación de decisiones previas. Otras pruebas observan esperas entre dos asignaciones, el alta y una cancelación global o reprogramación, y el fin frente a la baja o a un ajuste vinculado.
+- Las consultas de saldo y disponibilidad se ejecutan en PostgreSQL en modo de solo lectura. Las pruebas comparan el ledger antes y después de lecturas repetidas, incluida la navegación de alumno y administrador en Chromium. El ensayo de pendientes anteriores llama dos veces al conciliador en una transacción sintética y la revierte. Luego comprueba que una reserva real consume el crédito concedido y que su reenvío conserva el movimiento inicial.
+- La verificación cubre los escenarios de espera reproducidos. El CLI conserva hasta el commit los bloqueos sobre las plantillas de su ejecución. La regularización histórica requiere autorización expresa. [Inventario y procedimiento](academic-model.md#inventario-de-solicitudes-anteriores-a-h09)
+- `npm run test:verify` pasó 322 pruebas Vitest, 43 escenarios Chromium y un escenario Chromium adicional con normativa sintética, en instancias PostgreSQL 15 desechables de H08. Pasaron TypeScript, ESLint y `drizzle-kit check`. El journal sigue en `0014`.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

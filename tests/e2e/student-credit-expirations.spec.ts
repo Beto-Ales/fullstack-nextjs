@@ -83,6 +83,10 @@ test("shows only available credit expirations and updates them on recovery and r
           expiredSession, expiredReservation, expiredGrant],
       );
 
+      const readLedger = async () => (await student.client.query(
+        "select * from credit_ledger_movements where student_profile_id = $1 order by id", [scenario.profileId],
+      )).rows;
+      const originalLedger = await readLedger();
       await page.reload();
       const items = expirations.getByRole("listitem");
       const expirationInstants = () => expirations.locator("time")
@@ -96,6 +100,22 @@ test("shows only available credit expirations and updates them on recovery and r
       await expect(items.nth(2)).toHaveText("1 crédito · Sin vencimiento");
       await expect(page.getByText("Disponibles: 4", { exact: true })).toBeVisible();
       await expect(page.getByText("Caducados: 1", { exact: true })).toBeVisible();
+      expect(await readLedger()).toEqual(originalLedger);
+      await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+        const adminPage = await page.context().browser()!.newPage();
+        try {
+          await adminPage.goto(new URL("/login", page.url()).href);
+          await adminPage.getByLabel("Email").fill(admin.email);
+          await adminPage.getByLabel("Contraseña").fill(admin.password);
+          await adminPage.getByRole("button", { name: "Iniciar sesión" }).click();
+          await expect(adminPage).toHaveURL(/\/admin$/);
+          await adminPage.goto(new URL(`/admin?studentProfileId=${scenario.profileId}`, page.url()).href);
+          await expect(adminPage.getByText("Caducados: 1", { exact: true })).toBeVisible();
+          expect(await readLedger()).toEqual(originalLedger);
+        } finally {
+          await adminPage.close();
+        }
+      });
 
       const options = page.getByRole("region", { name: "Clases futuras disponibles" });
       await options.getByRole("listitem").filter({ hasText: scenario.recoveryDate })

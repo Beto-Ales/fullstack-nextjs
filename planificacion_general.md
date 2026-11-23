@@ -73,6 +73,8 @@ El incremento 10.7 corrige H05. PostgreSQL reserva en una sola transacción las 
 
 El incremento 10.8 prepara H07. El ensayo lleva los esquemas 0005 y 0006 hasta 0014 con datos sintéticos y comprueba la recuperación de una copia en un contenedor nuevo. La inspección de los entornos persistentes fue de solo lectura. La actualización real y la publicación de normativa requieren decisiones y autorizaciones independientes. [Inventario y procedimiento](docs/postgres-upgrade-recovery.md)
 
+El incremento 10.9 aborda H09. La generación y las asignaciones habituales ordenan los bloqueos por plantilla, sesión y perfil. Las asignaciones concilian sus solicitudes pendientes en la misma transacción. Los paneles y las consultas de recuperación usan el ledger y su proyección FIFO en modo de solo lectura. La regularización de candidatos históricos requiere una autorización independiente. [Orden de bloqueos](docs/architecture.md#orden-global-de-bloqueo-concurrencia) · [Inventario de pendientes](docs/academic-model.md#inventario-de-solicitudes-anteriores-a-h09)
+
 Fase 11 — Preparación para producción
 
 Variables de entorno, migraciones, configuración de despliegue, backups y documentación.

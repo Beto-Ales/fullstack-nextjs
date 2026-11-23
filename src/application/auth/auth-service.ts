@@ -87,11 +87,7 @@ export async function authenticateUser(input: AuthenticateInput): Promise<{
 export async function getAuthenticatedUserFromSessionToken(sessionToken: string) {
   const tokenHash = hashSessionToken(sessionToken);
   const session = await findValidSessionByTokenHash(tokenHash);
-  if (!session) {
-    return null;
-  }
-  if (session.status !== "ACTIVE") {
-    await deleteSessionByTokenHash(tokenHash);
+  if (!session || session.status !== "ACTIVE") {
     return null;
   }
   return {

@@ -232,6 +232,42 @@ La igualdad con el inicio cierra la admisión. Una sesión que sigue `SCHEDULED`
 - La cancelación conserva su instante, clasificación y versión de solicitud. `sequence_pending` distingue una evaluación pendiente. Las operaciones que resuelven clases anteriores vuelven a evaluar la secuencia. Dentro del mes natural de la solicitud, una solicitud posterior con posibilidad de crédito espera a las solicitudes anteriores pendientes de ese mes. El orden de asignación usa instante de solicitud e identificador de cancelación. `credit_resolution` registra una concesión, un cupo mensual agotado o la falta de elegibilidad.
 - El cupo mensual se calcula por el mes de solicitud. Un crédito existe y queda disponible cuando se inserta su movimiento. Su caducidad individual se cuenta desde la concesión efectiva con el plazo de la versión de solicitud. El bloqueo por perfil y la clave única de la cancelación garantizan un solo movimiento. Los créditos del 9.10 referencian la sesión a través de la cancelación, por lo que resolver otro crédito del mismo alumno evita bloquear una sesión ajena mediante una referencia redundante.
 - El panel del alumno muestra el máximo normativo, la racha cuando se conoce y las solicitudes pendientes. La cronología puede cambiar al reprogramar una sesión para decisiones futuras. Las decisiones consolidadas y el ledger conservan sus datos originales. [Cobertura del 9.10](testing.md#incremento-910--racha-y-créditos-pendientes)
+- Crear, acortar o ampliar una asignación habitual ejecuta el conciliador del 9.10 después de cambiar la vigencia y dentro de la misma transacción. El último día es inclusivo. Una reserva confirmada sin resultado puede salir de la secuencia al acortar la vigencia. Una asistencia o ausencia registrada puede entrar al ampliar o crear una vigencia retroactiva. La habitualidad de las cancelaciones registradas conserva su valor original.
+- El saldo consultado excluye créditos vencidos y solicitudes pendientes. El total caducado incluye una proyección FIFO de los vencimientos aún pendientes de materializar. El historial muestra movimientos persistidos. Las recuperaciones nuevas y los ajustes manuales revalidan los créditos bajo el bloqueo del perfil.
+
+### Inventario de solicitudes anteriores a H09
+
+El inventario devuelve identificadores internos para un informe de acceso administrativo. Los candidatos pueden seguir esperando un resultado académico. Su resolución se determina con el conciliador del 9.10.
+
+```sql
+BEGIN READ ONLY;
+SELECT c.student_profile_id, c.id AS cancellation_id,
+       CASE
+         WHEN c.credit_resolution IS NOT NULL OR EXISTS (
+           SELECT 1 FROM credit_ledger_movements m
+           WHERE m.source_cancellation_id = c.id
+             AND m.movement_type = 'AUTO_CANCELLATION_GRANT'
+         ) THEN 'contradiccion_consolidada'
+         WHEN a.max_eligible_consecutive_cancellations IS NULL
+           OR NOT c.is_habitual_reservation OR r.origin <> 'ORDINARY'
+           OR r.status <> 'CANCELLED'
+           OR (c.decision_source IS DISTINCT FROM 'STUDENT_REQUEST'
+             AND (c.decision_source IS NOT NULL
+               OR coalesce(c.cancelled_by_user_id, r.cancelled_by_user_id)
+                    IS DISTINCT FROM p.user_id))
+           THEN 'revisar_origen_o_normativa'
+         ELSE 'candidato'
+       END AS estado
+FROM reservation_cancellations c
+JOIN class_reservations r ON r.id = c.reservation_id
+JOIN student_profiles p ON p.id = c.student_profile_id
+LEFT JOIN academic_regulations a ON a.id = c.regulation_version_id
+WHERE c.sequence_pending
+ORDER BY c.student_profile_id, c.cancelled_at, c.id;
+COMMIT;
+```
+
+Una regularización posterior requiere autorización expresa y una lista aprobada de alumnos. Ensayar primero con datos sintéticos en H08. En una eventual ejecución autorizada, registrar el operador y el resultado por alumno. Dentro de cada transacción, tomar el perfil `FOR UPDATE`, volver a comprobar los candidatos y llamar al conciliador existente para preservar la prioridad mensual. Informar las contradicciones para revisión. La repetición solo puede procesar solicitudes que sigan legítimamente pendientes.
 
 ### Vigencia de la regla corregida
 

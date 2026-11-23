@@ -189,8 +189,9 @@ describe("admin student profile (postgres)", () => {
       { reservationId: attended.reservationId, attendanceOutcome: "ATTENDED" },
     ]);
     const refreshed = await getProfile(admin, studentProfileId);
-    expect(refreshed?.credits.pendingExpirationUnits).toBe(0);
-    expect(refreshed?.movements.items.filter(({ movementType }) => movementType === "EXPIRATION")).toHaveLength(1);
+    expect(refreshed?.credits.pendingExpirationUnits).toBe(1);
+    expect(refreshed?.movements.items.filter(({ movementType }) => movementType === "EXPIRATION")).toHaveLength(0);
+    expect(await client.query("select id from credit_ledger_movements order by id")).toEqual(ledgerBefore);
   });
 
   it("paginates ledger movements independently from recovery reservations with linked consumption", async () => {

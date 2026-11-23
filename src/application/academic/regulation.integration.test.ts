@@ -305,8 +305,11 @@ describe("academic regulation (postgres)", () => {
     const expired = await creditService.getCreditOverview(student);
     expect(expired.history).toMatchObject([
       { movementType: "AUTO_CANCELLATION_GRANT", regulationVersionId: version.id },
-      { movementType: "EXPIRATION", regulationVersionId: version.id },
     ]);
+    expect(expired.history).toHaveLength(1);
+    expect(expired).toMatchObject({ availableCredits: 0, expiredCredits: 1, pendingExpirationUnits: 1 });
+    expect((await client.query("select movement_type from credit_ledger_movements")).rows)
+      .toEqual([{ movement_type: "AUTO_CANCELLATION_GRANT" }]);
     expect(await regulationService.resolveAcademicRegulation(db, "2030-04-01")).toMatchObject({ id: "initial" });
   });
 
@@ -489,5 +492,230 @@ describe("academic regulation (postgres)", () => {
     expect((await creditService.getCreditOverview(student)).history).toMatchObject([{
       classSessionId: target.classSessionId, createdAt: new Date("2030-04-16T10:00:00Z"), regulationVersionId: version.id,
     }]);
+  });
+
+  async function pendingAssignmentCredit() {
+    const version = await regulationService.publishAcademicRegulation(admin, {
+      ...INITIAL_REGULATION, effectiveFrom: "2030-04-02", maxEligibleConsecutiveCancellations: 3,
+    });
+    vi.setSystemTime(new Date("2030-04-02T10:00:00Z"));
+    const templateId = await createHabitualTemplate();
+    const { rows: [assignment] } = await client.query(
+      "select id from student_template_assignments where template_id = $1", [templateId],
+    );
+    await habitualReservation(templateId, "2030-04-12");
+    const target = await habitualReservation(templateId, "2030-04-20");
+    const cancelled = await academicService.cancelReservation(student, target);
+    if (!("cancellationId" in cancelled)) throw new Error("Expected an ordinary cancellation");
+    const { cancellationId } = cancelled;
+    const request = async () => (await client.query(
+      "select * from reservation_cancellations where id = $1", [cancellationId],
+    )).rows[0];
+    const movements = async () => (await client.query(
+      "select * from credit_ledger_movements where source_cancellation_id = $1", [cancellationId],
+    )).rows;
+    expect(await request()).toMatchObject({ sequence_pending: true, credit_resolution: null });
+    return { assignmentId: assignment.id as string, version, templateId, target, request, movements };
+  }
+
+  it("settles on assignment end, respects the inclusive day and preserves a consolidated grant on replay", async () => {
+    const { assignmentId, version, request, movements } = await pendingAssignmentCredit();
+    await academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-04-12" });
+    expect(await request()).toMatchObject({ sequence_pending: true });
+    const grantedAt = new Date("2030-05-03T10:00:00Z");
+    vi.setSystemTime(grantedAt);
+    await academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-04-11" });
+    const settled = await request();
+    expect(settled).toMatchObject({ sequence_pending: false, credit_resolution: "GRANTED",
+      cancelled_at: new Date("2030-04-02T10:00:00Z"), regulation_version_id: version.id });
+    const ledger = await movements();
+    expect(ledger).toMatchObject([{ created_at: grantedAt, class_session_id: null, regulation_version_id: version.id }]);
+    await academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-04-12" });
+    expect(await request()).toEqual(settled);
+    expect(await movements()).toEqual(ledger);
+  });
+
+  it("rolls back the assignment and cancellation when the automatic grant fails", async () => {
+    const { assignmentId, request, movements } = await pendingAssignmentCredit();
+    const original = await request();
+    await client.query(`create function h09_reject_grant() returns trigger language plpgsql as $$
+      begin raise exception 'H09 synthetic grant failure'; end; $$;
+      create trigger h09_reject_grant before insert on credit_ledger_movements
+      for each row execute function h09_reject_grant()`);
+    try {
+      await expect(academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-04-11" }))
+        .rejects.toMatchObject({ cause: { message: "H09 synthetic grant failure" } });
+      const { rows } = await client.query(
+        "select effective_to, status from student_template_assignments where id = $1", [assignmentId],
+      );
+      expect(rows).toEqual([{ effective_to: null, status: "ACTIVE" }]);
+      expect(await request()).toEqual(original);
+      expect(await movements()).toEqual([]);
+    } finally {
+      await client.query("drop trigger h09_reject_grant on credit_ledger_movements; drop function h09_reject_grant()");
+    }
+    await academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-04-11" });
+    expect(await movements()).toHaveLength(1);
+  });
+
+  it.each(["PRESENT", "ABSENT"] as const)("settles when a retroactive assignment includes %s", async (outcome) => {
+    const { request, movements } = await pendingAssignmentCredit();
+    const { templateId } = await academicService.createClassTemplate(admin, {
+      name: "Retroactive", isoWeekday: 2, startsAtLocalTime: "18:00", durationMinutes: 60, effectiveFrom: "2030-03-01",
+    });
+    const attended = await habitualReservation(templateId, "2030-04-15");
+    vi.setSystemTime(new Date("2030-04-16T10:00:00Z"));
+    await academicService.recordAttendance(admin, { ...attended, outcome });
+    expect(await request()).toMatchObject({ sequence_pending: true });
+    const assignment = { templateId, studentProfileId: profileId, effectiveFrom: "2030-04-14" };
+    if (outcome === "PRESENT") {
+      const { assignmentId } = await academicService.assignStudentToTemplate(admin, { ...assignment, effectiveTo: "2030-04-14" });
+      await academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-04-15" });
+    } else {
+      await academicService.assignStudentToTemplate(admin, { ...assignment, effectiveTo: "2030-04-15" });
+    }
+    expect(await request()).toMatchObject({ sequence_pending: false, credit_resolution: "GRANTED" });
+    expect(await movements()).toHaveLength(1);
+  });
+
+  it("serializes competing assignment updates on the same profile and grants once", async () => {
+    const { assignmentId, request, movements } = await pendingAssignmentCredit();
+    const { templateId } = await academicService.createClassTemplate(admin, {
+      name: "Second course", isoWeekday: 3, startsAtLocalTime: "18:00", durationMinutes: 60, effectiveFrom: "2030-03-01",
+    });
+    const { assignmentId: other } = await academicService.assignStudentToTemplate(admin, {
+      templateId, studentProfileId: profileId, effectiveFrom: "2030-04-01",
+    });
+    const blocker = await createVerifiedTestClient();
+    const operations: Promise<unknown>[] = [];
+    try {
+      await blocker.query("begin");
+      const { rows: [holder] } = await blocker.query("select pg_backend_pid() as pid");
+      await blocker.query("select id from student_profiles where id = $1 for update", [profileId]);
+      for (const id of [assignmentId, other]) {
+        operations.push(academicService.endStudentTemplateAssignment(admin, { assignmentId: id, effectiveTo: "2030-04-11" })
+          .then(() => null, (error: unknown) => error));
+      }
+      await expect.poll(async () => (await client.query(`select 1 from pg_stat_activity
+        where wait_event_type = 'Lock' and query like '%from student_profiles%for update%'
+          and (cardinality(pg_blocking_pids(pid)) > 0) and pid <> $1`, [holder.pid])).rowCount, { timeout: 5000 }).toBe(2);
+    } finally {
+      await blocker.query("rollback");
+      await blocker.end();
+      expect(await Promise.all(operations)).toEqual([null, null]);
+    }
+    expect(await request()).toMatchObject({ credit_resolution: "GRANTED" });
+    expect(await movements()).toHaveLength(1);
+  });
+
+  it.each(["global cancellation", "rescheduling"] as const)(
+    "takes the profile after the session when assignment creation competes with %s", async (operation) => {
+      const { templateId } = await pendingAssignmentCredit();
+      const { classSessionId } = await habitualReservation(templateId, "2030-04-22");
+      const gate = await createVerifiedTestClient();
+      const operations: Promise<unknown>[] = [];
+      try {
+        await gate.query("begin");
+        const { rows: [{ pid }] } = await gate.query("select pg_backend_pid() as pid");
+        await gate.query("select id from student_profiles where id = $1 for update", [profileId]);
+        const mutation = operation === "global cancellation"
+          ? academicService.cancelClassSession(admin, { classSessionId, reason: "H09 synthetic cancellation" })
+          : academicService.updateClassSession(admin, { classSessionId,
+            startsAtUtc: new Date("2030-04-23T16:00:00Z"), endsAtUtc: new Date("2030-04-23T17:00:00Z") });
+        operations.push(mutation.then(() => null, (error: unknown) => error));
+        let mutationPid: number;
+        await expect.poll(async () => {
+          const { rows } = await client.query("select pid from pg_stat_activity where $1 = any(pg_blocking_pids(pid))", [pid]);
+          mutationPid = rows[0]?.pid;
+          return rows.length;
+        }).toBe(1);
+        operations.push(academicService.assignStudentToTemplate(admin, {
+          templateId, studentProfileId: profileId, effectiveFrom: "2030-04-22", effectiveTo: "2030-04-23",
+        }).then(() => null, (error: unknown) => error));
+        await expect.poll(async () => (await client.query(
+          "select pid from pg_stat_activity where $1 = any(pg_blocking_pids(pid))", [mutationPid],
+        )).rowCount).toBe(1);
+      } finally {
+        await gate.query("rollback");
+        await gate.end();
+        expect(await Promise.all(operations)).toEqual([null, null]);
+      }
+    },
+  );
+
+  it.each(["withdrawal", "linked manual adjustment"] as const)("serializes an assignment end with %s", async (operation) => {
+    const { withdrawStudent } = await import("./student-withdrawal");
+    const { assignmentId, movements, target } = await pendingAssignmentCredit();
+    const gate = await createVerifiedTestClient();
+    const operations: Promise<unknown>[] = [];
+    try {
+      await gate.query("begin");
+      const { rows: [{ pid }] } = await gate.query("select pg_backend_pid() as pid");
+      await gate.query("select id from student_profiles where id = $1 for update", [profileId]);
+      operations.push(academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-04-11" })
+        .then(() => null, (error: unknown) => error));
+      let endingPid: number;
+      await expect.poll(async () => {
+        const { rows } = await client.query("select pid from pg_stat_activity where $1 = any(pg_blocking_pids(pid))", [pid]);
+        endingPid = rows[0]?.pid;
+        return rows.length;
+      }).toBe(1);
+      const competitor = operation === "withdrawal"
+        ? withdrawStudent(admin, { studentProfileId: profileId })
+        : creditService.grantManualCredits(admin, { requestId: randomUUID(), studentProfileId: profileId,
+          classSessionId: target.classSessionId, amount: 1, reason: "H09 synthetic linked grant" });
+      operations.push(competitor.then(() => null, (error: unknown) => error));
+      await expect.poll(async () => (await client.query(
+        "select pid from pg_stat_activity where $1 = any(pg_blocking_pids(pid))", [endingPid],
+      )).rowCount).toBe(1);
+    } finally {
+      await gate.query("rollback");
+      await gate.end();
+      expect(await Promise.all(operations)).toEqual([null, null]);
+    }
+    expect(await movements()).toHaveLength(1);
+  });
+
+  it("projects expiration and leaves a resolvable old request untouched until a recovery mutation", async () => {
+    const { assignmentId, request, movements } = await pendingAssignmentCredit();
+    // Recreate the persistent state left by the former assignment-ending path.
+    await client.query("update student_template_assignments set effective_to = '2030-04-11', status = 'ENDED' where id = $1", [assignmentId]);
+    const oldRequest = await request();
+    const expiredId = randomUUID();
+    await client.query(`insert into credit_ledger_movements
+      (id, student_profile_id, movement_type, amount, created_at, expires_at, source_grant_movement_id, idempotency_key)
+      values ($1, $2, 'AUTO_CANCELLATION_GRANT', 1, '2030-01-01', '2030-04-01', $1, $1)`, [expiredId, profileId]);
+    const classSessionId = await createSession("2030-04-21");
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (const [actor, input] of [[student, undefined], [admin, { studentProfileId: profileId }]] as const) {
+        const overview = await creditService.getCreditOverview(actor, input);
+        expect(overview).toMatchObject({ availableCredits: 0, expiredCredits: 1, pendingExpirationUnits: 1 });
+        expect(overview.history.map(({ id }) => id)).toEqual([expiredId]);
+      }
+      await expect(recoveryService.getRecoveryAvailabilityForSession(student, classSessionId))
+        .resolves.toMatchObject({ availableCredits: 0 });
+      await expect(recoveryService.listFutureRecoveryOptions(student)).resolves.toMatchObject({
+        sessions: expect.arrayContaining([expect.objectContaining({ id: classSessionId })]),
+      });
+    }
+    expect(await request()).toEqual(oldRequest);
+    expect((await client.query("select id from credit_ledger_movements")).rows).toEqual([{ id: expiredId }]);
+    await expect(db.transaction(async (tx) => {
+      await creditService.lockStudentProfile(tx, profileId);
+      expect([...await creditService.resolvePendingCancellationCredits(tx, profileId)].map(([, result]) => result.created))
+        .toEqual([true]);
+      expect((await creditService.resolvePendingCancellationCredits(tx, profileId)).size).toBe(0);
+      tx.rollback();
+    })).rejects.toThrow("Rollback");
+    expect(await request()).toEqual(oldRequest);
+    expect(await movements()).toEqual([]);
+    const booking = await recoveryService.reserveRecovery(student, { classSessionId });
+    const [grant] = await movements();
+    expect(booking.consumedFromGrantMovementId).toBe(grant.id);
+    await expect(recoveryService.reserveRecovery(student, { classSessionId }))
+      .resolves.toMatchObject({ consumedMovementId: booking.consumedMovementId, idempotent: true });
+    expect(await movements()).toHaveLength(1);
+    expect((await client.query("select movement_type from credit_ledger_movements where source_movement_id = $1", [expiredId])).rows)
+      .toEqual([{ movement_type: "EXPIRATION" }]);
   });
 });

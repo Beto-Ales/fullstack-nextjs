@@ -9,7 +9,8 @@ import { assertNoActiveAttendance } from "@/src/application/academic/attendance-
 import { resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import { canAdmitNewReservation } from "@/src/application/academic/reservation-admission";
 import { requireActiveStudentForBooking, requireActiveStudentForCancellation } from "@/src/application/auth/active-student";
-import { createRecoveryConsumption, createRecoveryRefund, lockStudentProfile, materializeExpiredCredits, readCreditBalance } from "@/src/application/credits/credit-service";
+import { createRecoveryConsumption, createRecoveryRefund, lockStudentProfile, materializeExpiredCredits, readCreditBalance,
+  resolvePendingCancellationCredits } from "@/src/application/credits/credit-service";
 import { cancelRecoverySchema, recoveryHistorySchema, recoveryOptionsCursorSchema, reserveRecoverySchema } from "@/src/application/recovery/schemas";
 import { type UserRole } from "@/src/domain/auth/roles";
 import { classifyCancellationTiming } from "@/src/domain/academic/cancellation-rules";
@@ -170,10 +171,8 @@ export async function listFutureRecoveryOptions(actor: Actor, cursorInput?: unkn
 
   return db.transaction(async (tx) => {
     const studentProfileId = await getStudentProfileIdForActor(tx, actor);
-    await lockStudentProfile(tx, studentProfileId);
     const now = new Date();
     const regulation = await resolveCurrentAcademicRegulation(tx, now);
-    await materializeExpiredCredits(tx, studentProfileId, now);
 
     const { rows } = await tx.execute<{
       id: string;
@@ -252,7 +251,7 @@ export async function listFutureRecoveryOptions(actor: Actor, cursorInput?: unkn
         };
       }),
     };
-  });
+  }, { isolationLevel: "repeatable read", accessMode: "read only" });
 }
 
 export async function reserveRecovery(actor: Actor, input: unknown, studentProfileIdForAdmin?: string) {
@@ -288,8 +287,6 @@ export async function reserveRecovery(actor: Actor, input: unknown, studentProfi
     }
 
     await lockStudentProfile(tx, studentProfileId);
-    const consumedAt = new Date();
-    await materializeExpiredCredits(tx, studentProfileId, consumedAt);
 
     const [existingReservation] = await tx
       .select({
@@ -344,6 +341,8 @@ export async function reserveRecovery(actor: Actor, input: unknown, studentProfi
       };
     }
 
+    await resolvePendingCancellationCredits(tx, studentProfileId);
+    const consumedAt = new Date();
     const regulation = await resolveCurrentAcademicRegulation(tx, consumedAt);
     const monthlyRecoveries = await countMonthlyRecoveries(tx, studentProfileId, session.local_date);
     if (monthlyRecoveries >= regulation.monthlyRecoveries) {
@@ -361,6 +360,7 @@ export async function reserveRecovery(actor: Actor, input: unknown, studentProfi
       throw new ApplicationError("No spots available.", "no_spots_available", 409, true);
     }
 
+    await materializeExpiredCredits(tx, studentProfileId, consumedAt);
     const reservationId = randomUUID();
     if (!await canAdmitNewReservation(tx, payload.classSessionId)) {
       throw new ApplicationError("La sesión de recuperación ya ha comenzado.", "session_not_future", 409, true);
@@ -623,10 +623,8 @@ export async function getRecoveryAvailabilityForSession(actor: Actor, classSessi
 
   return db.transaction(async (tx) => {
     const studentProfileId = await getStudentProfileIdForActor(tx, actor);
-    await lockStudentProfile(tx, studentProfileId);
     const now = new Date();
     const regulation = await resolveCurrentAcademicRegulation(tx, now);
-    await materializeExpiredCredits(tx, studentProfileId, now);
 
     const [session] = await tx
       .select({
@@ -684,6 +682,6 @@ export async function getRecoveryAvailabilityForSession(actor: Actor, classSessi
       monthlyRecoveryUsed: monthlyRecoveries,
       monthlyRecoveryRemaining: Math.max(0, regulation.monthlyRecoveries - monthlyRecoveries),
     };
-  });
+  }, { isolationLevel: "repeatable read", accessMode: "read only" });
 }
 

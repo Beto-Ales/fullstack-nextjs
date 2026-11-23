@@ -287,7 +287,7 @@ function summarizeCreditBalance(movements: LedgerRow[], availableBuckets: FifoBu
 export async function readCreditBalance(tx: TransactionClient, studentProfileId: string, referenceTime = new Date()) {
   const movements = await readLedgerRows(tx, studentProfileId);
   const availableBuckets = listAvailableFifoBuckets(buildCreditBuckets(movements), referenceTime);
-  return summarizeCreditBalance(movements, availableBuckets);
+  return summarizeCreditBalance(projectExpiredCredits(movements, referenceTime), availableBuckets);
 }
 
 export async function createRecoveryConsumption(
@@ -556,10 +556,7 @@ export async function getCreditOverview(actor: Actor, input?: unknown) {
   const studentProfileId = await resolveStudentProfileIdForActor(actor, payload.studentProfileId);
 
   return db.transaction(async (tx) => {
-    await lockStudentProfile(tx, studentProfileId);
-    if (actor.role === "STUDENT") await resolvePendingCancellationCredits(tx, studentProfileId);
     const now = new Date();
-    await materializeExpiredCredits(tx, studentProfileId, now);
 
     const history = await tx
       .select({
@@ -576,15 +573,11 @@ export async function getCreditOverview(actor: Actor, input?: unknown) {
       .where(eq(creditLedgerMovements.studentProfileId, studentProfileId))
       .orderBy(creditLedgerMovements.createdAt, creditLedgerMovements.id);
 
-    return { studentProfileId, ...summarizeCreditOverview(history, now), history };
-  });
+    return { studentProfileId, ...summarizeProjectedCreditOverview(history, now), history };
+  }, { accessMode: "read only" });
 }
 
-export async function readAdminCreditOverview(
-  actor: Actor, tx: TransactionClient, studentProfileId: string, now: Date, limit: number, offset: number,
-) {
-  requireSuperAdmin(actor);
-  const rows = await readLedgerRows(tx, studentProfileId);
+function projectExpiredCredits(rows: LedgerRow[], now: Date) {
   const expiredSources = new Set(rows.filter((row) => row.movementType === "EXPIRATION").map((row) => row.sourceMovementId));
   const dueGrants = rows.flatMap((row) => row.movementType === "AUTO_CANCELLATION_GRANT"
     && row.expiresAt && row.expiresAt <= now && !expiredSources.has(row.id)
@@ -602,7 +595,20 @@ export async function readAdminCreditOverview(
     });
     projected.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
-  const { availableCredits, expiredCredits, availableExpirations } = summarizeCreditOverview(projected, now);
+  return projected;
+}
+
+function summarizeProjectedCreditOverview(rows: LedgerRow[], now: Date) {
+  const summary = summarizeCreditOverview(projectExpiredCredits(rows, now), now);
+  return { ...summary, pendingExpirationUnits: summary.expiredCredits - summarizeCreditBalance(rows, []).expiredCredits };
+}
+
+export async function readAdminCreditOverview(
+  actor: Actor, tx: TransactionClient, studentProfileId: string, now: Date, limit: number, offset: number,
+) {
+  requireSuperAdmin(actor);
+  const rows = await readLedgerRows(tx, studentProfileId);
+  const { availableCredits, expiredCredits, availableExpirations, pendingExpirationUnits } = summarizeProjectedCreditOverview(rows, now);
   const usedCredits = rows.reduce((sum, row) => sum + (row.movementType === "RECOVERY_CONSUMPTION" ? row.amount : 0), 0);
   const movements = await tx.select({
     id: creditLedgerMovements.id,
@@ -624,8 +630,7 @@ export async function readAdminCreditOverview(
     .orderBy(desc(creditLedgerMovements.createdAt), desc(creditLedgerMovements.id))
     .limit(limit).offset(offset);
 
-  return { availableCredits, expiredCredits, pendingExpirationUnits: expiredCredits - summarizeCreditBalance(rows, []).expiredCredits,
-    availableExpirations, usedCredits, movements };
+  return { availableCredits, expiredCredits, pendingExpirationUnits, availableExpirations, usedCredits, movements };
 }
 
 export async function getLedgerIntegrityReport(actor: Actor, input?: unknown): Promise<LedgerIntegrityReport> {
@@ -745,6 +750,7 @@ async function applyManualCreditRequest(
       .innerJoin(users, eq(studentProfiles.userId, users.id))
       .where(and(eq(studentProfiles.id, studentProfileId), eq(users.role, "STUDENT"), eq(users.status, "ACTIVE")));
     if (!student) throw new ApplicationError("El alumno debe tener una cuenta activa.", "student_not_active", 409, true);
+    await resolvePendingCancellationCredits(tx, studentProfileId);
     return (await adjust(tx, payload)).sort();
   });
 }

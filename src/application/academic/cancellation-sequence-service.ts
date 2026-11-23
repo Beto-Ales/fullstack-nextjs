@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { currentClassAttendance, reservationHasHabitualAssignment } from "@/src/application/academic/student-class-queries";
 import type { TransactionClient, tryGenerateAutoCreditFromCancellation } from "@/src/application/credits/credit-service";
@@ -25,6 +25,7 @@ async function readHabitualResults(reader: SequenceReader, studentProfileId: str
     cancellationType: reservationCancellations.cancellationType,
     meetsNotice: reservationCancellations.meetsSevenDayRule,
     sequencePending: reservationCancellations.sequencePending,
+    creditResolution: reservationCancellations.creditResolution,
     maxEligible: academicRegulations.maxEligibleConsecutiveCancellations,
     outcome: reservationAttendanceRecords.outcome,
   }).from(classReservations)
@@ -72,7 +73,7 @@ export async function readCancellationStreak(reader: SequenceReader, studentProf
   const rows = await readHabitualResults(reader, studentProfileId);
   const { currentConsecutiveCancellations, currentIsProvisional, unresolvedPredecessor } = evaluateResults(rows, maximum);
   return { currentConsecutiveCancellations, currentIsProvisional, unresolvedPredecessor,
-    pendingCredits: rows.filter((row) => row.sequencePending && row.meetsNotice).length };
+    pendingCredits: rows.filter((row) => row.sequencePending && row.creditResolution === null && row.meetsNotice).length };
 }
 
 // The caller holds the profile lock. Both evaluation and ledger writes run in that transaction.
@@ -81,13 +82,15 @@ export async function settlePendingCancellations(
 ) {
   const results = new Map<string, GrantResult>();
   const [firstPending] = await tx.select({ id: reservationCancellations.id }).from(reservationCancellations)
-    .where(and(eq(reservationCancellations.studentProfileId, studentProfileId), eq(reservationCancellations.sequencePending, true)))
+    .where(and(eq(reservationCancellations.studentProfileId, studentProfileId), eq(reservationCancellations.sequencePending, true),
+      isNull(reservationCancellations.creditResolution)))
     .limit(1);
   if (!firstPending) return results;
   const rows = await readHabitualResults(tx, studentProfileId);
   const { cancellations } = evaluateResults(rows, INITIAL_CONSECUTIVE_CANCELLATIONS_LIMIT);
   const decisions = new Map(cancellations.map((decision) => [decision.id, decision]));
-  const requests = rows.flatMap((row) => row.sequencePending && row.cancellationId && row.cancelledAt && row.maxEligible !== null
+  const requests = rows.flatMap((row) => row.sequencePending && row.creditResolution === null
+    && row.cancellationId && row.cancelledAt && row.maxEligible !== null
     ? [{ ...row, cancellationId: row.cancellationId, cancelledAt: row.cancelledAt, maxEligible: row.maxEligible }] : []);
   requests.sort((a, b) => a.cancelledAt.getTime() - b.cancelledAt.getTime() || a.cancellationId.localeCompare(b.cancellationId));
 
@@ -102,6 +105,7 @@ export async function settlePendingCancellations(
   const grantedSessions = new Set(rows.filter((row) => granted.has(row.cancellationId)).map(({ sessionId }) => sessionId));
   const waitingMonths = new Set<string>();
   for (const request of requests) {
+    if (granted.has(request.cancellationId)) continue;
     const decision = decisions.get(request.cancellationId);
     if (!decision) continue;
     const month = regulationDate(request.cancelledAt).slice(0, 7);

@@ -52,7 +52,7 @@ import { type UserRole } from "@/src/domain/auth/roles";
 import { lockClassSessionForReservation } from "@/src/infrastructure/db/class-reservation-locks";
 import { db } from "@/src/infrastructure/db/client";
 import {
-  findExistingHabitualCapacityConflict, lockTemplateAssignments, readSessionUsage,
+  findExistingHabitualCapacityConflict, lockExistingGeneratedSessions, lockTemplateAssignments, readSessionUsage,
   reserveGeneratedSessionHabitualSeats, reserveHabitualSeats,
 } from "@/src/infrastructure/db/habitual-reservations.mjs";
 import {
@@ -243,17 +243,15 @@ async function snapshotCancellationSequence(tx: TransactionClient, studentProfil
   return alreadyCredited;
 }
 
-async function autoReserveSessionsForTemplateAssignment(
+async function lockSessionsForTemplateAssignment(
   tx: TransactionClient,
   input: {
-    studentProfileId: string;
     templateId: string;
     effectiveFrom: string;
     effectiveTo: string | null;
   },
-  regulation: Awaited<ReturnType<typeof resolveCurrentAcademicRegulation>>,
-): Promise<number> {
-  const lockedSessionsResult = await tx.execute(sql`
+) {
+  const result = await tx.execute<{ id: string; max_capacity: number }>(sql`
     select id, max_capacity
     from class_sessions
     where template_id = ${input.templateId}
@@ -261,18 +259,27 @@ async function autoReserveSessionsForTemplateAssignment(
       and local_date >= ${input.effectiveFrom}
       and (${input.effectiveTo}::date is null or local_date <= ${input.effectiveTo})
       and starts_at_utc >= now()
-    order by starts_at_utc asc
+    order by id
     for update
   `);
+  return result.rows;
+}
 
+async function autoReserveSessionsForTemplateAssignment(
+  tx: TransactionClient,
+  sessions: Awaited<ReturnType<typeof lockSessionsForTemplateAssignment>>,
+  studentProfileId: string,
+  regulation: AcademicRegulation,
+): Promise<number> {
   let createdReservations = 0;
 
-  for (const row of lockedSessionsResult.rows as Array<{ id: string; max_capacity: number }>) {
+  for (const row of sessions) {
+    if (!await canAdmitNewReservation(tx, row.id)) continue;
     const result = await reserveHabitualSeats(tx, {
       classSessionId: row.id,
       capacity: Math.min(row.max_capacity, regulation.maxClassCapacity),
       regulationVersionId: regulation.id,
-    }, [input.studentProfileId]);
+    }, [studentProfileId]);
     createdReservations += result.reserved;
   }
 
@@ -408,6 +415,10 @@ export async function updateClassSession(actor: Actor, input: unknown) {
   }
 
   await db.transaction(async (tx) => {
+    // The template ID is stable. Prevent another session from entering a generator's locked dates.
+    const [target] = await tx.select({ templateId: classSessions.templateId }).from(classSessions)
+      .where(eq(classSessions.id, payload.classSessionId));
+    if (target?.templateId) await lockTemplateAssignments(tx, target.templateId);
     const sessionRows = await tx.execute(sql`
       select
         id,
@@ -684,6 +695,10 @@ async function createHabitualAssignment(
     }
     await assertHabitualEnrollmentCapacity(tx, payload);
     const regulation = await resolveCurrentAcademicRegulation(tx);
+    const sessions = await lockSessionsForTemplateAssignment(tx, {
+      ...payload, effectiveTo: payload.effectiveTo ?? null,
+    });
+    await lockStudentProfile(tx, payload.studentProfileId);
     const assignmentId = randomUUID();
     await tx.insert(studentTemplateAssignments).values({
       id: assignmentId,
@@ -694,12 +709,10 @@ async function createHabitualAssignment(
       status: payload.effectiveTo ? "ENDED" : "ACTIVE",
     });
 
-    const autoReservedReservationCount = await autoReserveSessionsForTemplateAssignment(tx, {
-      studentProfileId: payload.studentProfileId,
-      templateId: payload.templateId,
-      effectiveFrom: payload.effectiveFrom,
-      effectiveTo: payload.effectiveTo ?? null,
-    }, regulation);
+    const autoReservedReservationCount = await autoReserveSessionsForTemplateAssignment(
+      tx, sessions, payload.studentProfileId, regulation,
+    );
+    await resolvePendingCancellationCredits(tx, payload.studentProfileId);
 
     return { assignmentId, autoReservedReservationCount };
   });
@@ -747,6 +760,7 @@ export async function endStudentTemplateAssignment(actor: Actor, input: unknown)
         effectiveTo,
       });
     }
+    await lockStudentProfile(tx, current.studentProfileId);
     await tx.update(studentTemplateAssignments)
       .set({
         effectiveTo,
@@ -754,6 +768,7 @@ export async function endStudentTemplateAssignment(actor: Actor, input: unknown)
         updatedAt: new Date(),
       })
       .where(eq(studentTemplateAssignments.id, payload.assignmentId));
+    await resolvePendingCancellationCredits(tx, current.studentProfileId);
   });
 }
 
@@ -1622,11 +1637,13 @@ async function materializeTemplateSessions(
 ) {
   let inserted = 0;
   let skipped = 0;
-  let habitualReservations = 0;
   const habitualCapacityConflicts: string[] = [];
   const referenceTime = input.now.toJSDate();
+  const candidates = generateRecurringSessionCandidates(template, input);
+  const newSessions: Parameters<typeof reserveGeneratedSessionHabitualSeats>[1] = [];
+  await lockExistingGeneratedSessions(tx, candidates);
 
-  for (const candidate of generateRecurringSessionCandidates(template, input)) {
+  for (const candidate of candidates) {
     const classSessionId = randomUUID();
     const capacity = Math.min(candidate.maxCapacity, regulation.maxClassCapacity);
     const result = await tx.insert(classSessions).values({
@@ -1649,13 +1666,13 @@ async function materializeTemplateSessions(
 
     inserted += 1;
     if (candidate.startsAtUtc < referenceTime) continue;
-    const seats = await reserveGeneratedSessionHabitualSeats(tx, {
+    newSessions.push({
       classSessionId, templateId: template.id, localDate: candidate.localDate,
       capacity, regulationVersionId: regulation.id,
     });
-    habitualReservations += seats.reserved;
-    if (seats.capacityConflict) habitualCapacityConflicts.push(classSessionId);
   }
+  const { reserved: habitualReservations, conflicts } = await reserveGeneratedSessionHabitualSeats(tx, newSessions);
+  habitualCapacityConflicts.push(...conflicts);
   return { inserted, skipped, habitualReservations, habitualCapacityConflicts };
 }
 
