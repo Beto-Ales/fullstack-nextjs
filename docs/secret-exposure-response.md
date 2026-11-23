@@ -122,3 +122,86 @@ Se prepara un procedimiento por entorno. Ninguno se ejecutó en este incremento.
 6. ¿Se aprueba el riesgo residual de mantener los informes y los checkpoints locales mientras se confirma la vigencia?
 
 Las respuestas 4 y 5 pueden documentarse con el inventario de secretos o los registros del proveedor; no es necesario compartir valores. Si una comprobación exige autenticarse en el servicio, debe realizarla un operador autorizado.
+
+## Incremento 10.25 — Preparación de la rotación de PostgreSQL TEST persistente
+
+Este incremento se limita a PostgreSQL TEST persistente y ejecutó únicamente comprobaciones de solo lectura. **No se cambió ninguna contraseña, no se crearon respaldos, no se reiniciaron contenedores, no se escribieron datos y no se tocó DEV ni producción.** La rotación queda preparada y pendiente de autorización específica.
+
+### Identidad del entorno
+
+| Recurso | Dato |
+| --- | --- |
+| Contenedor | `fullstack_nextjs_postgres_test`, imagen `postgres:15`, en ejecución y saludable, reinicios acumulados 0, política `unless-stopped` |
+| Volumen | `fullstack-nextjs_postgres_test_data` montado en `/var/lib/postgresql/data` en lectura y escritura; unos 105 MB |
+| Publicación | `127.0.0.1:5433` hacia `5432/tcp` |
+| Rol de acceso | `app_test_user`: inicio de sesión, superusuario, sin caducidad; es el único rol con acceso |
+| Base principal | `fullstack_nextjs_test`: 14 tablas públicas y 7 de las 17 migraciones aplicadas; el diario `drizzle.__drizzle_migrations` existe |
+| Base adicional | Una base residual de demostración del mismo clúster, de tamaño similar; comparte el rol y por tanto el cambio de contraseña la afecta igual |
+| Cifrado de contraseñas | `scram-sha-256`, una sola verificación almacenada por rol |
+| Sesiones de cliente | Ninguna activa; solo procesos internos del servidor |
+| Separación de DEV | Contenedor, volumen, puerto y credencial distintos (`postgres_dev`, 5432) |
+
+### Hallazgos relevantes
+
+- El rol de aplicación es **superusuario** en TEST. No se modifica en este incremento: corregirlo exige un cambio de privilegios y de configuración con autorización propia. Mientras siga así, la credencial protege todo el clúster de TEST.
+- La regla de autenticación del contenedor confía en el socket local y en las direcciones de loopback internas, y exige `scram-sha-256` al resto de conexiones. Por eso la validación de la contraseña nueva debe hacerse **desde el host** a través del puerto publicado: una prueba dentro del contenedor no comprobaría la contraseña.
+- La base TEST persistente está en la migración 7 de 17. Este incremento no aplica ninguna migración ni altera el esquema.
+- La base residual de demostración convive en el mismo clúster. Su conservación o retirada es una decisión del propietario y no forma parte de la rotación.
+
+### Consumidores de la credencial de TEST
+
+| Consumidor | Uso de la credencial |
+| --- | --- |
+| `.env` local (ignorado) | `TEST_DATABASE_URL` apunta a `127.0.0.1:5433/fullstack_nextjs_test` con el rol de TEST |
+| `.env.compose.local` (ignorado) | `POSTGRES_TEST_PASSWORD` contiene el mismo valor que la cadena anterior; se comprobó en memoria y solo se registró el resultado booleano |
+| `compose.yaml` | Usa esa variable solo al inicializar el volumen; cambiarla no altera un volumen existente |
+| Suites de Vitest y E2E, `db:migrate:test` | No usan la credencial persistente: aprovisionan contenedores desechables en tmpfs con credenciales efímeras y roles no privilegiados |
+| `npm run db:inspect -- test` | Entra por el socket local del contenedor y no necesita contraseña |
+| Aplicación en desarrollo | `DATABASE_URL` apunta a DEV; no depende de TEST |
+| Clientes externos | Ningún consumidor conocido dentro del repositorio; su existencia fuera de él solo puede confirmarla el propietario |
+
+### Respaldo y recuperación
+
+- **No existe respaldo previo**: no hay directorio de respaldos ni volcados en el proyecto; los archivos `.sql` del repositorio son migraciones de Drizzle.
+- Respaldo propuesto, previo a la rotación y sujeto a autorización: volcado lógico comprimido de la base principal al sistema de archivos temporal del contenedor, copia al host **fuera del repositorio**, verificación del índice del volcado y borrado del temporal. Los volcados de roles contienen verificadores de contraseña y deben tratarse como material sensible; este procedimiento no genera ese tipo de volcado.
+- Prohibido en este procedimiento: `docker compose down -v`, `docker volume prune`, `DROP DATABASE`, `DROP ROLE`, recrear el contenedor o vaciar el volumen.
+- Recuperación administrativa: el socket local del contenedor confía en el sistema, de modo que un operador dentro del contenedor puede fijar otra contraseña sin conocer la anterior. Es el mecanismo de reversión si la credencial nueva no funciona.
+- Ensayo de restauración propuesto: restaurar el volcado en un contenedor `postgres:15` desechable con datos en tmpfs y sin contraseña de arranque, comprobar el recuento de tablas y retirarlo al terminar. No escribe en TEST ni en DEV.
+
+### Procedimiento de rotación preparado (no ejecutado)
+
+Todos los pasos requieren autorización previa. Ningún valor de secreto se escribe en el repositorio, en argumentos de comandos, en el historial de PowerShell ni en los mensajes enviados al asistente.
+
+1. **Confirmar identidad y estado.** Contenedor `fullstack_nextjs_postgres_test` saludable, volumen `fullstack-nextjs_postgres_test_data` presente, puerto `127.0.0.1:5433`, rol `app_test_user`, base `fullstack_nextjs_test` y cero sesiones de cliente.
+2. **Respaldo verificado.** Volcar la base principal con `pg_dump -Fc` hacia `/tmp` del contenedor, copiarla al host fuera del repositorio, comprobar el índice del volcado y borrar el temporal. Sin respaldo verificado no se continúa.
+3. **Ensayo de restauración.** Restaurar el volcado en un contenedor desechable `postgres:15` con tmpfs y sin contraseña de arranque; comprobar recuento de tablas y retirarlo.
+4. **Credencial nueva.** Generarla en el gestor de secretos, no en el chat ni en la terminal visible. Debe ser única, distinta de DEV y no reutilizada.
+5. **Cambio efectivo del rol.** Aplicarlo sobre PostgreSQL, no solo en los archivos de configuración. Vía recomendada: sesión interactiva dentro del contenedor y la orden `\password app_test_user`, que pide el valor sin mostrarlo y no deja rastro en argumentos. Alternativa automatizada aceptable: archivo SQL temporal fuera del repositorio con permisos restringidos, enviado por la entrada estándar de `psql` y destruido al terminar; nunca como argumento de comando.
+6. **Configuración de consumidores.** Actualizar `TEST_DATABASE_URL` en `.env` y `POSTGRES_TEST_PASSWORD` en `.env.compose.local`. Ambos archivos están ignorados por Git y no deben mostrarse en claro. Cambiar la variable de Compose no altera el volumen existente; no se recrea el contenedor.
+7. **Validación desde el host.** Abrir una conexión nueva por `127.0.0.1:5433` con la credencial nueva, sin imprimirla: el operador la introduce con una lectura de contraseña sin eco en la misma sesión, la comprobación informa solo si la conexión tuvo éxito y los datos de identidad del servidor, y después se retira la variable del proceso. Una prueba dentro del contenedor no valida la contraseña porque la autenticación local es de confianza.
+8. **Evidencia de revocación sin probar la anterior.** Registrar antes y después el identificador de transacción de la fila del rol en `pg_authid` (línea base actual: 742), que debe cambiar, y confirmar que el rol conserva una sola verificación cifrada con `scram-sha-256`. PostgreSQL 15 almacena un único verificador por rol, así que al sustituirlo la contraseña anterior deja de existir en el servidor. No se intenta autenticar con la contraseña anterior.
+9. **Integridad del servicio.** Comprobar que el identificador del contenedor, su hora de arranque y el recuento de reinicios no cambian, que el volumen es el mismo, que siguen existiendo 14 tablas públicas y 7 migraciones aplicadas, y que no hay sesiones de cliente inesperadas.
+10. **Cierre y reversión.** Si la validación falla, fijar otra contraseña por el socket local de confianza del contenedor y detenerse; no se restaura el volumen ni se reinicia el servicio. Al terminar con éxito, destruir la credencial anterior de cualquier almacén temporal y registrar evidencias sin valores.
+
+### Condiciones de parada
+
+- Respaldo no generado o no verificado.
+- Restauración de ensayo fallida.
+- Contenedor no saludable, reinicios inesperados o volumen distinto.
+- Aparición de sesiones de cliente que pudieran quedar autenticadas con la credencial anterior.
+- Cualquier indicación de que la ventana afectaría a DEV o a producción.
+- Cualquier discrepancia entre la configuración esperada y la real.
+
+### Acción que requiere autorización
+
+Autorizar, en una ventana acordada, el respaldo verificado y la rotación de la contraseña del rol `app_test_user` del PostgreSQL **TEST** persistente, junto con la actualización de las dos ubicaciones de configuración locales, la validación desde el host y el registro de la evidencia de revocación. La autorización no incluye DEV, producción, claves HMAC, secretos de sesión, cambios de esquema, eliminación de la base residual de demostración, cambio de privilegios del rol ni retirada de checkpoints o informes históricos.
+
+### Estado de H03 respecto a TEST
+
+Preparación completada y verificada en solo lectura. **Rotación pendiente de autorización explícita del propietario; H03 sigue pendiente de acción operativa.**
+
+### Limitaciones de este incremento
+
+- No se comprobó la contraseña vigente ni histórica; la identidad se verificó por metadatos del contenedor y por el socket administrativo local.
+- La existencia de copias de la credencial fuera de esta máquina no puede demostrarse desde el repositorio.
+- El estado del rol como superusuario se documenta, pero no se corrige en este incremento.
