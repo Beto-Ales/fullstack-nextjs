@@ -65,8 +65,8 @@ async function seedAssignment(account: Account, profileId: string, input: {
 }
 
 function card(page: Page, name: string) {
-  return page.getByRole("region", { name: "Horarios habituales" }).getByRole("listitem")
-    .filter({ hasText: name });
+  return page.getByRole("region", { name: "Horarios habituales" })
+    .locator(":scope > ul > li").filter({ hasText: name });
 }
 
 test("SUPER_ADMIN cancels a future assignment with a reason and keeps its dates, audit and reservations", async ({ page }) => {
@@ -181,6 +181,24 @@ test("SUPER_ADMIN cancels a future assignment with a reason and keeps its dates,
         await expect(futureCard).toContainText(admin.email);
         await expect(futureCard.locator(`time[datetime="${futureStart.toISODate()}"]`)).toHaveCount(1);
         await expect(futureCard.getByRole("button", { name: "Anular asignación futura" })).toHaveCount(0);
+        const review = futureCard.getByRole("region", { name: "Reservas para revisión administrativa" });
+        await expect(review.getByRole("heading", { name: "Reservas para revisión administrativa" })).toBeVisible();
+        await expect(review).toContainText(
+          "Estas reservas se señalaron como posiblemente relacionadas al anular la asignación. Su procedencia habitual no está demostrada.",
+        );
+        await expect(futureCard).toContainText("Reservas señaladas al anular: 1");
+        await expect(futureCard).toContainText("Fecha actual de la sesión");
+        await expect(review).toContainText("Acuarela futura");
+        await expect(review).toContainText("Reserva: Sigue confirmada");
+        await expect(review).toContainText("Sesión programada");
+        const sessionLink = review.getByRole("link", { name: /Abrir sesión de Acuarela futura/ });
+        await expect(sessionLink).toHaveAttribute(
+          "href", `/admin/sesiones/${future.sessionId}?week=${futureStart.startOf("week").toISODate()}`,
+        );
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+        await page.setViewportSize({ width: 320, height: 800 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+        await page.setViewportSize({ width: 360, height: 800 });
 
         const { rows: [assignment] } = await student.client.query(
           "select status,effective_from::text,effective_to::text from student_template_assignments where id=$1",
@@ -229,6 +247,82 @@ test("SUPER_ADMIN cancels a future assignment with a reason and keeps its dates,
   });
 });
 
+test("SUPER_ADMIN opens flagged reservations and sees their current status without rewriting the audit", async ({ page }) => {
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withCreditsAccount("STUDENT", async (student) => {
+      const profileId = await seedProfile(student);
+      const today = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("day");
+      const start = today.plus({ days: 21 }).set({ hour: 18 });
+      const laterStart = start.plus({ days: 7 });
+      const future = await seedAssignment(student, profileId, {
+        name: "Acuarela enlazada", start, session: true, reservation: true,
+      });
+      const laterSessionId = randomUUID();
+      const laterReservationId = randomUUID();
+      student.sessionIds.push(laterSessionId);
+      await student.client.query(`insert into class_sessions
+        (id, template_id, local_date, starts_at_utc, ends_at_utc, max_capacity)
+        values ($1, $2, $3, $4, $5, 1)`,
+      [laterSessionId, future.templateId, laterStart.toISODate(), laterStart.toJSDate(), laterStart.plus({ hours: 1 }).toJSDate()]);
+      await student.client.query(`insert into class_reservations
+        (id, class_session_id, student_profile_id, origin, status)
+        values ($1, $2, $3, 'ORDINARY', 'CONFIRMED')`, [laterReservationId, laterSessionId, profileId]);
+
+      await login(page, admin);
+      await page.goto(`/admin/alumnos/${profileId}`);
+      const futureCard = card(page, "Acuarela enlazada");
+      await futureCard.getByRole("button", { name: "Anular asignación futura" }).click();
+      await futureCard.getByLabel("Motivo de anulación").fill("Revisar cada reserva");
+      await futureCard.getByRole("button", { name: "Confirmar anulación" }).click();
+
+      const review = futureCard.getByRole("region", { name: "Reservas para revisión administrativa" });
+      await expect(review.getByRole("listitem")).toHaveCount(2);
+      await expect(futureCard).toContainText("Reservas señaladas al anular: 2");
+      await expect(futureCard).toContainText("Reservas que requieren revisión administrativa: 2");
+      const links = review.getByRole("link", { name: /Abrir sesión de Acuarela enlazada/ });
+      await expect(links).toHaveCount(2);
+
+      await links.first().focus();
+      await expect(links.first()).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(new RegExp(`/admin/sesiones/${future.sessionId}\\?week=${start.startOf("week").toISODate()}$`));
+      await expect(page.getByRole("heading", { name: "Inscritos en Acuarela enlazada" })).toBeVisible();
+      await expect(page.locator(`time[datetime="${start.toUTC().toISO()}"]`)).toHaveCount(1);
+      await expect(page.getByRole("link", { name: "Volver al calendario" })).toHaveAttribute(
+        "href", `/admin?week=${start.startOf("week").toISODate()}#calendario-semanal`,
+      );
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1280);
+
+      await page.goBack();
+      await page.setViewportSize({ width: 320, height: 800 });
+      await student.client.query(
+        "update class_reservations set status = 'CANCELLED', cancelled_at = now() where id = $1",
+        [laterReservationId],
+      );
+      await page.reload();
+      const refreshedCard = card(page, "Acuarela enlazada");
+      const refreshed = refreshedCard
+        .getByRole("region", { name: "Reservas para revisión administrativa" });
+      await expect(refreshedCard).toContainText("Reservas señaladas al anular: 2");
+      await expect(refreshedCard).toContainText("Reservas que requieren revisión administrativa: 1");
+      await expect(refreshed).toContainText("Reserva: Cancelada");
+      await expect(refreshed).toContainText("Cancelación registrada");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+      await page.setViewportSize({ width: 360, height: 800 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+
+      const { rows: [audit] } = await student.client.query(
+        `select ambiguous_reservation_ids from student_template_assignment_cancellations
+         where assignment_id = $1`, [future.assignmentId],
+      );
+      expect(audit.ambiguous_reservation_ids.sort()).toEqual([future.reservationId, laterReservationId].sort());
+      expect((await student.client.query(
+        "select status from class_reservations where id = $1", [future.reservationId],
+      )).rows).toEqual([{ status: "CONFIRMED" }]);
+    });
+  });
+});
+
 test("students and anonymous visitors cannot use the administrative cancellation", async ({ page, browser, baseURL }) => {
   await withCreditsAccount("SUPER_ADMIN", async (admin) => {
     await withCreditsAccount("STUDENT", async (student) => {
@@ -245,6 +339,7 @@ test("students and anonymous visitors cannot use the administrative cancellation
       await expect(page).toHaveURL(/\/student$/);
       await expect(page.getByRole("button", { name: "Anular asignación futura" })).toHaveCount(0);
       await expect(page.getByLabel("Motivo de anulación")).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: "Reservas para revisión administrativa" })).toHaveCount(0);
       expect((await student.client.query(
         "select status from student_template_assignments where id=$1", [future.assignmentId],
       )).rows).toEqual([{ status: "ACTIVE" }]);

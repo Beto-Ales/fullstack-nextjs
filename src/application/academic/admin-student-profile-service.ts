@@ -78,14 +78,102 @@ async function readProfileEdits(reader: TransactionClient, studentProfileId: str
   };
 }
 
-async function readAssignmentCancellations(reader: TransactionClient, assignmentIds: string[]) {
-  if (!assignmentIds.length) return new Map<string, {
-    source: "ADMIN_INDIVIDUAL" | "STUDENT_WITHDRAWAL";
-    cancelledAt: Date;
-    reason: string;
-    cancelledByEmail: string | null;
-    ambiguousCount: number;
-  }>();
+export type AmbiguousReservationReview = {
+  reservationId: string;
+  sessionId: string | null;
+  courseName: string | null;
+  origin: "ORDINARY" | "MAKEUP" | null;
+  reservationStatus: "CONFIRMED" | "CANCELLED" | null;
+  cancellationSource: "STUDENT_REQUEST" | "ADMIN_DECISION" | null;
+  cancelledAt: Date | null;
+  sessionStatus: "SCHEDULED" | "CANCELLED" | "COMPLETED" | null;
+  startsAtUtc: Date | null;
+  endsAtUtc: Date | null;
+  requiresReview: boolean;
+};
+
+type AssignmentCancellationSummary = {
+  source: "ADMIN_INDIVIDUAL" | "STUDENT_WITHDRAWAL";
+  cancelledAt: Date;
+  reason: string;
+  cancelledByEmail: string | null;
+  ambiguousCount: number;
+  ambiguousReviews: {
+    historicalCount: number;
+    needsReviewCount: number;
+    items: AmbiguousReservationReview[];
+  };
+};
+
+/**
+ * Reads the current state of the reservations recorded in an immutable cancellation audit.
+ *
+ * The audit keeps the historical identifiers; this query never rewrites or re-derives them.
+ * A record still needs review only while it exists for this student, remains CONFIRMED and
+ * belongs to a SCHEDULED session that has not ended yet. Missing records (deleted or owned by
+ * another student) are reported as unresolved so an administrator can check them manually.
+ */
+async function readAmbiguousReservationReviews(
+  reader: TransactionClient, studentProfileId: string, reservationIds: string[], now: Date,
+) {
+  const uniqueIds = [...new Set(reservationIds)];
+  const reviews = new Map<string, AmbiguousReservationReview>();
+  if (!uniqueIds.length) return reviews;
+
+  const rows = await reader.select({
+    reservationId: classReservations.id,
+    reservationStatus: classReservations.status,
+    origin: classReservations.origin,
+    cancelledAt: classReservations.cancelledAt,
+    sessionId: classSessions.id,
+    sessionStatus: classSessions.status,
+    startsAtUtc: classSessions.startsAtUtc,
+    endsAtUtc: classSessions.endsAtUtc,
+    courseName: classTemplates.name,
+    cancellationSource: reservationCancellations.decisionSource,
+  }).from(classReservations)
+    .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
+    .leftJoin(classTemplates, eq(classTemplates.id, classSessions.templateId))
+    .leftJoin(reservationCancellations, eq(reservationCancellations.reservationId, classReservations.id))
+    .where(and(
+      eq(classReservations.studentProfileId, studentProfileId),
+      inArray(classReservations.id, uniqueIds),
+    ));
+
+  for (const row of rows) {
+    const actionable = row.reservationStatus === "CONFIRMED"
+      && row.sessionStatus === "SCHEDULED"
+      && row.endsAtUtc > now;
+    reviews.set(row.reservationId, { ...row, requiresReview: actionable });
+  }
+
+  for (const reservationId of uniqueIds) {
+    if (!reviews.has(reservationId)) {
+      reviews.set(reservationId, {
+        reservationId, sessionId: null, courseName: null, origin: null, reservationStatus: null,
+        cancellationSource: null, cancelledAt: null, sessionStatus: null, startsAtUtc: null,
+        endsAtUtc: null, requiresReview: true,
+      });
+    }
+  }
+  return reviews;
+}
+
+function reviewItems(reviews: Map<string, AmbiguousReservationReview>, reservationIds: string[]) {
+  return [...new Set(reservationIds)]
+    .map((id) => reviews.get(id))
+    .filter((review): review is AmbiguousReservationReview => review !== undefined)
+    .sort((first, second) => {
+      if (!first.startsAtUtc) return second.startsAtUtc ? 1 : first.reservationId.localeCompare(second.reservationId);
+      if (!second.startsAtUtc) return -1;
+      return first.startsAtUtc.getTime() - second.startsAtUtc.getTime();
+    });
+}
+
+async function readAssignmentCancellations(
+  reader: TransactionClient, assignmentIds: string[], studentProfileId: string, now: Date,
+) {
+  if (!assignmentIds.length) return new Map<string, AssignmentCancellationSummary>();
 
   const actor = alias(users, "assignment_cancellation_actor");
   const rows = await reader.select({
@@ -99,11 +187,23 @@ async function readAssignmentCancellations(reader: TransactionClient, assignment
     .leftJoin(actor, eq(actor.id, studentTemplateAssignmentCancellations.cancelledByUserId))
     .where(inArray(studentTemplateAssignmentCancellations.assignmentId, assignmentIds));
 
-  return new Map(rows.map(({ ambiguousReservationIds, cancelledByEmail, ...row }) => [row.assignmentId, {
-    ...row,
-    cancelledByEmail: cancelledByEmail?.trim() || null,
-    ambiguousCount: ambiguousReservationIds.length,
-  }] as const));
+  const reviews = await readAmbiguousReservationReviews(
+    reader, studentProfileId, rows.flatMap(({ ambiguousReservationIds }) => ambiguousReservationIds), now,
+  );
+
+  return new Map(rows.map(({ ambiguousReservationIds, cancelledByEmail, ...row }) => {
+    const items = reviewItems(reviews, ambiguousReservationIds);
+    return [row.assignmentId, {
+      ...row,
+      cancelledByEmail: cancelledByEmail?.trim() || null,
+      ambiguousCount: ambiguousReservationIds.length,
+      ambiguousReviews: {
+        historicalCount: ambiguousReservationIds.length,
+        needsReviewCount: items.filter(({ requiresReview }) => requiresReview).length,
+        items,
+      },
+    }] as const;
+  }));
 }
 
 function selectClassActivity(reader: TransactionClient) {
@@ -196,7 +296,9 @@ export async function getAdminStudentProfile(
     const scope = eq(classReservations.studentProfileId, student.id);
     const scheduleRows = await selectHabitualSchedules(tx, regulationDate(now), eq(studentProfiles.id, student.id), true)
       .limit(limit).offset(offset("horarios"));
-    const assignmentCancellations = await readAssignmentCancellations(tx, scheduleRows.map(({ assignmentId }) => assignmentId));
+    const assignmentCancellations = await readAssignmentCancellations(
+      tx, scheduleRows.map(({ assignmentId }) => assignmentId), student.id, now,
+    );
     const schedules = scheduleRows.map((schedule) => ({
       ...schedule,
       cancellation: assignmentCancellations.get(schedule.assignmentId) ?? null,

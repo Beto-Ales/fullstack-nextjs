@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { z } from "zod";
 
 import {
-  getAdminStudentProfile, type ProfileClassEntry, type ProfilePageKey,
+  getAdminStudentProfile, type AmbiguousReservationReview, type ProfileClassEntry, type ProfilePageKey,
 } from "@/src/application/academic/admin-student-profile-service";
 import { regulationDate } from "@/src/application/academic/regulation-service";
 import { resolveCenterWeek } from "@/src/domain/time/center-week";
@@ -99,6 +99,22 @@ function recoveryOutcome(entry: ProfileClassEntry, now: Date) {
   if (entry.attendanceOutcome === "ABSENT") return "Ausente";
   if (entry.sessionStatus === "COMPLETED" || entry.endsAtUtc <= now) return "Finalizada · Sin asistencia registrada";
   return entry.startsAtUtc > now ? "Futura confirmada" : "En curso";
+}
+
+function reviewReservationState(review: AmbiguousReservationReview) {
+  if (!review.reservationStatus) return "Estado actual no disponible";
+  return review.reservationStatus === "CONFIRMED" ? "Sigue confirmada" : "Cancelada";
+}
+
+function reviewSessionState(review: AmbiguousReservationReview, now: Date) {
+  if (!review.sessionStatus || !review.endsAtUtc) return null;
+  if (review.sessionStatus === "CANCELLED") return "Sesión cancelada";
+  if (review.sessionStatus === "COMPLETED" || review.endsAtUtc <= now) return "Sesión finalizada";
+  return "Sesión programada";
+}
+
+function reviewWeek(startsAtUtc: Date) {
+  return resolveCenterWeek(null, DateTime.fromJSDate(startsAtUtc)).week.toISODate();
 }
 
 function Pagination({ label, number, hasNext, href }: {
@@ -229,11 +245,64 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
                 <p>Motivo registrado · {schedule.cancellation.reason}</p>
                 {schedule.cancellation.ambiguousCount > 0 && (
                   <p>
-                    Reservas que requieren revisión administrativa: {formatHistoryInteger(schedule.cancellation.ambiguousCount)}.
+                    Reservas señaladas al anular: {formatHistoryInteger(schedule.cancellation.ambiguousReviews.historicalCount)}.
+                    {" "}Reservas que requieren revisión administrativa: {formatHistoryInteger(schedule.cancellation.ambiguousReviews.needsReviewCount)}.
                     No se cancelaron ni se liberaron plazas automáticamente.
                   </p>
                 )}
               </div>
+            )}
+            {schedule.cancellation && schedule.cancellation.ambiguousReviews.items.length > 0 && (
+              <section className={styles.review} aria-labelledby={`revision-${schedule.assignmentId}`}>
+                <h3 id={`revision-${schedule.assignmentId}`}>Reservas para revisión administrativa</h3>
+                <p>
+                  Estas reservas se señalaron como posiblemente relacionadas al anular la asignación. Su procedencia
+                  habitual no está demostrada. Revísalas individualmente antes de decidir si corresponde realizar alguna
+                  cancelación.
+                </p>
+                <ul className={styles.reviewList}>
+                  {schedule.cancellation.ambiguousReviews.items.map((review) => (
+                    <li key={review.reservationId}>
+                      {review.sessionId && review.startsAtUtc ? (
+                        <>
+                          <p className={styles.label}>{review.courseName ?? "Clase única"}</p>
+                          <p>
+                            Fecha actual de la sesión: <HistoryTime value={review.startsAtUtc} /> · Hora de Copenhague
+                          </p>
+                          <p>Reserva: <strong>{reviewReservationState(review)}</strong></p>
+                          {review.reservationStatus === "CANCELLED" && (
+                            <p>
+                              {review.cancelledAt
+                                ? <>Cancelación registrada el <HistoryTime value={review.cancelledAt} /></>
+                                : "Cancelación registrada sin fecha"}
+                              {review.cancellationSource === "ADMIN_DECISION" && " · Decisión administrativa"}
+                              {review.cancellationSource === "STUDENT_REQUEST" && " · Solicitada por el alumno"}
+                            </p>
+                          )}
+                          {reviewSessionState(review, now) && <p>{reviewSessionState(review, now)}</p>}
+                          <p>
+                            <Link
+                              href={`/admin/sesiones/${encodeURIComponent(review.sessionId)}?week=${reviewWeek(review.startsAtUtc)}`}
+                              prefetch={false}
+                            >
+                              Abrir sesión de {review.courseName ?? "clase única"} del <HistoryTime value={review.startsAtUtc} />
+                            </Link>
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className={styles.label}>Registro no localizado</p>
+                          <p>
+                            No se pudo consultar el estado actual de este registro. Puede haber sido eliminado o no estar
+                            vinculado a este alumno. Revísalo desde el historial académico antes de decidir alguna
+                            cancelación.
+                          </p>
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
             )}
             <AssignmentCancellationPanel
               studentProfileId={student.id}

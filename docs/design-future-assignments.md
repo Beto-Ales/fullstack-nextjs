@@ -35,6 +35,17 @@ La Server Action exige `SUPER_ADMIN`, obtiene el actor de la sesión, rechaza ca
 
 La ficha conserva las fechas originales y muestra en la misma fila la etiqueta «Asignación anulada», el origen `ADMIN_INDIVIDUAL` o `STUDENT_WITHDRAWAL`, el actor, el instante y el motivo. Solo se indica el número de reservas ambiguas, no sus identificadores técnicos. La anulación individual no crea una segunda auditoría ni cancela reservas. Sigue pendiente la procedencia persistida y el inventario histórico.
 
+## Implementación 10.19
+
+La auditoría del 10.17 ya persiste los identificadores de las reservas ambiguas en `student_template_assignment_cancellations.ambiguous_reservation_ids`. El 10.19 los reutiliza sin migración ni cambio de esquema: la ficha administrativa deja de mostrar solo un recuento y enumera cada registro señalado con su estado actual y un enlace a la sesión concreta.
+
+La consulta forma parte de la misma transacción de solo lectura y la misma instantánea que el resto de la ficha. Se ejecuta una sola vez para todas las asignaciones anuladas de la página: recoge los identificadores únicos de las auditorías y lee en bloque `class_reservations`, `class_sessions` y `class_templates`, filtrando siempre por el perfil solicitado. No se consulta una sesión por reserva ni se escribe durante la carga. Un identificador que ya no existe, que pertenece a otro alumno o que no puede leerse se presenta como «Registro no localizado» y no se enlaza, sin inventar una sesión alternativa.
+
+El recuento vigente se deriva del estado persistido, no del número almacenado en la auditoría. Una reserva sigue requiriendo revisión si pertenece al alumno, continúa `CONFIRMED`, su sesión sigue `SCHEDULED` y todavía no ha terminado. Una reserva cancelada, una sesión cancelada o una sesión pasada dejan de contarse; el total «Reservas señaladas al anular» conserva el dato histórico. La ficha muestra por separado si la reserva «Sigue confirmada» o está «Cancelada», con la fecha y el origen de cancelación cuando constan, y la fecha actual de la sesión en `Europe/Copenhagen`, que puede diferir de la fecha original si se reprogramó. Los estados se expresan con texto, no solo con color.
+
+Cada fila con sesión legible enlaza a `/admin/sesiones/[sessionId]?week=...` conservando la semana de la sesión para que «Volver al calendario» mantenga el contexto. El enlace y la página de destino exigen `SUPER_ADMIN`. La sección conserva la advertencia de que la procedencia habitual no está demostrada y de que corresponde revisar cada caso antes de cancelar. Una baja de cuenta no presenta reservas pendientes por el mero hecho de conservar identificadores históricos: el flujo de baja cancela las reservas futuras que corresponda y el recuento vigente refleja ese estado. Las reservas antiguas sin procedencia demostrable siguen pendientes de saneamiento. [Pruebas](testing.md#incremento-1019--enlaces-administrativos-para-revisar-reservas-ambiguas)
+
+
 ## Semántica propuesta
 
 | Situación | Operación y efecto propuestos |

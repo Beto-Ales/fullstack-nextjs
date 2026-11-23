@@ -38,15 +38,16 @@ describe("admin student profile (postgres)", () => {
 
   async function reserve(date: string, {
     templateId = null, origin = "ORDINARY", status = "CONFIRMED", sessionStatus = "SCHEDULED",
+    ownerProfileId = studentProfileId,
   }: { templateId?: string | null; origin?: "ORDINARY" | "MAKEUP"; status?: "CONFIRMED" | "CANCELLED";
-    sessionStatus?: "SCHEDULED" | "CANCELLED" | "COMPLETED" } = {}) {
+    sessionStatus?: "SCHEDULED" | "CANCELLED" | "COMPLETED"; ownerProfileId?: string } = {}) {
     const sessionId = randomUUID();
     const reservationId = randomUUID();
     await client.query(`insert into class_sessions (id, template_id, local_date, starts_at_utc, ends_at_utc, status, max_capacity)
       values ($1, $2, $3::date, $3::date + time '16:00' at time zone 'UTC',
         $3::date + time '17:00' at time zone 'UTC', $4, 12)`, [sessionId, templateId, date, sessionStatus]);
     await client.query(`insert into class_reservations (id, class_session_id, student_profile_id, origin, status)
-      values ($1, $2, $3, $4, $5)`, [reservationId, sessionId, studentProfileId, origin, status]);
+      values ($1, $2, $3, $4, $5)`, [reservationId, sessionId, ownerProfileId, origin, status]);
     return { classSessionId: sessionId, reservationId };
   }
 
@@ -264,6 +265,7 @@ describe("admin student profile (postgres)", () => {
       cancellation: {
         source: "STUDENT_WITHDRAWAL", reason: "Baja de la cuenta del alumno",
         cancelledByEmail: "admin@example.com", ambiguousCount: 0, cancelledAt: expect.any(Date),
+        ambiguousReviews: { historicalCount: 0, needsReviewCount: 0, items: [] },
       },
     });
 
@@ -274,6 +276,149 @@ describe("admin student profile (postgres)", () => {
     expect(rows).toEqual([
       { id: individual.assignmentId, status: "CANCELLED", effective_from: "2031-02-01", effective_to: null },
       { id: withdrawal.assignmentId, status: "CANCELLED", effective_from: "2031-03-01", effective_to: null },
+    ]);
+  });
+
+  it("lists only the student's historically flagged reservations for current review", async () => {
+    const { assignmentId, templateId } = await createFutureAssignment("Reservas ambiguas", "2031-02-01");
+    const first = await reserve("2031-02-02", { templateId });
+    const second = await reserve("2031-02-03", { templateId });
+    const otherTemplateId = randomUUID();
+    await client.query(`insert into class_templates
+      (id, name, iso_weekday, starts_at_local_time, duration_minutes, effective_from)
+      values ($1, 'Clase ajena a la asignación', 1, '10:00', 60, '2031-01-01')`, [otherTemplateId]);
+    const otherTemplateReservation = await reserve("2031-02-04", { templateId: otherTemplateId });
+    const otherUserId = randomUUID();
+    const otherProfileId = randomUUID();
+    await client.query(`insert into users (id, email, email_normalized, password_hash, role)
+      values ($1, 'other@example.com', 'other@example.com', 'other-hash', 'STUDENT')`, [otherUserId]);
+    await client.query(`insert into student_profiles (id, user_id, first_name, last_name, contact_phone, contact_email)
+      values ($1, $2, 'Otra', 'Persona', '+45 87654321', 'other-contact@example.com')`, [otherProfileId, otherUserId]);
+    const otherStudentReservation = await reserve("2031-02-05", {
+      templateId, ownerProfileId: otherProfileId,
+    });
+
+    await cancelFutureAssignment(admin, {
+      assignmentId, reason: "El alumno cambia de horario",
+    });
+
+    const auditBefore = await client.query(
+      `select source, reason, ambiguous_reservation_ids from student_template_assignment_cancellations
+       where assignment_id = $1`, [assignmentId],
+    );
+    const countsBefore = await client.query(
+      `select (select count(*)::int from student_template_assignment_cancellations) as audits,
+        (select count(*)::int from class_reservations) as reservations,
+        (select count(*)::int from reservation_cancellations) as cancellations,
+        (select count(*)::int from credit_ledger_movements) as movements`,
+    );
+
+    const profile = await getProfile(admin, studentProfileId);
+    const schedule = profile!.schedules.items.find(({ courseName }) => courseName === "Reservas ambiguas");
+    expect(schedule?.cancellation).toMatchObject({
+      source: "ADMIN_INDIVIDUAL", ambiguousCount: 2,
+      ambiguousReviews: {
+        historicalCount: 2, needsReviewCount: 2,
+        items: [
+          {
+            reservationId: first.reservationId, sessionId: first.classSessionId, courseName: "Reservas ambiguas",
+            origin: "ORDINARY", reservationStatus: "CONFIRMED", cancellationSource: null, cancelledAt: null,
+            sessionStatus: "SCHEDULED", startsAtUtc: new Date("2031-02-02T16:00:00Z"),
+            endsAtUtc: new Date("2031-02-02T17:00:00Z"), requiresReview: true,
+          },
+          {
+            reservationId: second.reservationId, sessionId: second.classSessionId, courseName: "Reservas ambiguas",
+            reservationStatus: "CONFIRMED", requiresReview: true,
+          },
+        ],
+      },
+    });
+    const linkedIds = schedule!.cancellation!.ambiguousReviews.items.map(({ reservationId }) => reservationId);
+    expect(linkedIds).not.toContain(otherTemplateReservation.reservationId);
+    expect(linkedIds).not.toContain(otherStudentReservation.reservationId);
+
+    expect(await client.query(
+      `select source, reason, ambiguous_reservation_ids from student_template_assignment_cancellations
+       where assignment_id = $1`, [assignmentId],
+    )).toEqual(auditBefore);
+    expect(await client.query(
+      `select (select count(*)::int from student_template_assignment_cancellations) as audits,
+        (select count(*)::int from class_reservations) as reservations,
+        (select count(*)::int from reservation_cancellations) as cancellations,
+        (select count(*)::int from credit_ledger_movements) as movements`,
+    )).toEqual(countsBefore);
+  });
+
+  it("derives current review state while preserving the historical audit identifiers", async () => {
+    const { assignmentId, templateId } = await createFutureAssignment("Cambios posteriores", "2031-02-01");
+    const active = await reserve("2031-02-02", { templateId });
+    const cancelledLater = await reserve("2031-02-03", { templateId });
+    const rescheduled = await reserve("2031-02-04", { templateId });
+    const removed = await reserve("2031-02-05", { templateId });
+    await cancelFutureAssignment(admin, {
+      assignmentId, reason: "Se revisará cada reserva por separado",
+    });
+    const auditBefore = await client.query(
+      `select source, cancelled_at, ambiguous_reservation_ids from student_template_assignment_cancellations
+       where assignment_id = $1`, [assignmentId],
+    );
+
+    await academic.cancelReservation(student, { reservationId: cancelledLater.reservationId });
+    await client.query(`update class_sessions set local_date = '2031-02-10',
+      starts_at_utc = '2031-02-10 16:00Z', ends_at_utc = '2031-02-10 17:00Z' where id = $1`,
+    [rescheduled.classSessionId]);
+    await client.query("delete from class_sessions where id = $1", [removed.classSessionId]);
+
+    await expect(getProfile(student, studentProfileId)).rejects.toMatchObject({ code: "forbidden" });
+    const profile = await getProfile(admin, studentProfileId);
+    const reviews = profile!.schedules.items.find(({ courseName }) => courseName === "Cambios posteriores")!
+      .cancellation!.ambiguousReviews;
+    expect(reviews).toMatchObject({ historicalCount: 4, needsReviewCount: 3 });
+    expect(reviews.items).toMatchObject([
+      {
+        reservationId: active.reservationId, sessionId: active.classSessionId, reservationStatus: "CONFIRMED",
+        sessionStatus: "SCHEDULED", startsAtUtc: new Date("2031-02-02T16:00:00Z"), requiresReview: true,
+      },
+      {
+        reservationId: cancelledLater.reservationId, reservationStatus: "CANCELLED",
+        cancellationSource: "STUDENT_REQUEST", cancelledAt: now, sessionStatus: "SCHEDULED", requiresReview: false,
+      },
+      {
+        reservationId: rescheduled.reservationId, sessionId: rescheduled.classSessionId,
+        reservationStatus: "CONFIRMED", startsAtUtc: new Date("2031-02-10T16:00:00Z"),
+        endsAtUtc: new Date("2031-02-10T17:00:00Z"), requiresReview: true,
+      },
+      {
+        reservationId: removed.reservationId, sessionId: null, courseName: null, reservationStatus: null,
+        sessionStatus: null, startsAtUtc: null, requiresReview: true,
+      },
+    ]);
+    expect(await client.query(
+      `select source, cancelled_at, ambiguous_reservation_ids from student_template_assignment_cancellations
+       where assignment_id = $1`, [assignmentId],
+    )).toEqual(auditBefore);
+    expect((await client.query(
+      "select count(*)::int as count from reservation_cancellations where student_profile_id = $1",
+      [studentProfileId],
+    )).rows[0].count).toBe(1);
+  });
+
+  it("stops counting flagged reservations once their session is cancelled or past", async () => {
+    const { assignmentId, templateId } = await createFutureAssignment("Sesión anulada", "2031-02-01");
+    const cancelledSession = await reserve("2031-02-02", { templateId });
+    const completedSession = await reserve("2031-02-03", { templateId });
+    await cancelFutureAssignment(admin, { assignmentId, reason: "Revisión pendiente" });
+    await academic.cancelClassSession(admin, { classSessionId: cancelledSession.classSessionId });
+    await client.query(`update class_sessions set status = 'COMPLETED',
+      starts_at_utc = '2031-01-19 16:00Z', ends_at_utc = '2031-01-19 17:00Z' where id = $1`,
+    [completedSession.classSessionId]);
+
+    const reviews = (await getProfile(admin, studentProfileId))!.schedules.items
+      .find(({ courseName }) => courseName === "Sesión anulada")!.cancellation!.ambiguousReviews;
+    expect(reviews).toMatchObject({ historicalCount: 2, needsReviewCount: 0 });
+    expect(reviews.items).toMatchObject([
+      { reservationId: completedSession.reservationId, reservationStatus: "CONFIRMED", sessionStatus: "COMPLETED", requiresReview: false },
+      { reservationId: cancelledSession.reservationId, reservationStatus: "CANCELLED", sessionStatus: "CANCELLED", requiresReview: false },
     ]);
   });
 

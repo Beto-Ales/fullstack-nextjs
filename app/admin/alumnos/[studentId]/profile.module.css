@@ -189,6 +189,20 @@
   border-block-start: 1px solid #777;
 }
 
+.profile .review {
+  margin-block-start: 0.75rem;
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid #777;
+}
+
+.profile .reviewList {
+  padding-inline-start: 1.25rem;
+}
+
+.reviewList li {
+  margin-block-start: 0.5rem;
+}
+
 @media (min-width: 40rem) {
   .account,
   .cards {
