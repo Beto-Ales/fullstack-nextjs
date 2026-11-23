@@ -933,8 +933,15 @@ El cierre será posible cuando se identifique el destino, se conozca su visibili
 | Endurecimiento independiente: superusuario, confianza interna, DPAPI, migraciones atrasadas, retención de respaldos y acceso a Docker | Administración del entorno | Incrementos propios; prioridades en 10.31 § I |
 | Reevaluar H03 y, si procede, cerrarla | Propietario | Solo cuando el criterio 8 esté cumplido |
 
+### H. Deriva observada durante el incremento
+
+- El recuento de referencias de checkpoint pasó de 83 a 84 mientras se redactaba este incremento: la extensión del IDE creó una referencia nueva en `refs/cline/checkpoints` a las 19:16 (hora local del 2026-11-23), después de las ediciones documentales. La cifra 83 sigue siendo el registro histórico de 10.31 y no se corrige.
+- Inspección **solo por nombres** de esa referencia: 262 rutas; ninguna corresponde a los 15 informes locales ni a un archivo de entorno real; las dos únicas coincidencias con patrones sensibles son la plantilla versionada `.env.compose.example` y este mismo documento. No se leyó ningún contenido.
+- Consecuencia para el saneamiento: los checkpoints se regeneran con cada edición del área de trabajo, de modo que una limpieza posterior debe ejecutarse en una ventana sin ediciones y verificarse al final; si no, reaparecerán referencias con el estado actual.
+- Consecuencia para el recuento: el inventario de 10.31 describe el estado de su momento y no debe citarse como cifra viva; lo mismo vale para la cifra 84 observada aquí, que puede crecer con cada edición posterior.
+
 ### Estado de este incremento
 
-No se modificó PostgreSQL DEV ni TEST, no se recreó ni detuvo ningún contenedor, no se alteraron secretos, referencias ni respaldos, no se reescribió historial y no se ejecutaron operaciones destructivas. El único cambio es documental.
+No se modificó PostgreSQL DEV ni TEST, no se recreó ni detuvo ningún contenedor, no se alteraron secretos ni respaldos, no se retiró ni alteró ninguna referencia existente, no se reescribió historial y no se ejecutaron operaciones destructivas. El único cambio provocado por este incremento es documental.
 
 Siguiente incremento recomendado, sin ejecutarlo: identificación del destino remoto a partir de lo que declare el propietario, sin consultas de red ni apertura de objetos, y decisión sobre la retirada de esas copias.
