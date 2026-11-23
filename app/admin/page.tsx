@@ -18,6 +18,7 @@ import { ActionFeedback } from "@/app/components/action-feedback";
 import { PendingSubmit } from "@/app/components/pending-submit";
 import { SectionNavigation } from "@/app/components/section-navigation";
 import { HistoryTime } from "@/app/components/history-time";
+import { HistoryText } from "@/app/components/history-text";
 import { formatCreditMovement, formatCreditQuantity, recoveryReservationLabels } from "@/src/interfaces/presentation/history-format";
 import { AdminWeeklyCalendar } from "./weekly-calendar";
 import { AdminWeeklySummary } from "./weekly-summary";
@@ -187,19 +188,21 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
             </>
           ) : <p>Los ajustes requieren una cuenta de alumno activa.</p>}
 
-          <h3>Historial de movimientos</h3>
-          <ul>
-            {creditOverview.history.map((movement) => (
-              <li key={movement.id}>
-                {formatCreditMovement(movement)} · <HistoryTime value={movement.createdAt} />
-                {movement.expiresAt && <> · Vencimiento del crédito: <HistoryTime value={movement.expiresAt} /></>}
-                {movement.reason ? ` · motivo: ${movement.reason}` : ""}
-                {movement.regulationVersionId && (
-                  <> · <Link href={`/normativa#version-${movement.regulationVersionId}`}>Normativa aplicada</Link></>
-                )}
-              </li>
-            ))}
-          </ul>
+          <section aria-labelledby="movimientos-creditos">
+            <h3 id="movimientos-creditos">Historial de movimientos</h3>
+            <ul>
+              {creditOverview.history.map((movement) => (
+                <li key={movement.id}>
+                  <HistoryText {...formatCreditMovement(movement)} /> · <HistoryTime value={movement.createdAt} />
+                  {movement.expiresAt && <> · Vencimiento del crédito: <HistoryTime value={movement.expiresAt} /></>}
+                  {movement.reason ? ` · motivo: ${movement.reason}` : ""}
+                  {movement.regulationVersionId && (
+                    <> · <Link href={`/normativa#version-${movement.regulationVersionId}`}>Normativa aplicada</Link></>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
 
           <h3>Recuperaciones del alumno</h3>
           <ul>
@@ -219,7 +222,7 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
           <ul>
             {recoveryHistory?.ledgerRows.map((movement) => (
               <li key={movement.id}>
-                {formatCreditMovement(movement)} · <HistoryTime value={movement.createdAt} /> ·{" "}
+                <HistoryText {...formatCreditMovement(movement)} /> · <HistoryTime value={movement.createdAt} /> ·{" "}
                 Reserva: {movement.relatedReservationId ?? "Sin referencia"}
               </li>
             ))}

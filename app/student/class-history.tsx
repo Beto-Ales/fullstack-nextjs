@@ -35,7 +35,12 @@ export function ClassHistory({ entries }: { entries: ClassHistoryEntry[] }) {
                   {entry.origin === "MAKEUP" ? "Recuperación" : entry.habitual ? "Clase habitual" : "Clase ordinaria"}
                 </p>
                 <p>{formatOutcome(entry)}</p>
-                {entry.sequencePending && entry.cancellationType === "ON_TIME" && <p>Crédito pendiente de evaluación</p>}
+                {entry.sequencePending && entry.cancellationType === "ON_TIME" && (
+                  <>
+                    <p>Solicitud de crédito pendiente de evaluación</p>
+                    <p>Fecha de solicitud: <HistoryTime value={entry.creditRequestedAt} /></p>
+                  </>
+                )}
               </li>
             ))}
           </ul>

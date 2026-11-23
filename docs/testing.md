@@ -392,6 +392,26 @@ npm.cmd run test:e2e -- --workers=1
 - El caso de ambos paneles usa un navegador con zona `Pacific/Honolulu`, compara el HTML inicial con el texto del navegador y verifica los dos desplazamientos de otoño a 320 y 360 px. Comprueba también que el ledger persista intacto tras las lecturas. El texto muestra precisión hasta el minuto y las pruebas de navegador se concentran en Chromium.
 - `npm run test:verify` pasó 341 pruebas Vitest, 46 escenarios Chromium y un escenario adicional con normativa sintética, con PostgreSQL desechable mediante H08. Pasaron TypeScript, ESLint y `drizzle-kit check`. El journal sigue en `0014`.
 
+### Incremento 10.12 — Accesibilidad de fechas, movimientos y solicitudes pendientes
+
+- Los historiales de ambos roles mantienen las fechas y cantidades visibles del 10.11. Cada `time` conserva su `datetime`. En el árbol accesible, una fecha de calendario usa el nombre del mes y los instantes de Copenhague expresan los desplazamientos como «GMT más 2 horas» o «GMT más 1 hora». Cada fecha y movimiento aporta una sola representación a ese árbol.
+- Los movimientos expresan «más» y «menos» junto al tipo y la cantidad. Las devoluciones sin abono conservan esa distinción. El historial del alumno identifica las solicitudes pendientes, muestra su fecha original desde la cancelación ya consultada y explica que quedan fuera del saldo hasta resolverse. La consulta del historial sigue siendo de solo lectura.
+- Se verificaron encabezados, regiones, listas y paginaciones. Los historiales del alcance usan listas nativas. El perfil administrativo identifica la página actual con `aria-current="page"`. Playwright comprobó ambos desplazamientos de otoño, fechas sin hora, movimientos, saldo, persistencia intacta, foco y ausencia de desbordamiento a 320 y 360 px. Pasaron 22 unitarias focalizadas, 28 escenarios Chromium focalizados y el escenario separado con normativa sintética.
+- `npm run test:verify` pasó 344 pruebas Vitest, 46 escenarios Chromium y un escenario adicional con normativa sintética mediante H08. Pasaron TypeScript, ESLint y `drizzle-kit check`. El journal sigue en `0014`.
+
+#### Comprobación manual de pronunciación pendiente
+
+En un equipo Windows con NVDA, inicia Chromium con el Inspector de Playwright. Avanza hasta el punto indicado y deja el caso detenido mientras recorres la pantalla con los comandos de lectura de NVDA y Tab para los enlaces. Los comandos aprovisionan datos sintéticos mediante H08.
+
+| Comando | Qué escuchar |
+| --- | --- |
+| `npm run test:e2e -- history-format.spec.ts --debug` | En el historial de movimientos del alumno, distingue las dos apariciones de las 02:30 y sus desplazamientos. En horarios habituales, comprueba una fecha de calendario. Escucha también el saldo. |
+| `npm run test:e2e -- credits.spec.ts student-credit-expirations.spec.ts --debug --grep "earns one credit\|single refund\|only available credit expirations"` | Después de reservar o cancelar la recuperación, escucha concesión, consumo, devolución y caducidad. Comprueba el sentido de cada movimiento y que el signo y la cantidad se anuncien una sola vez. |
+| `npm run test:e2e:pending -- credits.spec.ts --debug` | Después de cancelar la clase y antes de registrar la ausencia anterior, escucha «solicitud pendiente», su fecha original y el saldo disponible por separado. |
+| `npm run test:e2e -- admin-student-edit.spec.ts --debug --grep "pages the audit"` | Recorre el encabezado, los elementos de la lista de auditoría, un enlace de paginación y la indicación de página actual. |
+
+La comprobación de este incremento se realizó con Playwright en Chromium. La pronunciación con un lector real y la comprobación complementaria con Firefox quedan pendientes.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

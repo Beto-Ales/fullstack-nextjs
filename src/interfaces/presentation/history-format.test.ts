@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CreditMovementType } from "@/src/domain/credits/ledger";
 import {
-  formatCalendarDate, formatCreditMovement, formatCreditQuantity,
+  describeCalendarDate, describeHistoryInstant, formatCalendarDate, formatCreditMovement, formatCreditQuantity,
   formatHistoryInstant, formatPendingCreditRequests,
 } from "./history-format";
 
@@ -31,6 +31,20 @@ describe("history formatting", () => {
     expect(formatHistoryInstant(new Date("2026-12-31T23:00:00Z"), true)).toBe("01/01/2027");
   });
 
+  it("expresses a calendar date without a time or an offset", () => {
+    expect(describeCalendarDate("2026-10-25")).toBe("25 de octubre de 2026");
+    expect(describeCalendarDate("2026-02-29")).toBeNull();
+    const localNewYear = new Date("2026-12-31T23:00:00Z");
+    expect(describeHistoryInstant(localNewYear, "01/01/2027", true)).toBe("1 de enero de 2027");
+  });
+
+  it.each([
+    ["2026-10-25T00:30:00Z", "25/10/2026, 02:30 GMT+02:00", "2 horas"],
+    ["2026-10-25T01:30:00Z", "25/10/2026, 02:30 GMT+01:00", "1 hora"],
+  ])("expresses the offset of %s in words", (utc, visible, duration) => {
+    expect(describeHistoryInstant(new Date(utc), visible, false)).toBe(`25 de octubre de 2026 a las 2:30, GMT más ${duration}`);
+  });
+
   it("handles missing and invalid values without coercion or rounding", () => {
     expect(formatCalendarDate(null)).toBeNull();
     expect(formatCalendarDate("2026-02-29")).toBeNull();
@@ -50,24 +64,24 @@ describe("history formatting", () => {
     expect(formatPendingCreditRequests(3)).toBe("3 solicitudes de crédito pendientes");
   });
 
-  const movements: [CreditMovementType, string][] = [
-    ["AUTO_CANCELLATION_GRANT", "Concesión por cancelación · +1 crédito"],
-    ["MANUAL_GRANT", "Concesión manual · +1 crédito"],
-    ["MANUAL_WITHDRAWAL", "Retirada manual · −1 crédito"],
-    ["EXPIRATION", "Caducidad · −1 crédito"],
-    ["RECOVERY_CONSUMPTION", "Consumo por recuperación · −1 crédito"],
-    ["RECOVERY_REFUND", "Devolución de recuperación · +1 crédito"],
+  const movements: [CreditMovementType, string, string][] = [
+    ["AUTO_CANCELLATION_GRANT", "Concesión por cancelación · +1 crédito", "Concesión por cancelación, más 1 crédito"],
+    ["MANUAL_GRANT", "Concesión manual · +1 crédito", "Concesión manual, más 1 crédito"],
+    ["MANUAL_WITHDRAWAL", "Retirada manual · −1 crédito", "Retirada manual, menos 1 crédito"],
+    ["EXPIRATION", "Caducidad · −1 crédito", "Caducidad, menos 1 crédito"],
+    ["RECOVERY_CONSUMPTION", "Consumo por recuperación · −1 crédito", "Consumo por recuperación, menos 1 crédito"],
+    ["RECOVERY_REFUND", "Devolución de recuperación · +1 crédito", "Devolución de recuperación, más 1 crédito"],
   ];
 
-  it.each(movements)("labels the quantity and direction of %s", (movementType, expected) => {
-    expect(formatCreditMovement({ movementType, amount: 1, refundRestoredCredit: true })).toBe(expected);
+  it.each(movements)("labels the quantity and direction of %s", (movementType, text, speech) => {
+    expect(formatCreditMovement({ movementType, amount: 1, refundRestoredCredit: true })).toEqual({ text, speech });
   });
 
   it("distinguishes a refund record from a confirmed credit to the balance", () => {
     const movement = { movementType: "RECOVERY_REFUND", amount: 1 } as const;
     expect(formatCreditMovement({ ...movement, refundRestoredCredit: false }))
-      .toBe("Devolución de recuperación sin abono al saldo · 1 crédito");
+      .toEqual({ text: "Devolución de recuperación sin abono al saldo · 1 crédito", speech: null });
     expect(formatCreditMovement({ ...movement, refundRestoredCredit: null }))
-      .toBe("Devolución de recuperación con abono al saldo sin registrar · 1 crédito");
+      .toEqual({ text: "Devolución de recuperación con abono al saldo sin registrar · 1 crédito", speech: null });
   });
 });

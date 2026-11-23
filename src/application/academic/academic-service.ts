@@ -1505,6 +1505,7 @@ export async function listStudentClassHistory(actor: Actor, now: Date) {
     status: classReservations.status,
     cancellationType: reservationCancellations.cancellationType,
     cancellationSource: reservationCancellations.decisionSource,
+    creditRequestedAt: reservationCancellations.cancelledAt,
     sequencePending: reservationCancellations.sequencePending,
     attendanceOutcome: reservationAttendanceRecords.outcome,
     habitual: sql<boolean>`coalesce(${reservationCancellations.isHabitualReservation}, ${reservationHasHabitualAssignment})`,

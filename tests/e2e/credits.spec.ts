@@ -56,6 +56,11 @@ test.describe("credits flows", () => {
       await expect(page.getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
       await expect(page.getByText(/Concesión por cancelación · \+1 crédito/)).toHaveCount(1);
       await expect(page.getByText(/Consumo por recuperación · −1 crédito/)).toHaveCount(1);
+      const history = page.getByRole("region", { name: "Historial de movimientos" });
+      const tree = await history.ariaSnapshot();
+      expect(tree).toContain("Concesión por cancelación, más 1 crédito");
+      expect(tree).toContain("Consumo por recuperación, menos 1 crédito");
+      expect(tree).not.toContain("−1 crédito");
       const { rows: ledger } = await client.query(
         `select m.movement_type, m.amount, m.id, m.source_grant_movement_id, r.status
          from credit_ledger_movements m left join class_reservations r on r.id = m.related_reservation_id
@@ -120,6 +125,8 @@ test.describe("credits flows", () => {
       });
       await page.reload();
       await expect(page.getByText(/Devolución de recuperación · \+1 crédito/)).toHaveCount(1);
+      expect(await page.getByRole("region", { name: "Historial de movimientos" }).ariaSnapshot())
+        .toContain("Devolución de recuperación, más 1 crédito");
       await expect(page.getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
     });
   });
@@ -421,9 +428,25 @@ test.describe("credits flows", () => {
         const streak = page.getByRole("region", { name: "Racha de cancelaciones habituales" });
         await expect(streak).toContainText("La racha actual está pendiente");
         await expect(streak).toContainText("1 solicitud de crédito pendiente");
-        await expect(page.getByText("Crédito pendiente de evaluación", { exact: true })).toBeVisible();
+        const pending = page.getByRole("region", { name: "Historial de clases" }).getByRole("listitem")
+          .filter({ hasText: "Solicitud de crédito pendiente de evaluación" });
+        const readRequest = () => student.client.query(
+          "select cancelled_at, sequence_pending, credit_resolution from reservation_cancellations where student_profile_id = $1",
+          [profileId],
+        );
+        const { rows: [request] } = await readRequest();
+        expect(request).toMatchObject({ sequence_pending: true, credit_resolution: null });
+        const submitted = request.cancelled_at.toISOString();
+        await expect(pending.locator(`time[datetime="${submitted}"]`)).toHaveCount(1);
+        await expect(pending.locator(`time[datetime="${future.toJSDate().toISOString()}"]`)).toHaveCount(1);
+        expect(await pending.ariaSnapshot()).toContain("Fecha de solicitud");
+        expect(await streak.ariaSnapshot()).toContain("Fuera del saldo disponible hasta su resolución");
         await expect(page.getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
         await expect(upcoming.getByText(calendarLabel(future.toISODate()!), { exact: false })).toHaveCount(0);
+        await page.reload();
+        await expect(pending).toBeVisible();
+        expect((await readRequest()).rows).toEqual([request]);
+        expect((await student.client.query("select id from credit_ledger_movements where student_profile_id = $1", [profileId])).rowCount).toBe(0);
 
         const context = await browser.newContext({ baseURL });
         try {
@@ -440,7 +463,7 @@ test.describe("credits flows", () => {
         }
         await page.reload();
         await expect(streak).toContainText("Cancelaciones consecutivas contabilizadas · 1");
-        await expect(page.getByText("Crédito pendiente de evaluación", { exact: true })).toHaveCount(0);
+        await expect(pending).toHaveCount(0);
         await expect(page.getByText("Disponibles: 1 crédito", { exact: true })).toBeVisible();
         expect((await student.client.query("select id from credit_ledger_movements where student_profile_id = $1", [profileId])).rowCount).toBe(1);
       });

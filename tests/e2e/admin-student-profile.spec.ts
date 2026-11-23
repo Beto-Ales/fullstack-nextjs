@@ -97,7 +97,7 @@ test("admin reads the full profile at 360 px and returns to the list and session
       await expect(page.getByRole("region", { name: "Horarios habituales" })).toContainText("Acuarela de perfil");
       const upcomingRegion = page.getByRole("region", { name: "Próximas clases" });
       await expect(upcomingRegion.getByRole("listitem")).toHaveCount(2);
-      await expect(upcomingRegion.locator(`time[datetime="${start.toJSDate().toISOString()}"]`))
+      await expect(upcomingRegion.locator(`time[datetime="${start.toJSDate().toISOString()}"] [aria-hidden=true]`))
         .toHaveText(start.toFormat("dd/MM/yyyy, HH:mm 'GMT'ZZ"));
       await expect(upcomingRegion).toContainText("Clase habitual");
       const history = page.getByRole("region", { name: "Historial académico" });

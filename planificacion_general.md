@@ -490,4 +490,6 @@ El incremento 10.10 revisa la navegación y el teclado en los paneles existentes
 
 El incremento 10.11 unifica los formatos visibles de los historiales de ambos roles. Las fechas de calendario conservan su día. Los instantes se presentan en español en la hora de Copenhague y muestran el desplazamiento horario. Las cantidades distinguen los movimientos del saldo, los vencimientos y las solicitudes pendientes. [Convenciones y pruebas](docs/testing.md#incremento-1011--fechas-horas-y-créditos-en-los-historiales)
 
+El incremento 10.12 expresa los desplazamientos horarios y los signos de créditos en palabras para las tecnologías de asistencia. El historial del alumno identifica la fecha original de las solicitudes pendientes y su exclusión del saldo. La pronunciación con NVDA queda pendiente de comprobación manual. [Pruebas y recorrido manual](docs/testing.md#incremento-1012--accesibilidad-de-fechas-movimientos-y-solicitudes-pendientes)
+
 Este documento define los requisitos funcionales de referencia. Las decisiones técnicas definitivas deberán respetar el estado real del repositorio y quedar documentadas antes de implementar cambios importantes.

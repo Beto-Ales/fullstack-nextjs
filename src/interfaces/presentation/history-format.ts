@@ -6,10 +6,18 @@ import { formatInCenterTimeZone } from "@/src/domain/time/timezone";
 const dateFields = { day: "2-digit", month: "2-digit", year: "numeric" } as const;
 const integers = new Intl.NumberFormat("es-ES", { maximumFractionDigits: 0 });
 
-export function formatCalendarDate(value?: string | null): string | null {
+function parseCalendarDate(value?: string | null) {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const date = DateTime.fromISO(value, { zone: "UTC", locale: "es-ES" });
-  return date.isValid ? date.toFormat("dd/MM/yyyy") : null;
+  return date.isValid ? date : null;
+}
+
+export function formatCalendarDate(value?: string | null): string | null {
+  return parseCalendarDate(value)?.toFormat("dd/MM/yyyy") ?? null;
+}
+
+export function describeCalendarDate(value?: string | null): string | null {
+  return parseCalendarDate(value)?.toLocaleString(DateTime.DATE_FULL) ?? null;
 }
 
 export function formatHistoryInstant(value?: Date | null, dateOnly = false): string | null {
@@ -17,6 +25,20 @@ export function formatHistoryInstant(value?: Date | null, dateOnly = false): str
   return formatInCenterTimeZone(value, "es-ES", dateOnly ? dateFields : {
     ...dateFields, hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZoneName: "longOffset",
   });
+}
+
+export function describeHistoryInstant(value: Date, visible: string, dateOnly: boolean): string {
+  const dateText = formatInCenterTimeZone(value, "es-ES", {
+    dateStyle: "long", ...(!dateOnly && { timeStyle: "short", hourCycle: "h23" }),
+  });
+  if (dateOnly) return dateText;
+  const offset = /GMT([+-])(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(visible);
+  if (!offset) return dateText + ", GMT";
+  const [, sign, hours, minutes, seconds] = offset;
+  const units = [[Number(hours), "hora"], [Number(minutes), "minuto"], [Number(seconds ?? 0), "segundo"]] as const;
+  const duration = units.filter(([amount]) => amount > 0)
+    .map(([amount, unit]) => `${amount} ${unit}${amount === 1 ? "" : "s"}`).join(" y ");
+  return `${dateText}, GMT ${sign === "+" ? "más" : "menos"} ${duration}`;
 }
 
 export function formatHistoryInteger(amount?: number | null): string {
@@ -41,14 +63,18 @@ const movements = {
   RECOVERY_REFUND: { label: "Devolución de recuperación", sign: "+" },
 } satisfies Record<CreditMovementSnapshot["movementType"], { label: string; sign: string }>;
 
-export function formatCreditMovement({ movementType, amount, refundRestoredCredit }: CreditMovementSnapshot): string {
+export function formatCreditMovement({ movementType, amount, refundRestoredCredit }: CreditMovementSnapshot) {
   const { label, sign } = movements[movementType];
   const quantity = formatCreditQuantity(amount);
   if (movementType === "RECOVERY_REFUND" && refundRestoredCredit !== true) {
     const effect = refundRestoredCredit === false ? "sin abono al saldo" : "con abono al saldo sin registrar";
-    return `${label} ${effect} · ${quantity}`;
+    return { text: `${label} ${effect} · ${quantity}`, speech: null };
   }
-  return `${label} · ${Number.isSafeInteger(amount) && amount > 0 ? sign : ""}${quantity}`;
+  const signed = Number.isSafeInteger(amount) && amount > 0;
+  return {
+    text: `${label} · ${signed ? sign : ""}${quantity}`,
+    speech: signed ? `${label}, ${sign === "+" ? "más" : "menos"} ${quantity}` : null,
+  };
 }
 
 export const recoveryReservationLabels = {

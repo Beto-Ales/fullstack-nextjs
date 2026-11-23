@@ -113,7 +113,7 @@ test("shows only recorded class outcomes and keeps pending recoveries separate",
       const pendingRegion = page.getByRole("region", { name: "Mis recuperaciones" });
       await expect(pendingRegion.getByRole("listitem")).toHaveCount(1);
       await expect(pendingRegion.locator("time")).toHaveAttribute("datetime", pending.start.toUTC().toISO()!);
-      await expect(pendingRegion.locator("time")).toHaveText(pending.start.toFormat("dd/MM/yyyy, HH:mm 'GMT'ZZ"));
+      await expect(pendingRegion.locator("time [aria-hidden=true]")).toHaveText(pending.start.toFormat("dd/MM/yyyy, HH:mm 'GMT'ZZ"));
       await expect(pendingRegion.getByRole("button", { name: "Cancelar recuperación" })).toBeVisible();
       await expect(page.getByRole("region", { name: "Calendario semanal" })).toBeVisible();
       await expect(page.getByRole("region", { name: "Clases futuras disponibles" })).toBeVisible();

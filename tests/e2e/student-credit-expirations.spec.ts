@@ -126,6 +126,8 @@ test("shows only available credit expirations and updates them on recovery and r
       await expect(items.nth(0)).toContainText("2 créditos");
       await expect(items.nth(1)).toHaveText("1 crédito · Sin vencimiento");
       await expect(page.getByText("Disponibles: 3 créditos", { exact: true })).toBeVisible();
+      expect(await page.getByRole("region", { name: "Historial de movimientos" }).ariaSnapshot())
+        .toContain("Caducidad, menos 1 crédito");
 
       const recoveries = page.getByRole("region", { name: "Mis recuperaciones" });
       const newRecovery = recoveries.getByRole("listitem").filter({ hasText: calendarLabel(scenario.recoveryDate) });

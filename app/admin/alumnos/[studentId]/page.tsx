@@ -9,6 +9,7 @@ import {
 } from "@/src/application/academic/admin-student-profile-service";
 import { resolveCenterWeek } from "@/src/domain/time/center-week";
 import { CalendarDate, HistoryTime } from "@/app/components/history-time";
+import { HistoryText } from "@/app/components/history-text";
 import { formatCreditMovement, formatCreditQuantity, formatHistoryInteger } from "@/src/interfaces/presentation/history-format";
 import { requireRole } from "@/src/interfaces/auth/session";
 
@@ -108,7 +109,7 @@ function Pagination({ label, number, hasNext, href }: {
   return (
     <nav aria-label={`Paginación de ${label}`} className={styles.pagination}>
       {number > 1 && <Link href={href(number - 1)} prefetch={false}>Anterior</Link>}
-      <span>Página {number}</span>
+      <span aria-current="page">Página {number}</span>
       {hasNext && <Link href={href(number + 1)} prefetch={false}>Siguiente</Link>}
     </nav>
   );
@@ -257,7 +258,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
         <h3 id="movimientos" tabIndex={-1}>Movimientos del ledger</h3>
         <ProfileList page={movements} empty="No hay movimientos de créditos." render={(movement) => (
           <li key={movement.id} className={styles.card}>
-            <p className={styles.label}>{formatCreditMovement(movement)}</p>
+            <p className={styles.label}><HistoryText {...formatCreditMovement(movement)} /></p>
             <p><HistoryTime value={movement.createdAt} /></p>
             {movement.reason && <p>Motivo · {movement.reason}</p>}
             {movement.classSessionId && movement.classStartsAt && (
@@ -280,7 +281,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
             {entry.movements.length > 0 && (
               <ul>
                 {entry.movements.map((movement) => (
-                  <li key={movement.id}>{formatCreditMovement(movement)}</li>
+                  <li key={movement.id}><HistoryText {...formatCreditMovement(movement)} /></li>
                 ))}
               </ul>
             )}

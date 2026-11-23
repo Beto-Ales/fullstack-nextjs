@@ -60,9 +60,15 @@ test("keeps the student's habitual schedule after cancellation and excludes fore
 
       const schedules = page.getByRole("region", { name: "Horarios habituales" });
       const ownSchedule = schedules.getByRole("listitem").filter({ hasText: ownCourse });
-      const activeDates = `Vigente · Desde ${assignmentStart.toFormat("dd/MM/yyyy")} hasta ${courseEnd.toFormat("dd/MM/yyyy")}`;
+      const from = ownSchedule.locator(`time[datetime="${assignmentStart.toISODate()}"]`);
+      const until = ownSchedule.locator(`time[datetime="${courseEnd.toISODate()}"]`);
       await expect(schedules).toContainText("Hora de Copenhague");
-      await expect(ownSchedule).toContainText(activeDates);
+      await expect(ownSchedule).toContainText("Vigente");
+      await expect(from.locator("[aria-hidden=true]")).toHaveText(assignmentStart.toFormat("dd/MM/yyyy"));
+      await expect(until.locator("[aria-hidden=true]")).toHaveText(courseEnd.toFormat("dd/MM/yyyy"));
+      const dateTree = await from.ariaSnapshot();
+      expect(dateTree).toContain(assignmentStart.setLocale("es").toFormat("d 'de' MMMM 'de' yyyy"));
+      expect(dateTree).not.toContain("GMT");
       await expect(ownSchedule).toContainText(`${classDate.setLocale("es").toFormat("cccc")} · 18:00–19:00`);
       await expect(schedules.getByRole("listitem").filter({ hasText: futureCourse })).toContainText("Próximo");
       await expect(schedules.getByText(endedCourse, { exact: true })).toHaveCount(0);
@@ -73,7 +79,8 @@ test("keeps the student's habitual schedule after cancellation and excludes fore
       await occurrence.getByRole("button", { name: "Cancelar clase" }).click();
       await expect(page.getByRole("status")).toHaveText("Clase cancelada.");
       await expect(occurrence).toHaveCount(0);
-      await expect(ownSchedule).toContainText(activeDates);
+      await expect(from).toBeVisible();
+      await expect(until).toBeVisible();
       const { rows: [assignment] } = await student.client.query(
         `select effective_from::text, effective_to::text from student_template_assignments
          where student_profile_id=$1 and template_id=$2`,

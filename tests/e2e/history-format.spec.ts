@@ -39,16 +39,29 @@ test("shows the two Copenhagen autumn offsets and an unchanged ledger on both pa
         .getByRole("link", { name: "Créditos", exact: true }).press("Enter");
       await expect(page.getByRole("heading", { name: "Créditos", exact: true })).toBeFocused();
       const option = page.getByRole("region", { name: "Clases futuras disponibles" }).locator(`time[datetime="${start}"]`);
-      await expect(option).toHaveText("01/06/2099, 00:00 GMT+02:00");
+      await expect(option.locator("[aria-hidden=true]")).toHaveText("01/06/2099, 00:00 GMT+02:00");
       const html = await (await page.request.get("/student")).text();
       const serverText = await page.evaluate(({ html, start }) => new DOMParser()
         .parseFromString(html, "text/html").querySelector(`time[datetime="${start}"]`)?.textContent, { html, start });
       expect(serverText).toBe(await option.textContent());
 
       async function checkMovement() {
-        const entry = page.getByRole("listitem").filter({ hasText: "Concesión por cancelación · +1 crédito" });
-        await expect(entry.locator(`time[datetime="${granted}"]`)).toHaveText("25/10/2020, 02:30 GMT+02:00");
-        await expect(entry.locator(`time[datetime="${expires}"]`)).toHaveText("25/10/2020, 02:30 GMT+01:00");
+        const history = page.getByRole("region", { name: "Historial de movimientos" });
+        await expect(history.getByRole("heading", { level: 3 })).toHaveText("Historial de movimientos");
+        const entry = history.getByRole("list").getByRole("listitem").filter({ hasText: "Concesión por cancelación · +1 crédito" });
+        for (const [timestamp, visible, speech] of [
+          [granted, "25/10/2020, 02:30 GMT+02:00", "25 de octubre de 2020 a las 2:30, GMT más 2 horas"],
+          [expires, "25/10/2020, 02:30 GMT+01:00", "25 de octubre de 2020 a las 2:30, GMT más 1 hora"],
+        ]) {
+          const time = entry.locator(`time[datetime="${timestamp}"]`);
+          await expect(time.locator("[aria-hidden=true]")).toHaveText(visible);
+          const tree = await time.ariaSnapshot();
+          expect(tree).toContain(speech);
+          expect(tree).not.toContain(visible);
+        }
+        const tree = await entry.ariaSnapshot();
+        expect(tree.split("Concesión por cancelación, más 1 crédito")).toHaveLength(2);
+        expect(tree).not.toContain("Concesión por cancelación · +1 crédito");
         await expect(page.getByText("Disponibles: 0 créditos", { exact: true })).toBeVisible();
         await expect(page.getByText("Caducados: 1 crédito", { exact: true })).toBeVisible();
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize()!.width);

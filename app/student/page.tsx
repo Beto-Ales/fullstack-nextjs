@@ -26,6 +26,7 @@ import { ActionFeedback } from "@/app/components/action-feedback";
 import { PendingSubmit } from "@/app/components/pending-submit";
 import { SectionNavigation } from "@/app/components/section-navigation";
 import { HistoryTime } from "@/app/components/history-time";
+import { HistoryText } from "@/app/components/history-text";
 import { formatCreditMovement, formatCreditQuantity, formatPendingCreditRequests, recoveryReservationLabels } from "@/src/interfaces/presentation/history-format";
 
 type StudentHomePageProps = {
@@ -153,22 +154,26 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
             : streak.currentConsecutiveCancellations < maximum && (
               <p>Si continúa la racha, la próxima cancelación estaría dentro del límite. También se aplican la antelación y el cupo mensual.</p>
             )}
-          {streak.pendingCredits > 0 && <p>{formatPendingCreditRequests(streak.pendingCredits)}</p>}
+          {streak.pendingCredits > 0 && (
+            <p>{formatPendingCreditRequests(streak.pendingCredits)}. Fuera del saldo disponible hasta su resolución.</p>
+          )}
         </section>
       )}
       <p>Disponibles: {formatCreditQuantity(creditOverview.availableCredits)}</p>
       <p>Caducados: {formatCreditQuantity(creditOverview.expiredCredits)}</p>
       <CreditExpirations expirations={creditOverview.availableExpirations} />
-      <h3>Historial de movimientos</h3>
-      {creditOverview.history.length === 0 ? <p>Todavía no hay movimientos de crédito.</p> : <ul>
-        {creditOverview.history.map((movement) => (
-          <li key={movement.id}>
-            {formatCreditMovement(movement)} · <HistoryTime value={movement.createdAt} />
-            {movement.expiresAt && <> · Vencimiento del crédito: <HistoryTime value={movement.expiresAt} /></>}
-            {movement.reason ? ` · motivo: ${movement.reason}` : ""}
-          </li>
-        ))}
-      </ul>}
+      <section aria-labelledby="movimientos-creditos">
+        <h3 id="movimientos-creditos">Historial de movimientos</h3>
+        {creditOverview.history.length === 0 ? <p>Todavía no hay movimientos de crédito.</p> : <ul>
+          {creditOverview.history.map((movement) => (
+            <li key={movement.id}>
+              <HistoryText {...formatCreditMovement(movement)} /> · <HistoryTime value={movement.createdAt} />
+              {movement.expiresAt && <> · Vencimiento del crédito: <HistoryTime value={movement.expiresAt} /></>}
+              {movement.reason ? ` · motivo: ${movement.reason}` : ""}
+            </li>
+          ))}
+        </ul>}
+      </section>
 
       <h2 id="recuperaciones" tabIndex={-1}>Reservas de recuperación</h2>
       <section aria-labelledby="available-recoveries">

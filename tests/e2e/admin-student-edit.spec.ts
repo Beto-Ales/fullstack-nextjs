@@ -211,7 +211,7 @@ test("pages the audit of a disabled student by keyboard and keeps other audit re
         const event = audit.getByRole("listitem").first();
         await expect(audit.getByRole("listitem")).toHaveCount(20);
         await expect(event).toContainText(admin.email);
-        await expect(event.locator("time")).toHaveText("15/01/2026, 15:30 GMT+01:00");
+        await expect(event.locator("time [aria-hidden=true]")).toHaveText("15/01/2026, 15:30 GMT+01:00");
         await expect(event.locator("time")).toHaveAttribute("datetime", "2026-01-15T14:30:00.000Z");
         await expect(event).toContainText("Actualización del perfil");
         await expect(event).toContainText("Anterior · Campo vacío");
@@ -226,14 +226,14 @@ test("pages the audit of a disabled student by keyboard and keeps other audit re
         const navigation = audit.getByRole("navigation", { name: "Paginación de historial de modificaciones" });
         await navigation.getByRole("link", { name: "Siguiente" }).press("Enter");
         await expect(audit.getByRole("listitem")).toHaveCount(1);
-        await expect(navigation).toContainText("Página 2");
+        await expect(navigation.locator('[aria-current="page"]')).toHaveText("Página 2");
         const url = new URL(page.url());
         expect(Object.fromEntries(url.searchParams)).toMatchObject({
           week: "2026-11-16", movimientos: "2", recuperaciones: "3", modificaciones: "2",
         });
         await navigation.getByRole("link", { name: "Anterior" }).press("Enter");
         await expect(audit.getByRole("listitem")).toHaveCount(20);
-        await expect(navigation).toContainText("Página 1");
+        await expect(navigation.locator('[aria-current="page"]')).toHaveText("Página 1");
       });
     });
   });

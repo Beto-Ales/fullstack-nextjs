@@ -191,7 +191,7 @@ test("shows confirmed enrollments and cancellation history for one session and p
         await expect(entries.nth(0)).toContainText("Por administración");
         const latestTime = entries.nth(0).locator("time");
         await expect(latestTime).toHaveAttribute("datetime", latestCancellation.toJSDate().toISOString());
-        await expect(latestTime).toHaveText(latestCancellation.setZone(CENTER_TIME_ZONE).toFormat("dd/MM/yyyy, HH:mm 'GMT'ZZ"));
+        await expect(latestTime.locator("[aria-hidden=true]")).toHaveText(latestCancellation.setZone(CENTER_TIME_ZONE).toFormat("dd/MM/yyyy, HH:mm 'GMT'ZZ"));
         await expect(entries.nth(1)).toContainText(cancelledName);
         await expect(entries.nth(1)).toContainText("Ordinaria");
         await expect(entries.nth(1)).toContainText("Por el alumno");
