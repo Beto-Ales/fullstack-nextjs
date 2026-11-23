@@ -209,7 +209,8 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
           <li key={schedule.assignmentId} className={styles.card}>
             <p className={styles.label}>{schedule.courseName}</p>
             <p>{weekdays[schedule.isoWeekday - 1]} · <time>{schedule.startsAtLocalTime.slice(0, 5)}</time></p>
-            <p>{schedule.courseStatus === "INACTIVE" ? "Curso inactivo"
+            <p>{schedule.assignmentStatus === "CANCELLED" ? "Asignación anulada"
+              : schedule.courseStatus === "INACTIVE" ? "Curso inactivo"
               : !schedule.currentOrUpcoming ? "Vigencia finalizada" : schedule.upcoming ? "Próximo" : "Vigente"}</p>
             {schedule.assignmentStatus === "ENDED" && <p>Asignación cerrada</p>}
             <p>Desde <CalendarDate value={schedule.effectiveFrom} />{schedule.effectiveTo && <> hasta <CalendarDate value={schedule.effectiveTo} /></>}</p>

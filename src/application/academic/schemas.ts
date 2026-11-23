@@ -73,6 +73,11 @@ export const endStudentTemplateAssignmentSchema = z.object({
   effectiveTo: z.iso.date("Introduce una fecha de fin válida en formato AAAA-MM-DD.").optional(),
 });
 
+export const cancelFutureAssignmentSchema = z.strictObject({
+  assignmentId: z.string().uuid("Invalid assignment id."),
+  reason: z.string().trim().min(3).max(300),
+});
+
 export const reserveSeatSchema = z.object({
   classSessionId: z.string().uuid("Invalid class session id."),
   studentProfileId: z.string().uuid("Invalid student profile id."),

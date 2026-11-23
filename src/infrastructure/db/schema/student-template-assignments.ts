@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { classTemplates } from "@/src/infrastructure/db/schema/class-templates";
 import { studentProfiles } from "@/src/infrastructure/db/schema/student-profiles";
 
-export const studentTemplateAssignmentStatusEnum = pgEnum("student_template_assignment_status", ["ACTIVE", "ENDED"]);
+export const studentTemplateAssignmentStatusEnum = pgEnum("student_template_assignment_status", ["ACTIVE", "ENDED", "CANCELLED"]);
 
 export const studentTemplateAssignments = pgTable(
   "student_template_assignments",

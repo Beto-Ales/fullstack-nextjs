@@ -2,7 +2,7 @@
 
 ## Estado actual y evidencia
 
-La finalización individual registra el último día incluido y rechaza un fin anterior al inicio desde 10.15. El modelo de asignación admite `ACTIVE` y `ENDED`. Una asignación delimitada puede estar `ENDED` y seguir siendo elegible dentro del rango. No hay una operación individual de anulación anticipada. La baja desactiva la cuenta, revoca sus sesiones, cierra las asignaciones alcanzadas por su filtro, cancela reservas futuras, audita y concilia en la misma transacción. El cierre usa el día de Copenhague sin compararlo con el inicio de la asignación.
+La finalización individual registra el último día incluido y rechaza un fin anterior al inicio desde 10.15. El modelo de asignación admite `ACTIVE`, `ENDED` y `CANCELLED` desde 10.17. Una asignación delimitada puede estar `ENDED` y seguir siendo elegible dentro del rango. La anulación anticipada ya tiene una operación individual auditada. La baja desactiva la cuenta, revoca sus sesiones, anula las asignaciones futuras, cierra las iniciadas con un intervalo válido, cancela reservas futuras, audita y concilia en la misma transacción.
 
 | Ensayo | Resultado observado en PostgreSQL 15 mediante H08 |
 | --- | --- |
@@ -14,6 +14,16 @@ La finalización individual registra el último día incluido y rechaza un fin a
 | F · Baja y modificación simultáneas | Con conexiones independientes se observó la finalización a la espera del perfil y la baja a la espera de la finalización. Al liberar el bloqueo ambas concluyeron y hubo una única concesión para la solicitud observada. Se verificó ese orden de llegada. |
 
 Pasaron 8 pruebas dirigidas en la última ejecución, incluida la regresión existente que registra una devolución vencida sin restaurar saldo y preserva una recuperación que ya comenzó. Se usaron fixtures sintéticas y un archivo temporal retirado tras el ensayo. H08 retiró ambos contenedores creados durante la investigación. No se ejecutó la suite completa ni se consultaron o migraron bases persistentes. Confianza alta en los resultados de las fixtures y en el defecto de intervalo. El alcance en datos históricos y otros órdenes de concurrencia queda por determinar.
+
+## Implementación 10.17
+
+La migración aditiva `0015_future_assignment_cancellation` añade el valor `CANCELLED` al estado de la asignación y la tabla inmutable `student_template_assignment_cancellations`, con una fila por asignación y origen `ADMIN_INDIVIDUAL` o `STUDENT_WITHDRAWAL`. La asignación conserva su identificador y sus fechas; la auditoría guarda actor, instante, motivo, fechas originales, versión normativa, reservas canceladas y reservas ambiguas.
+
+La anulación individual exige `SUPER_ADMIN`, un motivo de 3 a 300 caracteres y un día local de Copenhague anterior al inicio. Toma cuenta `FOR SHARE`, la clave asesora de la plantilla y el perfil; después escribe el estado y la auditoría. Reintentar devuelve la auditoría original sin duplicarla. Una asignación iniciada se rechaza con `assignment_already_started`. La operación no altera reservas, no crea solicitudes ni mueve el ledger.
+
+La baja comparte la tabla de auditoría: anula las asignaciones futuras sin cambiar su fin y cierra las iniciadas con el día local. Así ningún intervalo nuevo queda invertido. La generación, la capacidad, la habitualidad, la secuencia y el panel del alumno excluyen `CANCELLED`; la ficha administrativa conserva la fila y la etiqueta.
+
+Sigue pendiente exponer la acción en el panel, registrar la procedencia de nuevas reservas habituales para poder cancelar reservas inequívocamente vinculadas, y el saneamiento o la restricción de intervalos históricos. Las reservas antiguas sin procedencia se conservan e informan para revisión. [Pruebas](testing.md#incremento-1017--anulación-explícita-de-asignaciones-futuras)
 
 ## Semántica propuesta
 

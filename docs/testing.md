@@ -132,7 +132,6 @@ Se incluyen pruebas de:
 - `tests/e2e/credits.spec.ts` usa cuentas sintéticas de alumno y administrador creadas por la fixture. Ejecutar contra una base PostgreSQL TEST local y aislada con las migraciones hasta 0006. Pasar su URL en `TEST_DATABASE_URL` antes de ejecutar `npm run test:e2e`. Playwright dirige Next.js a esa base y puede usar un puerto libre indicado con `E2E_PORT`. Si falta `TEST_DATABASE_URL`, se omiten los casos de créditos.
 - El caso del alumno prepara dos cancelaciones habituales previas y calcula las fechas a partir de la antelación publicada en Copenhague. Desde el panel, el alumno cancela la tercera clase a tiempo y comprueba la plaza liberada y el crédito concedido. Luego reserva una recuperación con una plaza libre, vuelve al panel y verifica la confirmación, el saldo actualizado y un único consumo vinculado a la concesión.
 - En Chromium pasaron los cinco E2E, incluidos el flujo del alumno y el acceso del administrador a créditos. Las comprobaciones en PostgreSQL se hicieron con datos sintéticos. Se corrigieron las redirecciones de éxito del inicio de sesión y de la reserva de recuperación que se trataban como errores.
-
 - La regresión de cancelación de recuperación reproduce la navegación a un error tras cancelar correctamente. Verifica después de la corrección el mensaje de confirmación, la plaza liberada, el saldo restaurado y una única devolución con referencia al consumo, a la concesión y a la versión vigente. La prueba vuelve a consultar el panel para verificar el saldo y la devolución. Con esta regresión pasaron los seis E2E en Chromium contra TEST aislado.
 
 ### Cierre de fase 06
@@ -464,3 +463,13 @@ COMMIT;
 ```
 
 `npm run test:verify` pasó con 348 pruebas Vitest, 46 casos Chromium y un caso Chromium con normativa sintética. Se repitieron las pruebas focalizadas tras añadir la comprobación explícita de espera, sin cambios adicionales al código de producción. También pasaron TypeScript, ESLint y Drizzle.
+
+## Incremento 10.17 — Anulación explícita de asignaciones futuras
+
+La regresión `assignment-cancellation.integration.test.ts` cubre permisos, motivo, fechas conservadas, auditoría, reservas ambiguas, idempotencia concurrente, rechazo de asignaciones iniciadas, finalización de una anulada y baja con varias asignaciones. Comprueba que no se crean reservas, cancelaciones ni movimientos de crédito, y que `effective_to < effective_from` queda en cero. La prueba existente de baja se actualizó para distinguir `ENDED` de `CANCELLED` y para leer la nueva auditoría. La generación añade un caso que demuestra que una asignación anulada no recibe plaza.
+
+- Ejecutar `npm run test:integration -- assignment-cancellation.integration.test.ts session-generation.integration.test.ts academic.integration.test.ts` y después la suite completa con `npm run test:integration`.
+- Las pruebas usan exclusivamente PostgreSQL 15 desechable de H08. La migración `0015_future_assignment_cancellation` se aplica desde el aprovisionador; no se ejecutó en DEV, TEST persistente ni producción.
+- `scripts/db-schema-fingerprints.json` incorpora la huella del journal hasta `0015`. El ensayo H07 verifica todos los prefijos, la actualización desde `0005`/`0006`, la restauración y la detección de deriva.
+- Pasaron **356 pruebas Vitest** (133 unitarias y 223 integraciones), **46 escenarios Chromium** y **1 escenario Chromium adicional** con normativa sintética mediante H08. También pasaron TypeScript, ESLint y `drizzle-kit check`.
+- La consulta de diagnóstico de intervalos históricos del 10.15 sigue siendo de solo lectura. No se corrigieron filas anteriores ni se añadió una restricción de tabla.

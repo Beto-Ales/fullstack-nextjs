@@ -17,6 +17,7 @@ export function habitualAssignmentExists(input: {
     select 1 from student_template_assignments sta
     where sta.student_profile_id = ${input.studentProfileId}
       and sta.template_id = ${input.templateId}
+      and sta.status <> 'CANCELLED'
       and sta.effective_from <= ${input.localDate}
       and (sta.effective_to is null or sta.effective_to >= ${input.localDate})
   )`;
@@ -96,6 +97,11 @@ export function selectHabitualSchedules(reader: Pick<typeof db, "select">, local
   }).from(studentTemplateAssignments)
     .innerJoin(studentProfiles, eq(studentProfiles.id, studentTemplateAssignments.studentProfileId))
     .innerJoin(classTemplates, eq(classTemplates.id, studentTemplateAssignments.templateId))
-    .where(includeHistory ? owner : and(owner, eq(classTemplates.status, "ACTIVE"), currentOrUpcoming))
+    .where(includeHistory ? owner : and(
+      owner,
+      eq(classTemplates.status, "ACTIVE"),
+      ne(studentTemplateAssignments.status, "CANCELLED"),
+      currentOrUpcoming,
+    ))
     .orderBy(classTemplates.isoWeekday, classTemplates.startsAtLocalTime, classTemplates.name, effectiveFrom, studentTemplateAssignments.id);
 }

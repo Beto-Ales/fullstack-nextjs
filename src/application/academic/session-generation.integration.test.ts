@@ -14,6 +14,7 @@ type Generator = "application" | (typeof parsers)[number];
 describe("session generation (postgres)", () => {
   let client: Awaited<ReturnType<typeof createVerifiedTestClient>>;
   let service: typeof import("@/src/application/academic/academic-service");
+  let cancellation: typeof import("@/src/application/academic/assignment-cancellation");
   let admin: { userId: string; role: "SUPER_ADMIN" };
   let date: string;
   let now: DateTime;
@@ -23,6 +24,7 @@ describe("session generation (postgres)", () => {
   beforeAll(async () => {
     client = await createVerifiedTestClient();
     service = await import("@/src/application/academic/academic-service");
+    cancellation = await import("@/src/application/academic/assignment-cancellation");
   });
 
   beforeEach(async () => {
@@ -248,5 +250,22 @@ describe("session generation (postgres)", () => {
     } finally {
       await blocker.end();
     }
+  });
+
+  it("does not reserve seats for an annulled future assignment", async () => {
+    const active = await createStudent();
+    const cancelled = await createStudent();
+    await assign(active);
+    const { assignmentId } = await assign(cancelled, now.plus({ days: 1 }).toISODate()!);
+
+    await expect(cancellation.cancelFutureAssignment(admin, {
+      assignmentId, reason: "Cambio de horario",
+    })).resolves.toMatchObject({ cancelled: true, cancelledReservationIds: [], ambiguousReservationIds: [] });
+
+    await generate("application");
+    const [created] = await sessions();
+    expect(await reservations(created.id)).toEqual([{
+      student_profile_id: active, origin: "ORDINARY", status: "CONFIRMED", regulation_version_id: versionId,
+    }]);
   });
 });

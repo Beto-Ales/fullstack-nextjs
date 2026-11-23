@@ -91,6 +91,7 @@ export function activeHabitualStudents(session) {
     join student_profiles p on p.id = a.student_profile_id
     join users u on u.id = p.user_id
     where a.template_id = ${session.templateId}
+      and a.status <> 'CANCELLED'
       and a.effective_from <= ${session.localDate}
       and (a.effective_to is null or a.effective_to >= ${session.localDate})
       and u.status = 'ACTIVE'

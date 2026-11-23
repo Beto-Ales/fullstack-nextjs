@@ -498,4 +498,6 @@ El incremento 10.15 corrige R14-01: la finalización de asignaciones habituales 
 
 El incremento 10.16 confirma que la baja de cuenta aún puede invertir el intervalo de una asignación futura. La propuesta de anulación explícita y auditada queda pendiente de aprobación funcional. [Evidencia y diseño](docs/design-future-assignments.md)
 
+El incremento 10.17 implementa la anulación explícita y auditada de asignaciones futuras con `SUPER_ADMIN`, motivo e idempotencia por asignación. La baja deja de invertir intervalos: anula las futuras conservando sus fechas y cierra las iniciadas con el día local. La generación y las lecturas de habitualidad excluyen las anuladas; las reservas sin procedencia demostrable se conservan e informan para revisión. La migración aditiva `0015_future_assignment_cancellation` añade el estado y la auditoría. La acción de panel y el inventario histórico quedan pendientes. [Modelo académico](docs/academic-model.md#anulación-de-asignaciones-futuras)
+
 Este documento define los requisitos funcionales de referencia. Las decisiones técnicas definitivas deberán respetar el estado real del repositorio y quedar documentadas antes de implementar cambios importantes.

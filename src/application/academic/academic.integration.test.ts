@@ -170,10 +170,13 @@ describe("academic integration (postgres)", () => {
     expect(await auth.getAuthenticatedUserFromSessionToken(login.sessionToken)).toBeNull();
     await expect(auth.authenticateUser(credentials)).rejects.toMatchObject({ code: "invalid_credentials" });
     const { rows: assignments } = await client.query(
-      "select status,effective_to::text from student_template_assignments where student_profile_id=$1 and template_id=$2",
+      "select status,effective_to::text from student_template_assignments where student_profile_id=$1 and template_id=$2 order by effective_from",
       [departing.profileId, templateId],
     );
-    expect(assignments).toEqual(Array.from({ length: 2 }, () => ({ status: "ENDED", effective_to: today.toISODate() })));
+    expect(assignments).toEqual([
+      { status: "ENDED", effective_to: today.toISODate() },
+      { status: "CANCELLED", effective_to: today.plus({ weeks: 2 }).toISODate() },
+    ]);
     const { rows: history } = await client.query(
       "select status,effective_to from student_template_assignments where id=$1", [completedCourseAssignment.assignmentId],
     );
@@ -184,13 +187,33 @@ describe("academic integration (postgres)", () => {
     const audit = await readAudit();
     expect(audit).toEqual([{
       student_user_id: departing.userId, withdrawn_by_user_id: admin.userId, withdrawn_at: account.deactivated_at,
-      ended_assignment_ids: expect.arrayContaining([assignmentId, scheduledAssignment.assignmentId]),
+      ended_assignment_ids: expect.arrayContaining([assignmentId]),
       released_reservation_ids: expect.arrayContaining(reservationIds.slice(1)),
       cancelled_recoveries: expect.arrayContaining([
         { reservationId: onTime.reservationId, refunded: true, refundRestoredCredit: true },
         { reservationId: late.reservationId, refunded: false, refundRestoredCredit: false },
       ]),
     }]);
+    const { rows: assignmentAudit } = await client.query(
+      `select assignment_id,source,cancelled_by_user_id,reason,effective_from::text,effective_to::text,
+         cancelled_reservation_ids,ambiguous_reservation_ids
+       from student_template_assignment_cancellations where student_profile_id=$1`,
+      [departing.profileId],
+    );
+    expect(assignmentAudit).toEqual([{
+      assignment_id: scheduledAssignment.assignmentId,
+      source: "STUDENT_WITHDRAWAL",
+      cancelled_by_user_id: admin.userId,
+      reason: "Baja de la cuenta del alumno",
+      effective_from: today.plus({ weeks: 1 }).toISODate(),
+      effective_to: today.plus({ weeks: 2 }).toISODate(),
+      cancelled_reservation_ids: [],
+      ambiguous_reservation_ids: [],
+    }]);
+    const { rows: [{ invalid_assignment_count }] } = await client.query(
+      "select count(*)::int as invalid_assignment_count from student_template_assignments where effective_to < effective_from",
+    );
+    expect(invalid_assignment_count).toBe(0);
     const { rows: bookings } = await client.query(
       "select id,status,cancelled_at from class_reservations where id=any($1::text[])",
       [[...reservationIds, onTime.reservationId, late.reservationId, otherReservation.reservationId]],

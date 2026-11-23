@@ -1,8 +1,11 @@
 import "server-only";
 
-import { and, asc, eq, exists, gt, gte, isNotNull, isNull, or } from "drizzle-orm";
+import { and, asc, eq, exists, gt, gte, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 
+import {
+  recordAssignmentCancellations, WITHDRAWAL_ASSIGNMENT_CANCELLATION_REASON,
+} from "@/src/application/academic/assignment-cancellation";
 import { regulationDate, resolveCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import { lockStudentProfile, resolvePendingCancellationCredits } from "@/src/application/credits/credit-service";
 import { cancelFutureRecoveriesForWithdrawal } from "@/src/application/recovery/recovery-service";
@@ -52,20 +55,52 @@ export async function withdrawStudent(actor: { userId: string; role: UserRole },
       .where(eq(users.id, student.userId));
     await tx.delete(sessions).where(eq(sessions.userId, student.userId));
 
-    const endedAssignments = await tx.update(studentTemplateAssignments)
-      .set({ status: "ENDED", effectiveTo: localDate, updatedAt: withdrawnAt })
+    const assignmentChanges = await tx.update(studentTemplateAssignments)
+      .set({
+        // An assignment that has not started cannot take today's date as its end.
+        status: sql`case when ${studentTemplateAssignments.effectiveFrom} > ${localDate}::date
+          then 'CANCELLED'::student_template_assignment_status
+          else 'ENDED'::student_template_assignment_status end`,
+        effectiveTo: sql`case when ${studentTemplateAssignments.effectiveFrom} > ${localDate}::date
+          then ${studentTemplateAssignments.effectiveTo}
+          else ${localDate}::date end`,
+        updatedAt: withdrawnAt,
+      })
       .from(classTemplates).where(and(
         eq(studentTemplateAssignments.templateId, classTemplates.id),
         or(isNull(classTemplates.effectiveTo), gte(classTemplates.effectiveTo, localDate)),
         eq(studentTemplateAssignments.studentProfileId, studentProfileId),
+        ne(studentTemplateAssignments.status, "CANCELLED"),
         or(
           isNull(studentTemplateAssignments.effectiveTo),
           gt(studentTemplateAssignments.effectiveTo, localDate),
           and(eq(studentTemplateAssignments.effectiveTo, localDate), eq(studentTemplateAssignments.status, "ACTIVE")),
         ),
-      )).returning({ id: studentTemplateAssignments.id });
+      )).returning({
+        id: studentTemplateAssignments.id,
+        status: studentTemplateAssignments.status,
+        templateId: studentTemplateAssignments.templateId,
+        effectiveFrom: studentTemplateAssignments.effectiveFrom,
+        effectiveTo: studentTemplateAssignments.effectiveTo,
+      });
+    const endedAssignmentIds = assignmentChanges.filter(({ status }) => status === "ENDED").map(({ id }) => id);
+    const cancelledAssignments = assignmentChanges.filter(({ status }) => status === "CANCELLED");
 
     const regulation = await resolveCurrentAcademicRegulation(tx, withdrawnAt);
+    await recordAssignmentCancellations(tx, cancelledAssignments.map(({ id, templateId, effectiveFrom, effectiveTo }) => ({
+      assignmentId: id,
+      studentProfileId,
+      templateId,
+      source: "STUDENT_WITHDRAWAL",
+      cancelledByUserId: actor.userId,
+      cancelledAt: withdrawnAt,
+      reason: WITHDRAWAL_ASSIGNMENT_CANCELLATION_REASON,
+      effectiveFrom,
+      effectiveTo,
+      cancelledReservationIds: [],
+      ambiguousReservationIds: [],
+      regulationVersionId: regulation.id,
+    })));
     const releasedReservations = await tx.update(classReservations).set({
       status: "CANCELLED",
       cancelledAt: withdrawnAt,
@@ -87,7 +122,7 @@ export async function withdrawStudent(actor: { userId: string; role: UserRole },
       studentUserId: student.userId,
       withdrawnByUserId: actor.userId,
       withdrawnAt,
-      endedAssignmentIds: endedAssignments.map(({ id }) => id),
+      endedAssignmentIds,
       releasedReservationIds: releasedReservations.map(({ id }) => id),
       cancelledRecoveries,
     });

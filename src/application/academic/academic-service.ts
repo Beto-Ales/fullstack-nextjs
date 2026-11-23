@@ -160,6 +160,7 @@ async function collectHabitualSequenceEvents(tx: QueryExecutor, studentProfileId
           from student_template_assignments sta
           where sta.student_profile_id = ar.student_profile_id
             and sta.template_id = cs.template_id
+            and sta.status <> 'CANCELLED'
             and sta.effective_from <= cs.local_date
             and (sta.effective_to is null or sta.effective_to >= cs.local_date)
         )
@@ -661,6 +662,7 @@ async function assertHabitualEnrollmentCapacity(
         join users u on u.id = p.user_id
         where a.template_id = ${input.templateId}
           and a.student_profile_id <> ${input.studentProfileId}
+          and a.status <> 'CANCELLED'
           and a.effective_from <= c.day and (a.effective_to is null or a.effective_to >= c.day)
           and (u.status = 'ACTIVE' or c.day < (u.deactivated_at at time zone ${CENTER_TIME_ZONE})::date)
       ) >= ${DEFAULT_CLASS_CAPACITY}
@@ -751,6 +753,12 @@ export async function endStudentTemplateAssignment(actor: Actor, input: unknown)
     const [current] = await tx.select().from(studentTemplateAssignments)
       .where(eq(studentTemplateAssignments.id, payload.assignmentId));
     if (!current) return;
+    if (current.status === "CANCELLED") {
+      throw new ApplicationError(
+        "La asignación está anulada y no puede finalizarse.",
+        "assignment_cancelled", 409, true,
+      );
+    }
     const effectiveTo = payload.effectiveTo ?? nowCenterTime().toISODate()!;
     if (effectiveTo < current.effectiveFrom) {
       throw new ApplicationError(
