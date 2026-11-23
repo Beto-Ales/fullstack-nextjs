@@ -72,9 +72,10 @@ export function AssignmentCancellationPanel({
             <p><strong>Inicio:</strong> <CalendarDate value={effectiveFrom} /></p>
             <p><strong>Fin:</strong> {effectiveTo ? <CalendarDate value={effectiveTo} /> : "Sin fecha de fin"}</p>
             <p>
-              Las reservas futuras confirmadas vinculadas a esta asignación se cancelarán automáticamente y dejarán de
-              ocupar plaza. Las reservas sin procedencia demostrable se conservarán y quedarán señaladas para revisión
-              administrativa.
+              Las reservas habituales futuras confirmadas vinculadas a esta asignación se cancelarán automáticamente y
+              dejarán de ocupar plaza. Las recuperaciones no se cancelan: si alguna figura vinculada de forma
+              excepcional, se conservará con su consumo de crédito y quedará señalada para revisión. Las reservas sin
+              procedencia demostrable también se conservan y quedan señaladas.
             </p>
             <p>
               Se conservarán las fechas originales, el historial y el motivo. Esta anulación no modifica el aforo de las
@@ -101,20 +102,23 @@ export function AssignmentCancellationPanel({
           <p>{state.message}</p>
           <dl>
             <div>
-              <dt>Reservas futuras canceladas</dt>
+              <dt>Reservas habituales futuras canceladas</dt>
               <dd>{state.cancelledReservations}</dd>
             </div>
             <div>
-              <dt>Reservas no canceladas automáticamente</dt>
+              <dt>Reservas conservadas para revisión</dt>
               <dd>{state.ambiguousReservations}</dd>
             </div>
           </dl>
           {state.ambiguousReservations > 0 && (
             <p>
-              Las reservas no canceladas automáticamente se conservan confirmadas y requieren revisión administrativa.
+              Las reservas conservadas siguen confirmadas y requieren revisión administrativa individual.
             </p>
           )}
-          <p>Las reservas canceladas dejan de ocupar plaza sin alterar el aforo de las sesiones.</p>
+          <p>
+            Las reservas canceladas dejan de ocupar plaza sin alterar el aforo de las sesiones. Las recuperaciones
+            conservadas mantienen su plaza y su consumo de crédito.
+          </p>
         </div>
       )}
       {state.status === "error" && !reasonError && (

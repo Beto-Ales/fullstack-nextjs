@@ -116,7 +116,7 @@ test("SUPER_ADMIN cancels a future assignment with a reason and keeps its dates,
         await expect(group).toContainText("Nora Futura");
         await expect(group).toContainText("Acuarela futura");
         await expect(group).toContainText(
-          "Las reservas futuras confirmadas vinculadas a esta asignación se cancelarán automáticamente y dejarán de ocupar plaza. Las reservas sin procedencia demostrable se conservarán y quedarán señaladas para revisión administrativa.",
+          "Las reservas habituales futuras confirmadas vinculadas a esta asignación se cancelarán automáticamente y dejarán de ocupar plaza. Las recuperaciones no se cancelan: si alguna figura vinculada de forma excepcional, se conservará con su consumo de crédito y quedará señalada para revisión. Las reservas sin procedencia demostrable también se conservan y quedan señaladas.",
         );
         await expect(group).toContainText(
           "Esta anulación no modifica el aforo de las sesiones ni crea movimientos de crédito.",
@@ -174,9 +174,9 @@ test("SUPER_ADMIN cancels a future assignment with a reason and keeps its dates,
         await confirm.click();
         const status = group.getByRole("status");
         await expect(status).toContainText("Asignación anulada. No generará nuevas reservas habituales.");
-        await expect(status).toContainText("No había reservas futuras vinculadas que cancelar.");
+        await expect(status).toContainText("No había reservas habituales futuras vinculadas que cancelar.");
         await expect(status).toContainText(
-          "Una reserva existente no se pudo atribuir con certeza, no se canceló y queda para revisión administrativa.",
+          "Una reserva conservada queda para revisión administrativa sin cancelarse ni alterar sus créditos.",
         );
         const counts = status.locator("dd");
         await expect(counts.nth(0)).toHaveText("0");
@@ -185,16 +185,19 @@ test("SUPER_ADMIN cancels a future assignment with a reason and keeps its dates,
         await expect(futureCard).toContainText("Asignación anulada");
         await expect(futureCard).toContainText("Anulación administrativa individual");
         await expect(futureCard).toContainText("Motivo registrado · El alumno cambia de horario");
-        await expect(futureCard).toContainText("Reservas que requieren revisión administrativa: 1");
+        await expect(futureCard).toContainText(
+          "Reservas conservadas para revisión administrativa: 1. Pendientes de revisión: 1.",
+        );
         await expect(futureCard).toContainText(admin.email);
         await expect(futureCard.locator(`time[datetime="${futureStart.toISODate()}"]`)).toHaveCount(1);
         await expect(futureCard.getByRole("button", { name: "Anular asignación futura" })).toHaveCount(0);
         const review = futureCard.getByRole("region", { name: "Reservas para revisión administrativa" });
         await expect(review.getByRole("heading", { name: "Reservas para revisión administrativa" })).toBeVisible();
         await expect(review).toContainText(
-          "Estas reservas se señalaron como posiblemente relacionadas al anular la asignación. Su procedencia habitual no está demostrada.",
+          "Estas reservas se conservaron al anular la asignación. Las reservas ordinarias sin procedencia demostrable y las recuperaciones vinculadas de forma excepcional requieren revisión individual antes de decidir si corresponde realizar alguna cancelación.",
         );
-        await expect(futureCard).toContainText("Reservas señaladas al anular: 1");
+        await expect(review).toContainText("Reserva ordinaria conservada: su procedencia habitual no está demostrada.");
+        await expect(futureCard).toContainText("Pendientes de revisión: 1");
         await expect(futureCard).toContainText("Fecha actual de la sesión");
         await expect(review).toContainText("Acuarela futura");
         await expect(review).toContainText("Reserva: Sigue confirmada");
@@ -243,8 +246,8 @@ test("SUPER_ADMIN cancels a future assignment with a reason and keeps its dates,
         await staleGroup.getByRole("button", { name: "Confirmar anulación" }).click();
         const replay = staleGroup.getByRole("status");
         await expect(replay).toContainText("La asignación ya estaba anulada. No se registró una nueva operación.");
-        await expect(replay).toContainText("No había reservas futuras vinculadas que cancelar.");
-        await expect(replay).toContainText("Una reserva existente no se pudo atribuir con certeza");
+        await expect(replay).toContainText("No había reservas habituales futuras vinculadas que cancelar.");
+        await expect(replay).toContainText("Una reserva conservada queda para revisión administrativa");
         await expect(replay.locator("dd").nth(0)).toHaveText("0");
         await expect(replay.locator("dd").nth(1)).toHaveText("1");
         await expect(staleGroup.getByRole("button", { name: "Anular asignación futura" })).toHaveCount(0);
@@ -298,6 +301,19 @@ test("SUPER_ADMIN cancels only linked future reservations and replay keeps the a
         (id, class_session_id, student_profile_id, origin, status)
         values ($1, $2, $3, 'ORDINARY', 'CONFIRMED')`, [reviewReservationId, reviewSessionId, profileId]);
 
+      const makeupStart = start.plus({ days: 9 });
+      const makeupSessionId = randomUUID();
+      const makeupReservationId = randomUUID();
+      student.sessionIds.push(makeupSessionId);
+      await student.client.query(`insert into class_sessions
+        (id, template_id, local_date, starts_at_utc, ends_at_utc, max_capacity)
+        values ($1, $2, $3, $4, $5, 3)`,
+      [makeupSessionId, future.templateId, makeupStart.toISODate(), makeupStart.toJSDate(), makeupStart.plus({ hours: 1 }).toJSDate()]);
+      await student.client.query(`insert into class_reservations
+        (id, class_session_id, student_profile_id, origin, status, habitual_assignment_id)
+        values ($1, $2, $3, 'MAKEUP', 'CONFIRMED', $4)`,
+      [makeupReservationId, makeupSessionId, profileId, future.assignmentId]);
+
       await login(page, admin);
       await page.goto(`/admin/alumnos/${profileId}`);
       const stale = await page.context().newPage();
@@ -312,24 +328,32 @@ test("SUPER_ADMIN cancels only linked future reservations and replay keeps the a
         const reason = group.getByLabel("Motivo de anulación");
         await expect(reason).toBeFocused();
         await expect(group).toContainText(
-          "Las reservas futuras confirmadas vinculadas a esta asignación se cancelarán automáticamente",
+          "Las reservas habituales futuras confirmadas vinculadas a esta asignación se cancelarán automáticamente",
+        );
+        await expect(group).toContainText(
+          "Las recuperaciones no se cancelan: si alguna figura vinculada de forma excepcional, se conservará con su consumo de crédito y quedará señalada para revisión.",
         );
         await reason.fill("El alumno cambia de horario");
         await group.getByRole("button", { name: "Confirmar anulación" }).click();
 
         const status = group.getByRole("status");
-        await expect(status).toContainText("Se cancelaron 2 reservas futuras vinculadas.");
+        await expect(status).toContainText("Se cancelaron 2 reservas habituales futuras vinculadas.");
         await expect(status).toContainText(
-          "Una reserva existente no se pudo atribuir con certeza, no se canceló y queda para revisión administrativa.",
+          "2 reservas conservadas quedan para revisión administrativa sin cancelarse ni alterar sus créditos.",
         );
         await expect(status.locator("dd").nth(0)).toHaveText("2");
-        await expect(status.locator("dd").nth(1)).toHaveText("1");
+        await expect(status.locator("dd").nth(1)).toHaveText("2");
         await expect(status).toBeFocused();
-        await expect(futureCard).toContainText("Reservas futuras canceladas al anular: 2");
-        await expect(futureCard).toContainText("Reservas señaladas al anular: 1");
-        await expect(futureCard).toContainText("Reservas que requieren revisión administrativa: 1");
+        await expect(futureCard).toContainText("Reservas habituales futuras canceladas al anular: 2");
+        await expect(futureCard).toContainText(
+          "Reservas conservadas para revisión administrativa: 2. Pendientes de revisión: 2.",
+        );
         const review = futureCard.getByRole("region", { name: "Reservas para revisión administrativa" });
-        await expect(review.getByRole("listitem")).toHaveCount(1);
+        await expect(review.getByRole("listitem")).toHaveCount(2);
+        await expect(review).toContainText("Reserva ordinaria conservada: su procedencia habitual no está demostrada.");
+        await expect(review).toContainText(
+          "Recuperación conservada: mantiene su consumo de crédito y no se cancela por esta anulación.",
+        );
         await expect(review).toContainText("Reserva: Sigue confirmada");
         expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
         await page.setViewportSize({ width: 320, height: 800 });
@@ -341,15 +365,21 @@ test("SUPER_ADMIN cancels only linked future reservations and replay keeps the a
         );
         expect(assignment).toEqual({ status: "CANCELLED", effective_from: start.toISODate(), effective_to: null });
         const { rows: reservations } = await student.client.query(
-          `select id,status,cancelled_by_user_id from class_reservations
+          `select id,status,origin,cancelled_by_user_id from class_reservations
            where id = any($1::text[]) order by id`,
-          [[future.reservationId, laterReservationId, reviewReservationId]],
+          [[future.reservationId, laterReservationId, reviewReservationId, makeupReservationId]],
         );
         const byId = new Map(reservations.map((row) => [row.id, row]));
         for (const id of [future.reservationId, laterReservationId]) {
-          expect(byId.get(id)).toMatchObject({ status: "CANCELLED", cancelled_by_user_id: admin.userId });
+          expect(byId.get(id)).toMatchObject({ status: "CANCELLED", origin: "ORDINARY", cancelled_by_user_id: admin.userId });
         }
         expect(byId.get(reviewReservationId)).toMatchObject({ status: "CONFIRMED", cancelled_by_user_id: null });
+        expect(byId.get(makeupReservationId)).toMatchObject({
+          status: "CONFIRMED", origin: "MAKEUP", cancelled_by_user_id: null,
+        });
+        expect((await student.client.query(
+          "select habitual_assignment_id from class_reservations where id=$1", [makeupReservationId],
+        )).rows).toEqual([{ habitual_assignment_id: future.assignmentId }]);
         const { rows: audit } = await student.client.query(
           `select reason,cancelled_reservation_ids,ambiguous_reservation_ids
            from student_template_assignment_cancellations where assignment_id=$1`, [future.assignmentId],
@@ -357,7 +387,7 @@ test("SUPER_ADMIN cancels only linked future reservations and replay keeps the a
         expect(audit).toEqual([{
           reason: "El alumno cambia de horario",
           cancelled_reservation_ids: [future.reservationId, laterReservationId].sort(),
-          ambiguous_reservation_ids: [reviewReservationId],
+          ambiguous_reservation_ids: [reviewReservationId, makeupReservationId].sort(),
         }]);
         expect((await student.client.query(
           "select id from class_sessions where template_id=$1 and max_capacity<>3", [future.templateId],
@@ -370,9 +400,12 @@ test("SUPER_ADMIN cancels only linked future reservations and replay keeps the a
         await staleCard.getByRole("button", { name: "Confirmar anulación" }).click();
         const replay = staleCard.getByRole("status");
         await expect(replay).toContainText("La asignación ya estaba anulada. No se registró una nueva operación.");
-        await expect(replay).toContainText("La anulación registrada canceló 2 reservas futuras vinculadas.");
+        await expect(replay).toContainText("La anulación registrada canceló 2 reservas habituales futuras vinculadas.");
+        await expect(replay).toContainText(
+          "2 reservas conservadas quedan para revisión administrativa sin cancelarse ni alterar sus créditos.",
+        );
         await expect(replay.locator("dd").nth(0)).toHaveText("2");
-        await expect(replay.locator("dd").nth(1)).toHaveText("1");
+        await expect(replay.locator("dd").nth(1)).toHaveText("2");
         expect((await student.client.query(
           "select id from student_template_assignment_cancellations where assignment_id=$1", [future.assignmentId],
         )).rows).toHaveLength(1);
@@ -413,8 +446,9 @@ test("SUPER_ADMIN opens flagged reservations and sees their current status witho
 
       const review = futureCard.getByRole("region", { name: "Reservas para revisión administrativa" });
       await expect(review.getByRole("listitem")).toHaveCount(2);
-      await expect(futureCard).toContainText("Reservas señaladas al anular: 2");
-      await expect(futureCard).toContainText("Reservas que requieren revisión administrativa: 2");
+      await expect(futureCard).toContainText(
+        "Reservas conservadas para revisión administrativa: 2. Pendientes de revisión: 2.",
+      );
       const links = review.getByRole("link", { name: /Abrir sesión de Acuarela enlazada/ });
       await expect(links).toHaveCount(2);
 
@@ -439,8 +473,9 @@ test("SUPER_ADMIN opens flagged reservations and sees their current status witho
       const refreshedCard = card(page, "Acuarela enlazada");
       const refreshed = refreshedCard
         .getByRole("region", { name: "Reservas para revisión administrativa" });
-      await expect(refreshedCard).toContainText("Reservas señaladas al anular: 2");
-      await expect(refreshedCard).toContainText("Reservas que requieren revisión administrativa: 1");
+      await expect(refreshedCard).toContainText(
+        "Reservas conservadas para revisión administrativa: 2. Pendientes de revisión: 1.",
+      );
       await expect(refreshed).toContainText("Reserva: Cancelada");
       await expect(refreshed).toContainText("Cancelación registrada");
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);

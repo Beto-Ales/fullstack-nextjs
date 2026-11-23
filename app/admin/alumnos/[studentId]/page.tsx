@@ -245,14 +245,14 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
                 <p>Motivo registrado · {schedule.cancellation.reason}</p>
                 {schedule.cancellation.cancelledCount > 0 && (
                   <p>
-                    Reservas futuras canceladas al anular: {formatHistoryInteger(schedule.cancellation.cancelledCount)}.
+                    Reservas habituales futuras canceladas al anular: {formatHistoryInteger(schedule.cancellation.cancelledCount)}.
                     Dejaron de ocupar plaza sin alterar el aforo de las sesiones.
                   </p>
                 )}
                 {schedule.cancellation.ambiguousCount > 0 && (
                   <p>
-                    Reservas señaladas al anular: {formatHistoryInteger(schedule.cancellation.ambiguousReviews.historicalCount)}.
-                    {" "}Reservas que requieren revisión administrativa: {formatHistoryInteger(schedule.cancellation.ambiguousReviews.needsReviewCount)}.
+                    Reservas conservadas para revisión administrativa: {formatHistoryInteger(schedule.cancellation.ambiguousReviews.historicalCount)}.
+                    {" "}Pendientes de revisión: {formatHistoryInteger(schedule.cancellation.ambiguousReviews.needsReviewCount)}.
                     No se cancelaron ni se liberaron plazas automáticamente.
                   </p>
                 )}
@@ -262,9 +262,9 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
               <section className={styles.review} aria-labelledby={`revision-${schedule.assignmentId}`}>
                 <h3 id={`revision-${schedule.assignmentId}`}>Reservas para revisión administrativa</h3>
                 <p>
-                  Estas reservas se señalaron como posiblemente relacionadas al anular la asignación. Su procedencia
-                  habitual no está demostrada. Revísalas individualmente antes de decidir si corresponde realizar alguna
-                  cancelación.
+                  Estas reservas se conservaron al anular la asignación. Las reservas ordinarias sin procedencia
+                  demostrable y las recuperaciones vinculadas de forma excepcional requieren revisión individual antes
+                  de decidir si corresponde realizar alguna cancelación.
                 </p>
                 <ul className={styles.reviewList}>
                   {schedule.cancellation.ambiguousReviews.items.map((review) => (
@@ -275,6 +275,12 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
                           <p>
                             Fecha actual de la sesión: <HistoryTime value={review.startsAtUtc} /> · Hora de Copenhague
                           </p>
+                          {review.origin === "MAKEUP" && (
+                            <p>Recuperación conservada: mantiene su consumo de crédito y no se cancela por esta anulación.</p>
+                          )}
+                          {review.origin === "ORDINARY" && (
+                            <p>Reserva ordinaria conservada: su procedencia habitual no está demostrada.</p>
+                          )}
                           <p>Reserva: <strong>{reviewReservationState(review)}</strong></p>
                           {review.reservationStatus === "CANCELLED" && (
                             <p>

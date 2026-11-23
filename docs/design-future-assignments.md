@@ -57,10 +57,15 @@ La referencia no altera la elegibilidad ni el aforo: las reservas se crean con l
 
 La anulación individual de una asignación futura usa `class_reservations.habitual_assignment_id` para cancelar únicamente las reservas `CONFIRMED` de sesiones futuras cuya procedencia es exactamente la asignación anulada. La cancelación de la reserva y la auditoría de la asignación se escriben en la misma transacción que el estado `CANCELLED`.
 
-No se cancelan las reservas ya canceladas, las de sesiones iniciadas, las de otro alumno ni las que otra asignación viva de la misma plantilla cubre en la fecha de la sesión. La procedencia explícita prevalece sobre el origen, por lo que una recuperación vinculada también se cancela. Las reservas `ORDINARY` sin referencia se conservan y se registran en `ambiguous_reservation_ids` para revisión administrativa; las cubiertas por otra asignación viva se conservan sin señalarse. La operación no modifica `max_capacity` ni el ledger, no crea solicitudes ni movimientos de crédito y no elimina filas; las reservas canceladas liberan su plaza mediante su estado.
+No se cancelan las reservas ya canceladas, las de sesiones iniciadas, las de otro alumno ni las que otra asignación viva de la misma plantilla cubre en la fecha de la sesión. En 10.21 la procedencia explícita prevalecía sobre el origen y una recuperación vinculada también se cancelaba; el 10.22 sustituye esa regla y restringe la cancelación automática a `ORDINARY`. Las reservas `ORDINARY` sin referencia se conservan y se registran en `ambiguous_reservation_ids` para revisión administrativa; las cubiertas por otra asignación viva se conservan sin señalarse. La operación no modifica `max_capacity` ni el ledger, no crea solicitudes ni movimientos de crédito y no elimina filas; las reservas canceladas liberan su plaza mediante su estado.
 
 La ficha administrativa muestra el resultado auditado con dos recuentos: reservas futuras canceladas y reservas no canceladas automáticamente. Un reintento reutiliza los identificadores guardados en la auditoría, sin volver a cancelar ni duplicar el registro. [Pruebas](testing.md#incremento-1021--cancelación-de-reservas-vinculadas-al-anular-asignaciones)
 
+## Implementación 10.22
+
+La anulación individual ya no cancela recuperaciones. `cancelFutureAssignment` restringe la cancelación automática a reservas `ORDINARY` `CONFIRMED`, de sesiones futuras, dentro de la plantilla y la vigencia de la asignación, con `habitual_assignment_id` igual a la asignación y sin otra asignación viva que cubra la fecha. Una reserva `MAKEUP` conserva siempre su estado, su plaza y su consumo de crédito, incluso si una fila anómala la vincula a la asignación anulada.
+
+La revisión administrativa distingue ahora dos clases: reservas `ORDINARY` sin procedencia demostrable y recuperaciones vinculadas de forma excepcional. Ambas se conservan, se escriben en `ambiguous_reservation_ids` y la ficha explica el motivo por fila. La ruta legítima de recuperación sigue creando `origin = MAKEUP` con `habitual_assignment_id` vacío, de modo que una recuperación normal ni siquiera entra en la revisión. La operación no añade migraciones ni modifica créditos, ledger o `max_capacity`. [Pruebas](testing.md#incremento-1022--preservación-de-recuperaciones-en-la-anulación-habitual)
 
 ## Semántica aprobada e implementada
 

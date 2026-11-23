@@ -50,17 +50,17 @@ function resultMessage(result: {
     ? "Asignación anulada. No generará nuevas reservas habituales. Se conservan las fechas originales y el historial."
     : "La asignación ya estaba anulada. No se registró una nueva operación.";
   const cancelled = result.cancelledReservationIds.length === 0
-    ? "No había reservas futuras vinculadas que cancelar."
+    ? "No había reservas habituales futuras vinculadas que cancelar."
     : result.cancelled
       ? result.cancelledReservationIds.length === 1
-        ? "Se canceló 1 reserva futura vinculada."
-        : `Se cancelaron ${result.cancelledReservationIds.length} reservas futuras vinculadas.`
-      : `La anulación registrada canceló ${reservationCount(result.cancelledReservationIds.length, "reserva futura vinculada", "reservas futuras vinculadas")}.`;
+        ? "Se canceló 1 reserva habitual futura vinculada."
+        : `Se cancelaron ${result.cancelledReservationIds.length} reservas habituales futuras vinculadas.`
+      : `La anulación registrada canceló ${reservationCount(result.cancelledReservationIds.length, "reserva habitual futura vinculada", "reservas habituales futuras vinculadas")}.`;
   const ambiguous = result.ambiguousReservationIds.length === 0
-    ? "No quedaron reservas pendientes de revisión por procedencia ambigua."
+    ? "No quedaron reservas pendientes de revisión administrativa."
     : result.ambiguousReservationIds.length === 1
-      ? "Una reserva existente no se pudo atribuir con certeza, no se canceló y queda para revisión administrativa."
-      : `${result.ambiguousReservationIds.length} reservas existentes no se pudieron atribuir con certeza, no se cancelaron y quedan para revisión administrativa.`;
+      ? "Una reserva conservada queda para revisión administrativa sin cancelarse ni alterar sus créditos."
+      : `${result.ambiguousReservationIds.length} reservas conservadas quedan para revisión administrativa sin cancelarse ni alterar sus créditos.`;
   return `${base} ${cancelled} ${ambiguous}`;
 }
 

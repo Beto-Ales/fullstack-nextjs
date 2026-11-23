@@ -72,9 +72,12 @@ function cancellationResult(
 /**
  * Cancels a habitual template assignment whose first local day has not begun yet.
  *
- * The assignment row, its immutable audit record and the future reservations that
- * persist this exact assignment as their provenance are written together. Unlinked
- * CONFIRMED reservations remain untouched and are reported for manual review.
+ * The assignment row, its immutable audit record and the future ordinary reservations
+ * that persist this exact assignment as their provenance are written together. Unlinked
+ * ordinary CONFIRMED reservations and exceptional MAKEUP rows that still reference the
+ * assignment remain untouched and are reported for manual review.
+ * A MAKEUP reservation is never cancelled by an assignment cancellation, even if an
+ * anomalous row links it to the assignment: its credit consumption must stay valid.
  * Credits, capacity and pending requests are intentionally left untouched.
  */
 export async function cancelFutureAssignment(
@@ -170,11 +173,13 @@ export async function cancelFutureAssignment(
           gte(studentTemplateAssignments.effectiveTo, classSessions.localDate),
         ),
       )));
-    // Only reservations that persist this exact assignment are attributable. Anything
-    // else stays CONFIRMED and is reported as ambiguous for administrative review.
+    // Only ordinary reservations that persist this exact assignment are attributable.
+    // A MAKEUP reservation owns a credit consumption and is never cancelled here, even
+    // when an anomalous row stores the reference: the recovery is reported instead.
     const attributable = and(
       eq(classReservations.studentProfileId, current.studentProfileId),
       eq(classReservations.status, "CONFIRMED"),
+      eq(classReservations.origin, "ORDINARY"),
       eq(classReservations.habitualAssignmentId, current.id),
       eq(classSessions.templateId, current.templateId),
       withinWindow,
@@ -205,18 +210,28 @@ export async function cancelFutureAssignment(
         ));
     }
 
+    // Flag the reservations this cancellation deliberately keeps: ordinary candidates
+    // without demonstrable provenance and exceptional MAKEUP rows that still reference
+    // the cancelled assignment. Both stay CONFIRMED and keep their credits untouched.
+    const needsAdministrativeReview = and(
+      eq(classReservations.studentProfileId, current.studentProfileId),
+      eq(classReservations.status, "CONFIRMED"),
+      eq(classSessions.templateId, current.templateId),
+      withinWindow,
+      gt(classSessions.startsAtUtc, sql`clock_timestamp()`),
+      hasNoOtherLiveAssignment,
+      or(
+        eq(classReservations.origin, "ORDINARY"),
+        and(
+          eq(classReservations.origin, "MAKEUP"),
+          eq(classReservations.habitualAssignmentId, current.id),
+        ),
+      ),
+    );
     const ambiguousReservations = await tx.select({ id: classReservations.id })
       .from(classReservations)
       .innerJoin(classSessions, eq(classSessions.id, classReservations.classSessionId))
-      .where(and(
-        eq(classReservations.studentProfileId, current.studentProfileId),
-        eq(classReservations.status, "CONFIRMED"),
-        eq(classReservations.origin, "ORDINARY"),
-        eq(classSessions.templateId, current.templateId),
-        withinWindow,
-        gt(classSessions.startsAtUtc, sql`clock_timestamp()`),
-        hasNoOtherLiveAssignment,
-      ))
+      .where(needsAdministrativeReview)
       .orderBy(classReservations.id);
     const ambiguousReservationIds = ambiguousReservations.map(({ id }) => id);
     const cancellationId = randomUUID();

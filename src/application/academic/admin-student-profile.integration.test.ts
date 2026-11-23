@@ -285,6 +285,7 @@ describe("admin student profile (postgres)", () => {
   it("separates cancelled linked reservations from ambiguous administrative reviews", async () => {
     const { assignmentId, templateId } = await createFutureAssignment("Reservas vinculadas", "2031-04-01");
     const linked = await reserve("2031-04-02", { templateId, habitualAssignmentId: assignmentId });
+    const recovery = await reserve("2031-04-05", { templateId, origin: "MAKEUP", habitualAssignmentId: assignmentId });
     const ambiguous = await reserve("2031-04-03", { templateId });
 
     await cancelFutureAssignment(admin, {
@@ -294,22 +295,32 @@ describe("admin student profile (postgres)", () => {
     const profile = await getProfile(admin, studentProfileId);
     const schedule = profile!.schedules.items.find(({ courseName }) => courseName === "Reservas vinculadas");
     expect(schedule?.cancellation).toMatchObject({
-      source: "ADMIN_INDIVIDUAL", cancelledCount: 1, ambiguousCount: 1,
-      ambiguousReviews: {
-        historicalCount: 1, needsReviewCount: 1,
-        items: [{
-          reservationId: ambiguous.reservationId, sessionId: ambiguous.classSessionId,
-          reservationStatus: "CONFIRMED", requiresReview: true,
-        }],
-      },
+      source: "ADMIN_INDIVIDUAL", cancelledCount: 1, ambiguousCount: 2,
+      ambiguousReviews: { historicalCount: 2, needsReviewCount: 2 },
+    });
+    const flagged = schedule!.cancellation!.ambiguousReviews.items;
+    expect(new Set(flagged.map(({ reservationId }) => reservationId)))
+      .toEqual(new Set([recovery.reservationId, ambiguous.reservationId]));
+    expect(flagged.find(({ reservationId }) => reservationId === recovery.reservationId)).toMatchObject({
+      sessionId: recovery.classSessionId, origin: "MAKEUP", reservationStatus: "CONFIRMED", requiresReview: true,
+    });
+    expect(flagged.find(({ reservationId }) => reservationId === ambiguous.reservationId)).toMatchObject({
+      sessionId: ambiguous.classSessionId, reservationStatus: "CONFIRMED", requiresReview: true,
     });
     expect(schedule!.cancellation!.ambiguousReviews.items.map(({ reservationId }) => reservationId))
       .not.toContain(linked.reservationId);
+    const { rows: kept } = await client.query(
+      "select id,status,cancelled_by_user_id from class_reservations where id=any($1::text[]) order by id",
+      [[linked.reservationId, recovery.reservationId]],
+    );
+    expect(new Map(kept.map((row) => [row.id, row]))).toEqual(new Map([
+      [linked.reservationId, { id: linked.reservationId, status: "CANCELLED", cancelled_by_user_id: admin.userId }],
+      [recovery.reservationId, { id: recovery.reservationId, status: "CONFIRMED", cancelled_by_user_id: null }],
+    ]));
     expect((await client.query(
       "select status,cancelled_by_user_id from class_reservations where id=$1", [linked.reservationId],
     )).rows).toEqual([{ status: "CANCELLED", cancelled_by_user_id: admin.userId }]);
   });
-
 
   it("lists only the student's historically flagged reservations for current review", async () => {
     const { assignmentId, templateId } = await createFutureAssignment("Reservas ambiguas", "2031-02-01");
