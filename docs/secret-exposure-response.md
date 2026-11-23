@@ -542,3 +542,68 @@ Durante una comprobación booleana de consistencia, una interpolación defectuos
 1. Autorizar el **respaldo con ensayo de restauración** de DEV, sin cambio de contraseña.
 2. Autorizar la **rotación interactiva** de `app_dev_user`, la actualización de los dos campos locales y la validación desde el host, en una ventana confirmada por el propietario.
 3. Decidir por separado si se **recrea el contenedor** para eliminar de sus metadatos la copia de la contraseña anterior, con su parada breve y su verificación.
+
+## Incremento 10.29 — Preflight de DEV y utilidad local preparada (sin respaldo ni rotación)
+
+Este incremento se detuvo en la puerta de autorización. La rotación de la credencial PostgreSQL DEV exige una aprobación nueva, expresa y específica del propietario, y esa aprobación no existe todavía en la conversación de trabajo. Por tanto **no se ejecutó el respaldo, ni el ensayo de restauración, ni el cambio de contraseña, ni ninguna escritura en DEV**. Lo realizado es el preflight de solo lectura y la preparación de la utilidad local que se usará después del paso manual del propietario.
+
+### Preflight de solo lectura
+
+| Comprobación | Resultado |
+| --- | --- |
+| Contenedor DEV | `fullstack_nextjs_postgres_dev`, identificador `ad882b9f55a9`, sin recrear desde 10.28 |
+| Creación y arranque | 2026-11-20 y 2026-11-23 08:11 UTC, ambos anteriores a la intervención de TEST |
+| Estado | `running`, saludable, cero reinicios, política `unless-stopped` |
+| Volumen | `fullstack-nextjs_postgres_dev_data`, montado en el directorio de datos, sin cambios |
+| Publicación | `127.0.0.1:5432`, solo loopback |
+| Rol | `app_dev_user`, único acceso, superusuario, sin caducidad, un verificador `SCRAM-SHA-256` |
+| Línea base del rol | identificador de transacción **755**, idéntico al de 10.28 |
+| Roles | 13 en total, uno con inicio de sesión |
+| Bases | `fullstack_nextjs` 8,5 MB y `postgres` 7,6 MB, mismas propietarias y tamaños |
+| Esquema | 12 tablas públicas, 6 migraciones en el diario, sin cambios |
+| Datos de negocio | 0 usuarios y 0 sesiones de clase |
+| Sesiones y transacciones | ninguna sesión de cliente ajena a estas comprobaciones y ninguna transacción abierta |
+| Reglas de autenticación | confianza para socket local y loopback interno; `host all all scram-sha-256` para el resto |
+| TEST | mismo identificador, misma hora de arranque, saludable, sin reinicios ni cambios |
+| Repositorio | `HEAD` en `a8ec70d`; solo los cambios ajenos preexistentes |
+
+- Los dos archivos de configuración conservan su fecha de modificación anterior al incremento: no se reescribieron.
+- No hay procesos de Node ni conexiones establecidas hacia los puertos publicados de PostgreSQL.
+- La identidad del contenedor, del volumen, del rol y de las bases coincide con la línea base registrada en 10.28, por lo que los datos de referencia siguen siendo válidos.
+
+### Utilidad local preparada, sin ejecutar sobre DEV
+
+Se prepararon fuera del repositorio, en el directorio temporal del propietario, dos archivos que no contienen secretos:
+
+1. Un **orquestador** con tres modos excluyentes: `-CheckWiring` (comprobaciones estáticas, sin leer contraseñas ni conectar), `-SelfTest` (autopruebas con datos ficticios) y `-Apply` (lectura interactiva sin eco, validación desde el host y escritura atómica).
+2. Un **validador** ejecutado como archivo `.cjs` externo, que recibe la contraseña candidata solo por variable de entorno del proceso hijo y devuelve un resultado no sensible: rol, base, cifrado, esquema del verificador, dirección del cliente, identificador de transacción del rol, tablas, migraciones y recuentos.
+
+Protecciones implementadas:
+
+- Solo dos destinos: el componente de contraseña de `DATABASE_URL` en `.env` y `POSTGRES_DEV_PASSWORD` en `.env.compose.local`.
+- Se rechaza cualquier cambio fuera de esas dos líneas comparando el archivo completo línea a línea antes de escribir.
+- Detección de claves duplicadas y de valores entrecomillados; rechazo si el destino no es `app_dev_user`, `fullstack_nextjs`, puerto `5432` y host local.
+- Rechazo de la contraseña vigente como nueva y de cualquier valor idéntico a la credencial de TEST, comparado en memoria.
+- Validación de la contraseña nueva desde el host antes de escribir; si falla, no se escribe nada.
+- Escritura con archivo temporal en el mismo directorio y reemplazo atómico; si el segundo reemplazo falla, se restaura el primero desde sus bytes originales.
+- Preservación de codificación y saltos de línea: ambos archivos usan **UTF-8 con BOM y CRLF**, y la utilidad conserva ambos.
+- Limpieza de variables de entorno y de archivos temporales en `finally`, y salida sin contraseña, sin cadena de conexión y sin verificadores.
+
+Resultados de las pruebas ejecutadas:
+
+- `-SelfTest`: 9 de 9 casos superados (actualización acotada, CRLF, BOM, fallo de validación sin cambios, clave duplicada, puerto incorrecto, contraseña repetida, reutilización de credencial de TEST y cableado).
+- `-CheckWiring` sobre la configuración real: 18 de 18 comprobaciones correctas, sin leer ninguna contraseña.
+- Validador con una contraseña **sintética** generada en memoria: rechazado con error de autenticación, código de salida 1 y ninguna salida sensible; confirma la resolución del módulo, la ruta TCP real y el comportamiento de cierre seguro.
+- `-Apply` **no se ejecutó**: requiere el paso manual previo del propietario y la contraseña nueva real.
+
+### Estado
+
+**POSTGRESQL DEV — SIN RESPALDO Y SIN ROTAR; PREFLIGHT COMPLETO Y UTILIDAD PREPARADA, PENDIENTE DE AUTORIZACIÓN.** El respaldo sigue siendo condición previa: DEV no tiene ningún respaldo conocido y el plan de 10.28 exige un ensayo de restauración superado antes de tocar el rol.
+
+**H03 GLOBAL — PENDIENTE DE ACCIÓN OPERATIVA.** Además de la rotación de DEV, siguen abiertos la reutilización de contraseñas históricas, las copias y checkpoints de agentes, la copia del valor anterior en los metadatos del contenedor y la aceptación documentada de los riesgos residuales.
+
+### Acción que requiere aprobación
+
+1. Autorizar el **respaldo con ensayo de restauración** de DEV, sin cambio de contraseña.
+2. Autorizar después la **rotación interactiva** de `app_dev_user`, la actualización de los dos campos locales y la validación desde el host.
+3. Decidir por separado si se **recrea el contenedor** para retirar de sus metadatos la copia de la contraseña anterior.
