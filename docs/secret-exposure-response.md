@@ -855,3 +855,86 @@ Si alguna respuesta es «no se sabe», se registra la incertidumbre y se mantien
 No se modificó PostgreSQL DEV ni TEST, no se recreó ni detuvo ningún contenedor, no se ejecutaron operaciones destructivas de Git y no se borró evidencia. El único cambio es documental.
 
 **H03 — PENDIENTE DE CIERRE OPERATIVO**, a la espera de las respuestas del propietario en la sección K y de la autorización de los tratamientos de la sección L. El siguiente incremento recomendado, sin ejecutarlo, es la verificación de la ubicación y la retención de los respaldos.
+
+## Incremento 10.32 — Decisiones del propietario y evaluación de cierre de H03
+
+Este incremento recoge las cuatro decisiones que 10.31 dejó abiertas y evalúa si permiten cerrar H03. No repite la auditoría, no busca contraseñas, no abre objetos con credenciales, no consulta el remoto por red, no conecta con PostgreSQL DEV ni TEST, no modifica secretos, bases, contenedores, referencias ni respaldos y no ejecuta operaciones destructivas. Las respuestas se registran como declaraciones del propietario: se distinguen de la evidencia técnica ya verificada y no se presentan como comprobaciones.
+
+### A. Respuestas registradas
+
+| Pregunta | Respuesta del propietario | Consecuencia documental |
+| --- | --- | --- |
+| A. Reutilización histórica de las contraseñas de DEV y TEST | «No se reutilizaron, según mi conocimiento.» | Declaración; no consta reutilización conocida ni se convierte en verificación técnica |
+| B. Difusión de informes o transcripciones fuera del equipo | «Sí, pero conozco los destinos y puedo describirlos sin secretos.» | Existe difusión confirmada fuera del equipo |
+| B2. Categoría del destino | «Repositorio remoto de código o espejo de Git (propio o de la organización).» | Destino conocido que exige actuación |
+| C. Tratamiento de informes y checkpoints locales | «Preparar un saneamiento controlado en un incremento independiente.» | Decisión registrada; nada se ejecuta en este incremento |
+| D. Aceptación del riesgo residual | «Sí, acepto el riesgo residual descrito.» | Aceptación expresa, con el alcance limitado de la sección E |
+
+No se solicitó ni se registró ningún valor, cuenta, nombre de servicio ni dato personal. Las respuestas describen categorías.
+
+### B. Evaluación de la reutilización
+
+- La declaración A cubre en conjunto los siete ámbitos de 10.31 § F: PostgreSQL DEV y TEST, otros proyectos locales, bases remotas o alojadas, aplicaciones externas, cuentas personales y otros servicios conocidos.
+- No se verificó técnicamente y no se repitió ninguna búsqueda de contraseñas. Lo declarado es coherente con la rotación verificada de ambos roles, pero la coherencia no equivale a prueba.
+- Consecuencia: no se conoce ninguna contraseña antigua todavía activa en un servicio distinto de PostgreSQL. Esa ausencia se apoya en el conocimiento del propietario.
+- Se mantiene la regla de 10.31: tratar el valor como reutilizable si aparece evidencia en contrario y no reintroducirlo en ningún servicio nuevo.
+- Riesgo que permanece: una reutilización desconocida para el propietario no puede descartarse con medios técnicos desde este repositorio.
+
+### C. Difusión de copias y destino remoto
+
+- La respuesta B confirma que hubo salida de copias fuera del equipo, y B2 sitúa el destino en un repositorio remoto de código o espejo de Git, propio o de la organización. Es un **destino conocido con exposición potencial que exige actuación**.
+- No se determinaron: el repositorio o espejo concreto, las rutas o ramas afectadas, su visibilidad, las personas con acceso ni si las copias siguen presentes o ya fueron retiradas. No se consultó el remoto por red, no se abrieron objetos y no se ejecutó ninguna operación de historial.
+- La comprobación de 10.31 —cero coincidencias en el historial de `origin/master` local— sigue siendo válida como dato sobre esa referencia concreta. No cubre otros repositorios, otras ramas ni espejos, y no se usa como prueba de ausencia.
+- Efecto sobre las credenciales: el valor histórico ya no autentica en DEV ni en TEST (10.27 y 10.30), de modo que la difusión no reabre una exposición activa en esos dos servidores. Lo que persiste es la copia del valor en un sistema ajeno a este equipo, con sus propios controles de acceso y retención.
+- Lo que falta: identificar el destino y su visibilidad, y decidir si se retira la copia. Una retirada que afecte al historial exigirá un incremento autorizado, con coordinación y procedimiento de recuperación.
+- Responsables: el propietario para la identificación del destino; la administración del repositorio para cualquier retirada.
+
+### D. Tratamiento de las copias locales
+
+- Decisión C: preparar un saneamiento controlado en un incremento independiente. Se registra la decisión y **no se ejecuta**: los 15 informes, las 83 referencias y los almacenes de las herramientas siguen intactos.
+- El saneamiento deberá cubrir informes, referencias de checkpoint, utilidades temporales y transcripciones, con respaldo previo fuera del árbol de trabajo, inventario de identificadores, ventana autorizada, verificación posterior con `git fsck` y constancia de que las copias externas quedan fuera de su alcance.
+- Los almacenes de las herramientas —Codex, Cline y la extensión del IDE— no se limpian con operaciones de Git y requerirán una decisión propia.
+- Mientras no se ejecute, se mantienen el acceso restringido y la prohibición de publicar referencias de checkpoint.
+
+### E. Riesgo residual aceptado
+
+La respuesta D es una aceptación expresa, con este alcance: copias históricas locales conservadas a la espera de saneamiento; difusión a un destino remoto de Git todavía sin identificar; incertidumbre sobre reutilización que el propietario no puede descartar técnicamente; metadatos de Docker con el valor anterior; y endurecimiento independiente sin ejecutar.
+
+- La aceptación se limita a los riesgos documentados. No cubre la aparición de una credencial activa comprometida, ni un destino con acceso de terceros que exija actuación inmediata, ni una reutilización desconocida por el propietario.
+- Aceptar el riesgo no sustituye la acción pendiente sobre el destino remoto: el criterio 8 de 10.31 exige que no exista una exposición activa conocida sin mitigación y ese destino aún no se ha evaluado.
+- No se declara corregido ningún punto de endurecimiento: superusuario, confianza interna, dependencia de DPAPI, migraciones atrasadas, retención de respaldos y acceso a Docker siguen como deuda documentada.
+
+### F. Estado final de H03
+
+| Criterio de cierre | Estado en 10.32 |
+| --- | --- |
+| 1. DEV y TEST con rotación verificada | Cumplido (10.27 y 10.30) |
+| 2. Sin otros servicios con esas contraseñas activas | Declarado por el propietario; no verificado técnicamente |
+| 3. Reutilización histórica evaluada | Declarada; suficiente para el conocimiento del propietario, insuficiente para descartar una reutilización desconocida |
+| 4. Copias locales clasificadas | Cumplido (10.31) |
+| 5. Decisión sobre informes y checkpoints | Cumplido: saneamiento controlado en un incremento independiente |
+| 6. Incertidumbres documentadas | Cumplido |
+| 7. Aceptación expresa del riesgo residual | Cumplido (sección E) |
+| 8. Sin exposición activa conocida sin mitigación | **No cumplido**: destino remoto de Git conocido y sin evaluar |
+
+**H03 — PENDIENTE DE ACCIÓN OPERATIVA.** La rotación de DEV y TEST sigue mitigada con evidencia y el riesgo residual está aceptado por el propietario, pero el criterio 8 no se cumple: existe un destino conocido —repositorio remoto de código o espejo de Git— que conserva copias históricas y cuya visibilidad y contenido no se han evaluado. Ninguna aceptación genérica de riesgo puede sustituir esa actuación.
+
+El cierre será posible cuando se identifique el destino, se conozca su visibilidad y se decida si las copias se retiran. Ese cierre significará que no consta exposición activa sin mitigación; no significará que nunca existiera acceso de terceros.
+
+### G. Acciones pendientes y responsables
+
+| Acción | Responsable | Condición |
+| --- | --- | --- |
+| Identificar el repositorio o espejo, las rutas o ramas afectadas y su visibilidad | Propietario | Ninguna consulta al remoto se hace en este incremento |
+| Decidir y, si procede, retirar las copias del destino remoto | Propietario y administración del repositorio | Incremento autorizado; si afecta al historial, coordinación y procedimiento de recuperación |
+| Preparar el saneamiento local de informes, checkpoints, utilidades y transcripciones | Propietario | Incremento independiente; respaldo previo y verificación posterior |
+| Limpiar los almacenes de las herramientas, que no dependen de Git | Propietario | Decisión propia; no incluida en el saneamiento de referencias |
+| Confirmar ubicación y retención de los respaldos de DEV y TEST | Propietario | Antes de cualquier borrado |
+| Endurecimiento independiente: superusuario, confianza interna, DPAPI, migraciones atrasadas, retención de respaldos y acceso a Docker | Administración del entorno | Incrementos propios; prioridades en 10.31 § I |
+| Reevaluar H03 y, si procede, cerrarla | Propietario | Solo cuando el criterio 8 esté cumplido |
+
+### Estado de este incremento
+
+No se modificó PostgreSQL DEV ni TEST, no se recreó ni detuvo ningún contenedor, no se alteraron secretos, referencias ni respaldos, no se reescribió historial y no se ejecutaron operaciones destructivas. El único cambio es documental.
+
+Siguiente incremento recomendado, sin ejecutarlo: identificación del destino remoto a partir de lo que declare el propietario, sin consultas de red ni apertura de objetos, y decisión sobre la retirada de esas copias.
