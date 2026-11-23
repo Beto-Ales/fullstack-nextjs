@@ -268,3 +268,87 @@ Sin cambios funcionales: el contenedor conserva su identificador, su hora de arr
 ### Acción que requiere el propietario
 
 Completar los pasos manuales anteriores y comunicarlo. Después se repiten las fases E, F y G, se confirma la sustitución del verificador y la conservación de datos, y se registra la rotación verificada. Mientras eso no ocurra, **H03 sigue pendiente de acción operativa** y la contraseña anterior sigue vigente en TEST.
+
+> El paso manual descrito en este incremento se completó y se verificó en el incremento 10.27; desde entonces el valor anterior ya no autentica en TEST.
+
+## Incremento 10.27 — Rotación de PostgreSQL TEST verificada
+
+El propietario completó manualmente `\password app_test_user` en una terminal interactiva y después ejecutó la utilidad local de actualización de consumidores. Este incremento **solo verifica** lo ocurrido, con consultas administrativas y de lectura: no se volvió a cambiar la contraseña, no se alteraron roles ni privilegios, no se aplicaron migraciones, no se escribieron datos, no se descifraron ni restauraron respaldos, no se recreó el contenedor y no se tocó DEV ni producción. El secreto no se solicitó ni se recibió en ningún momento.
+
+### Alcance ejecutado
+
+| Fase | Estado |
+| --- | --- |
+| C · Cambio de contraseña del rol | Ejecutada por el propietario en sesión interactiva, sin eco |
+| D · Actualización de consumidores | Ejecutada por la utilidad local; solo las dos líneas previstas |
+| E · Validación desde el host | Ejecutada y superada por la ruta de red protegida |
+| F · Evidencia de sustitución | Verificada: verificador distinto y autenticación correcta |
+| G · Integridad final | Verificada: sin cambios funcionales respecto a 10.25 y 10.26 |
+
+### Evidencia de sustitución del verificador
+
+| Comprobación | Resultado |
+| --- | --- |
+| Rol presente y fila única | Sí |
+| Inicio de sesión | Conservado |
+| Privilegio de superusuario | Conservado, con herencia, creación de roles y bases, replicación, omisión de seguridad por fila y sin límite de conexiones |
+| Caducidad | Sin caducidad |
+| Formato del verificador | Un único `SCRAM-SHA-256`, con la estructura de tres segmentos y la longitud propias del formato |
+| Huella del verificador frente a la línea base de 10.26 | Distinta, comparada en memoria y sin registrar ningún valor ni huella |
+| Identificador de transacción de la fila del rol | 742 → 38941 |
+| Roles con inicio de sesión | Sigue siendo el único |
+
+El cambio del identificador de transacción por sí solo no demuestra la rotación. Lo decisivo es la combinación de un verificador almacenado distinto del de la línea base con una autenticación correcta por la ruta que exige contraseña.
+
+### Validación independiente desde Windows
+
+- Conexión nueva a `127.0.0.1:5433`, el puerto publicado y restringido al loopback, usando `TEST_DATABASE_URL` leída en memoria. La contraseña viajó al proceso de comprobación por variable de entorno, se retiró al terminar y no apareció en argumentos de proceso, en pantalla ni en registros.
+- La sesión observó como cliente la dirección de la puerta de enlace del host en la red interna de Docker, no el loopback del contenedor. Las reglas de autenticación del contenedor son de confianza para el socket local y el loopback interno, y exigen `scram-sha-256` al resto; esa dirección solo la cubre la regla estricta. La comprobación validó la contraseña de verdad y no un acceso local de confianza.
+- Identidad confirmada: rol `app_test_user` y base `fullstack_nextjs_test`. Solo se ejecutaron consultas de lectura.
+- Recuentos leídos por la ruta de red: 14 tablas públicas, 7 migraciones, 3 usuarios, 5 sesiones de clase, ninguna otra sesión de cliente y cifrado de contraseñas `scram-sha-256`.
+- La utilidad ejecuta su comprobación como archivo de programa y no con código en línea, porque el intérprete de órdenes de Windows no escapa las comillas dobles al pasar texto a un ejecutable nativo.
+
+### Consistencia de la configuración local
+
+| Comprobación | Resultado |
+| --- | --- |
+| `.env` contiene `TEST_DATABASE_URL` | Sí |
+| `.env.compose.local` contiene `POSTGRES_TEST_PASSWORD` | Sí |
+| Ambas contraseñas coinciden, comparadas en memoria | Sí |
+| Rol, host, puerto y base de la cadena de TEST | Correctos |
+| `DATABASE_URL` de DEV | Intacta y ajena a TEST |
+| Claves duplicadas | Ninguna en ninguno de los dos archivos |
+| Archivos en Git | Ignorados, sin entrada en el índice |
+| Restos temporales de la utilidad | Ninguno |
+
+### Integridad del servicio y de los datos
+
+- Contenedor `fullstack_nextjs_postgres_test`: mismo identificador, misma hora de arranque, `running/healthy`, cero reinicios y el mismo volumen persistente montado en el directorio de datos.
+- Tres bases presentes. La principal conserva 14 tablas públicas, 3 usuarios y 5 sesiones de clase; la residual de demostración conserva 15 tablas; el diario de migraciones mantiene 7 entradas y no hay migraciones nuevas.
+- Sin sesiones de cliente ajenas a las comprobaciones. La publicación sigue limitada a `127.0.0.1:5433`.
+- DEV: mismo contenedor, misma hora de arranque y saludable, sin conexiones ni cambios.
+
+### Estado del respaldo
+
+- Se conservan los tres volcados cifrados con la protección de datos del perfil de Windows —base principal, base residual y base de mantenimiento— con sus tamaños, fechas y el archivo de resúmenes SHA-256 originales, fuera del repositorio y sin ningún volcado en texto claro conocido.
+- El ensayo de restauración de 10.26 (14 de 14 tablas y 15 de 15 tablas con recuentos idénticos, 7 migraciones, sin errores) sigue siendo la referencia válida de recuperación. No se descifraron los respaldos ni se repitió el ensayo porque no hubo causa justificada.
+- No quedan contenedores del ensayo ni temporales asociados.
+
+### Riesgos residuales
+
+- El rol sigue siendo **superusuario**: la credencial protege todo el clúster de TEST.
+- El contenedor conserva en su configuración de arranque el valor anterior de la variable de contraseña empleada al inicializar el volumen. El valor anterior ya no autentica, pero sigue siendo una copia almacenada; reemplazarla exigiría recrear el contenedor, algo fuera de este alcance y no autorizado.
+- Los respaldos solo se pueden abrir con la cuenta de Windows del propietario; si se pierde ese perfil, no son recuperables.
+- Las copias de la credencial fuera de esta máquina, su posible reutilización histórica y los checkpoints de los agentes siguen sin confirmarse.
+- DEV no se ha rotado.
+- Falta la aceptación documentada del riesgo residual por el propietario.
+
+### Estado
+
+**POSTGRESQL TEST — CREDENCIAL ROTADA Y VERIFICADA.** La evidencia acredita la sustitución del verificador del rol en TEST y la autenticación correcta con la configuración actual. No acredita una ausencia histórica de exposición ni el alcance de copias externas.
+
+**H03 GLOBAL — PENDIENTE DE ACCIÓN OPERATIVA.** Quedan la rotación controlada de PostgreSQL DEV, la confirmación de reutilización o no reutilización histórica, la evaluación de copias externas y checkpoints, y la aceptación documentada del riesgo residual.
+
+### Siguiente acción
+
+Aplicar a PostgreSQL **DEV** el mismo procedimiento ya ensayado en TEST: respaldo verificado, ensayo de restauración, cambio interactivo de la contraseña del rol, actualización de su consumidor local, validación desde el host por la ruta que exige contraseña y registro de la evidencia sin valores. Ese trabajo no forma parte de este incremento y no se inició.
