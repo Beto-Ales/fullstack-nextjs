@@ -496,4 +496,6 @@ El incremento 10.13 completa el diagnóstico local de H03 y protege los informes
 
 El incremento 10.15 corrige R14-01: la finalización de asignaciones habituales rechaza intervalos invertidos antes de conciliar créditos pendientes. La anulación de una asignación futura requiere un flujo propio. [Modelo académico](docs/academic-model.md)
 
+El incremento 10.16 confirma que la baja de cuenta aún puede invertir el intervalo de una asignación futura. La propuesta de anulación explícita y auditada queda pendiente de aprobación funcional. [Evidencia y diseño](docs/design-future-assignments.md)
+
 Este documento define los requisitos funcionales de referencia. Las decisiones técnicas definitivas deberán respetar el estado real del repositorio y quedar documentadas antes de implementar cambios importantes.
