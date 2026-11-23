@@ -689,3 +689,169 @@ Los dos archivos del árbol de trabajo modificados por el propietario (`app/admi
 2. Decidir si se endurece `pg_hba.conf` retirando la confianza del loopback interno, con recarga de la configuración.
 3. Revisar la reutilización de credenciales históricas y las copias en puntos de control de agentes.
 4. Retirar las utilidades temporales del directorio temporal cuando ya no se necesiten; los respaldos cifrados se conservan.
+
+## Incremento 10.31 — Evaluación final de copias históricas, reutilización y riesgo residual
+
+Este incremento es diagnóstico y documental. No repite las rotaciones de 10.27 y 10.30, no abre informes ni transcripciones, no se conecta a bases de datos, no arranca, detiene ni recrea contenedores, no modifica Compose ni archivos de entorno, no consulta el remoto por red, no ejecuta operaciones destructivas de Git y no elimina referencias, informes, transcripciones ni respaldos. Todo el análisis se apoya en metadatos: nombres de referencia, rutas, recuentos, fechas y estados.
+
+### A. Evidencia de rotación ya verificada
+
+| Entorno | Sustitución del verificador | Autenticación posterior | Prueba negativa | Estado |
+| --- | --- | --- | --- | --- |
+| PostgreSQL TEST | Un único `SCRAM-SHA-256` distinto de la línea base; fila del rol 742 → 38941 | Conexión nueva desde el host por `127.0.0.1:5433` con la credencial vigente | No se probó la anterior, por decisión del procedimiento | Mitigado con evidencia (10.27) |
+| PostgreSQL DEV | Un único `SCRAM-SHA-256` distinto de la línea base; fila del rol 755 → 760 | Conexión nueva desde el host por `127.0.0.1:5432` con la credencial vigente | Contraseña incorrecta rechazada con `28P01` | Mitigado con evidencia (10.30) |
+
+La sustitución en cada servidor implica que el valor anterior ya no existe como verificador válido en ese rol. Esta evidencia cubre PostgreSQL; no cubre otros servicios que pudieran haber usado el mismo valor ni copias almacenadas fuera del servidor. Detalle en [10.27](#incremento-1027--rotación-de-postgresql-test-verificada) y [10.30](#incremento-1030--respaldo-rotación-y-verificación-de-la-credencial-postgresql-dev).
+
+### B. Clasificación de las credenciales históricas
+
+| Categoría | Dónde consta la copia | Estado del valor histórico |
+| --- | --- | --- |
+| Contraseña del rol `app_dev_user` anterior a 10.30 | Quince informes locales y sus copias en checkpoints; además la salida de una comprobación en 10.28 | Sustituida en PostgreSQL DEV; las copias permanecen |
+| Contraseña del rol `app_test_user` anterior a 10.27 | Quince informes locales y sus copias en checkpoints | Sustituida en PostgreSQL TEST; las copias permanecen |
+| Valor de DEV expuesto en la transcripción de 10.28 | Salida de la sesión de trabajo de ese incremento | Era la credencial vigente entonces; ya sustituida en el servidor |
+| Clave HMAC de limitación de inicio de sesión | Sin exposición detectada en 10.13 | No aplica mientras no aparezca evidencia |
+| Credenciales sintéticas, fixtures y demostración | Repositorio, informes y suites | Sintéticas o efímeras; no son credenciales operativas |
+| Cuenta administrativa, sesiones, proveedor, correo y claves privadas | Sin exposición detectada en 10.13 | No aplica mientras no aparezca evidencia |
+
+Las dos categorías que motivan H03 son las dos primeras. Su valor ya no autentica en su servidor, pero cualquier copia histórica sigue siendo material sensible: describe una contraseña que pudo haberse reutilizado en otro sistema.
+
+### C. Inventario de checkpoints Git (solo metadatos)
+
+| Espacio de nombres | Referencias presentes | Con copia de alguno de los 15 informes | Posteriores al commit de 10.24 (`99642cc`) | Ámbito |
+| --- | --- | --- | --- | --- |
+| `refs/agents/*` | 60 | 33 | 0 | Local |
+| `refs/codex/turn-diffs/*` | 5 | 4 | 0 | Local |
+| `refs/cline/checkpoints/*` | 18 | 0 por nombre de archivo | 8 | Local |
+| **Total** | **83** | **37** | **8** | |
+
+- El inventario de 10.24 registró 21 referencias de agentes con copia de informes. El recuento actual es de 37 entre dos espacios de nombres y ninguno de sus commits es posterior al commit de aquel inventario, de modo que no hay indicios de checkpoints nuevos con contenido sensible. La diferencia entre ambas cifras se registra como **discrepancia de conteo no resuelta** y no se usa como evidencia de exposición nueva ni de ausencia de ella.
+- Las 8 referencias nuevas de `refs/cline/checkpoints` son instantáneas de área de trabajo creadas por la extensión del IDE después de 10.24. Ninguna contiene los nombres de archivo de los 15 informes; su contenido no se ha inspeccionado y no se afirma que sea inocuo.
+- Ninguna de las 83 referencias contiene `.env` ni `.env.compose.local`. 71 contienen únicamente la plantilla versionada `.env.compose.example`, sin credenciales reales.
+- Los informes están presentes en disco (15 de 15), fuera del índice (0 coincidencias en `git ls-files`), fuera del árbol de `master` y de `origin/master` (0 coincidencias) y fuera de sus historiales (0 commits). Las 15 exclusiones exactas de `.git/info/exclude` siguen vigentes y se comprobaron con `git check-ignore`; `.env` y `.env.compose.local` siguen ignorados.
+- Publicación: solo existen `refs/heads/master` y `refs/remotes/origin/master`; el *fetch* solo mapea ramas; no hay *refspec* de `push`, ni `push.default`, ni `remote.pushDefault`, ni espejo, ni etiquetas, ni entradas en la pila. No existe reflog por referencia para estos tres espacios de nombres; el de `HEAD`/`master` conserva 64 entradas.
+- Objetos: 866 sueltos, 1454 empaquetados en 3 paquetes, 1 empaquetado podable, sin basura. Estas cifras no identifican qué objeto contiene qué.
+- Protección frente al staging ordinario: el índice solo incorpora rutas seleccionadas explícitamente y los 15 informes están excluidos, así que no entrarían con `git add`. Ninguna comprobación impide, en cambio, un `git push --mirror` o un `git push origin 'refs/*'`, que publicarían los checkpoints; la exclusión de `.git/info/exclude` tampoco se replica en otros clones.
+- Borrar una referencia no elimina el contenido: los objetos seguirían alcanzables desde reflogs, otros objetos y respaldos hasta que se ejecute una recolección autorizada. Tampoco devuelve los puntos de recuperación perdidos ni permite afirmar que la copia desapareció.
+- Riesgos de borrarlas ahora: pérdida irreversible de puntos de recuperación del agente, pérdida de evidencia útil para esta investigación, posible corrupción del estado de la herramienta y falsa sensación de saneamiento.
+- Una depuración completa y verificable exigiría, en un incremento autorizado aparte: copia de seguridad del repositorio fuera del árbol de trabajo como vía de recuperación; inventario previo de referencias y sus identificadores; decisión explícita sobre la conservación de evidencia; retirada de referencias; expiración de reflogs y recolección con poda solo en ventana autorizada; verificación posterior con `git fsck` y comprobación de que los informes ya no son alcanzables; y constancia de que las copias externas siguen fuera de alcance. Nada de esto se ejecutó.
+
+### D. Informes locales, transcripciones y registros del agente
+
+- **Informes locales.** Quince archivos presentes en el disco, excluidos del índice y ausentes de ramas e historiales. Se conservan; no se abrió su contenido.
+- **Transcripciones.** La incidencia de 10.28 queda registrada como exposición histórica de una credencial ya rotada. Su reproducción no se repite. El alcance de las copias depende del almacenamiento de las herramientas usadas: el directorio de estado de Codex ocupa unos 569 MB en 5989 archivos, con 17 archivos de sesión; el de Cline unos 17,6 MB en 41 archivos; el almacenamiento global del IDE contiene un directorio de la extensión de chat. No se inspeccionó su contenido y no consta ni acceso de terceros ni inaccesibilidad a terceros.
+- **Herramientas temporales.** El directorio temporal del propietario conserva la utilidad de rotación de DEV con 6 archivos; no se ha inspeccionado ni se ha retirado.
+- **`test-results/`.** Sigue presente, sin seguimiento en Git y sin exclusión: se conserva y no se incorpora al índice.
+
+### E. Metadatos de Docker
+
+| Elemento | DEV | TEST |
+| --- | --- | --- |
+| Contenedor | `fullstack_nextjs_postgres_dev` | `fullstack_nextjs_postgres_test` |
+| Imagen | `postgres:15` | `postgres:15` |
+| Estado | `running`, saludable | `running`, saludable |
+| Creación | 2026-11-20 09:36 UTC | 2026-11-20 09:36 UTC |
+| Arranque actual | 2026-11-23 08:11 UTC | 2026-11-23 08:11 UTC |
+| Reinicios / política | 0 / `unless-stopped` | 0 / `unless-stopped` |
+| Volumen | `fullstack-nextjs_postgres_dev_data` | `fullstack-nextjs_postgres_test_data` |
+| Variables de inicialización | incluye `POSTGRES_PASSWORD` | incluye `POSTGRES_PASSWORD` |
+
+- Ambos contenedores conservan en su configuración de arranque la variable de contraseña con el valor de inicialización del volumen, que es **anterior** a la rotación y ya no autentica. Sus valores no se leyeron ni se registraron.
+- Son copias de secretos históricos: inertes para autenticarse, pero sensibles si el valor se reutilizó en otro sistema.
+- No deben usarse para inicializar volúmenes nuevos, porque crearían un rol con la contraseña histórica.
+- Su retirada exige recrear cada contenedor conservando su volumen, con autorización específica, interrupción breve y verificación posterior. No se hizo: no se recreó ningún contenedor, no se detuvo Docker y no se modificó Compose.
+- El volumen `gpt_codex_full_prueba_mysql_data` pertenece a otro proyecto y es ajeno a H03; no se evaluó.
+
+### F. Reutilización histórica
+
+No se comparó ninguna contraseña con otros archivos, gestores, servicios o bases, y no se accedió al gestor de contraseñas. La comprobación es administrativa y depende del propietario:
+
+| Ámbito | Estado |
+| --- | --- |
+| PostgreSQL DEV | Pendiente de comprobar (valor sustituido en el servidor) |
+| PostgreSQL TEST | Pendiente de comprobar (valor sustituido en el servidor) |
+| Otros proyectos locales | Pendiente de comprobar |
+| Bases remotas o alojadas | Pendiente de comprobar |
+| Aplicaciones externas | Pendiente de comprobar |
+| Cuentas personales | Pendiente de comprobar |
+| Otros servicios conocidos | Pendiente de comprobar |
+
+La respuesta válida es una de estas cuatro, por ámbito: **no se reutilizó**, **se reutilizó y ya se rotó**, **se reutilizó y sigue pendiente**, **no se sabe**. No se solicita ningún valor, cuenta ni nombre de servicio. Si existe reutilización sin mitigar, H03 no puede cerrarse.
+
+### G. Posible exposición externa y respaldos
+
+- No se hicieron consultas de red al remoto ni a servicios externos. El remoto configurado es el único conocido y no se ha consultado su contenido: la ausencia de los informes en el historial publicado de `origin/master` está comprobada contra la referencia local, no contra el servidor.
+- Nada indica que los informes o las transcripciones se hayan compartido o sincronizado fuera del equipo, y nada permite descartarlo. El alcance de acceso de terceros sigue sin confirmar.
+- **Respaldos DEV:** el conjunto `%USERPROFILE%\Documents\h03-secure-backups\dev-20261123-183957` conserva cuatro archivos: tres cifrados con la protección del perfil de Windows y el manifiesto de resúmenes. Su ACL está restringida y dependen de la cuenta de Windows del propietario.
+- **Respaldos TEST:** no se localizó el conjunto documentado en 10.26 en las dos ubicaciones revisadas (`Documents` y `Downloads`). No hay indicios ni de borrado ni de conservación: su localización y su retención deben confirmarse antes de cualquier decisión sobre respaldos.
+- **Copias de seguridad en general:** no se descifró, movió, renombró ni borró ningún artefacto.
+
+### H. Matriz final de riesgo
+
+| Categoría | Evidencia | Exposición activa | Riesgo residual | Acción requerida | Responsable |
+| --- | --- | --- | --- | --- | --- |
+| Contraseña histórica DEV | Verificador sustituido y autenticación verificada (10.30); copias en informes, checkpoints y metadatos | No en PostgreSQL DEV | Medio por reutilización desconocida | Confirmar reutilización | Propietario |
+| Contraseña histórica TEST | Verificador sustituido y autenticación verificada (10.27); copias en informes y checkpoints | No en PostgreSQL TEST | Medio por reutilización desconocida | Confirmar reutilización | Propietario |
+| Valor expuesto en la transcripción de 10.28 | Era la credencial DEV vigente; sustituida en el servidor | No en PostgreSQL DEV | Medio: copia en el almacén del agente | Decidir el tratamiento de la transcripción | Propietario |
+| Checkpoints locales de Git | 83 referencias; 37 con copia de informes; locales y sin *refspec* de publicación | No activa | Medio mientras se conserven copias sensibles | Decidir conservación o saneamiento controlado | Propietario y administración del repositorio |
+| Informes sensibles | 15 en disco, fuera de índice, ramas e historiales; 15 exclusiones vigentes | No activa | Medio | Conservar como evidencia y decidir su destrucción futura | Propietario |
+| Registros del agente | 569 MB en Codex, 17,6 MB en Cline y el almacén del IDE | Pendiente de comprobar | Medio | Confirmar si se compartieron o sincronizaron | Propietario |
+| Metadatos Docker | `POSTGRES_PASSWORD` con el valor de inicialización anterior en ambos contenedores | No (el valor ya no autentica) | Medio si el valor se reutilizó | Recrear los contenedores con autorización para retirar la copia | Administración del entorno |
+| Reutilización en otros servicios | Sin comprobar | Pendiente de comprobar | Indeterminado | Comprobación administrativa del propietario | Propietario |
+| Posible publicación externa | Sin evidencia de compartición y sin evidencia de lo contrario | Pendiente de comprobar | Indeterminado | Declaración del propietario | Propietario |
+| Respaldos protegidos | DEV con cuatro artefactos cifrados por DPAPI; TEST no localizado en las ubicaciones revisadas | No activa | Bajo en DEV; indeterminado en TEST | Confirmar ubicación y retención; definir política | Propietario |
+
+Estados utilizados: **mitigado con evidencia**, **pendiente de decisión**, **pendiente de comprobar**, **riesgo aceptado por el propietario** y **no aplica**. En este incremento no se declara ninguna aceptación de riesgo: esa casilla solo puede marcarla el propietario.
+
+### I. Endurecimiento independiente de H03
+
+Estas tareas **no** son credenciales activas expuestas y no se corrigen en 10.31:
+
+| Tarea | Motivo | Prioridad propuesta |
+| --- | --- | --- |
+| Verificar ubicación y retención de los respaldos de TEST; definir política de conservación y destrucción | El conjunto de 10.26 no se localizó en las ubicaciones revisadas | Alta |
+| Recrear los contenedores para retirar el valor anterior de `POSTGRES_PASSWORD` | Copia de secreto histórico en la configuración de arranque | Alta (requiere autorización y parada breve) |
+| Separar el rol de aplicación del privilegio de superusuario | La credencial protege todo el clúster en DEV y en TEST | Media-alta |
+| Retirar la confianza del socket y del loopback interno en `pg_hba.conf` | Reduce el efecto de una credencial filtrada dentro del contenedor | Media |
+| Reducir la dependencia de la protección del perfil de Windows | Si se pierde el perfil, los respaldos no son recuperables | Media |
+| Limitar el acceso administrativo a Docker | Equivale a control total del host y de los volúmenes | Media |
+| Actualizar las migraciones atrasadas de DEV (6 de 17) y TEST (7 de 17) | Desfase operativo, no de credenciales | Baja-media |
+| Decidir sobre la base residual de demostración del clúster de TEST | Comparte rol y clúster | Baja |
+
+### J. Criterios de cierre de H03
+
+| Criterio | Estado |
+| --- | --- |
+| 1. DEV y TEST con las credenciales anteriores invalidadas, con evidencia | Cumplido |
+| 2. Sin otros sistemas conocidos donde esas contraseñas sigan activas | Pendiente del propietario |
+| 3. Reutilización histórica evaluada por el propietario | Pendiente |
+| 4. Copias conocidas clasificadas | Cumplido para las locales: informes, checkpoints, metadatos y almacenes del agente |
+| 5. Decisión explícita sobre checkpoints y transcripciones | Pendiente |
+| 6. Alcance desconocido documentado | Cumplido |
+| 7. Aceptación expresa del riesgo residual | Pendiente |
+| 8. Sin exposiciones activas conocidas sin mitigación | Cumplido para las dos credenciales PostgreSQL; las copias históricas no son credenciales activas |
+
+**H03 — PENDIENTE DE CIERRE OPERATIVO.** Los criterios 2, 3, 5 y 7 dependen exclusivamente de decisiones del propietario. El criterio 8 no se extiende a servicios ajenos a PostgreSQL hasta que exista la respuesta del criterio 2.
+
+### K. Decisiones del propietario
+
+1. ¿Las contraseñas históricas de DEV y TEST se reutilizaron en otros servicios? Respuesta por ámbito: no se reutilizó / se reutilizó y ya se rotó / se reutilizó y sigue pendiente / no se sabe.
+2. ¿Los informes o las transcripciones se compartieron o sincronizaron fuera de este equipo?
+3. ¿Prefiere conservar temporalmente los checkpoints restringidos o autorizar después su saneamiento controlado?
+4. ¿Acepta los riesgos residuales documentados una vez respondidas las tres preguntas anteriores?
+
+Si alguna respuesta es «no se sabe», se registra la incertidumbre y se mantiene abierto el criterio correspondiente. La mitigación propuesta es tratar el valor como reutilizable hasta confirmación y no reintroducirlo en ningún servicio nuevo.
+
+### L. Tratamientos que requieren autorización específica
+
+1. Recrear el contenedor DEV, conservando su volumen, para retirar la copia anterior de la configuración de arranque.
+2. Recrear el contenedor TEST con el mismo fin, o decidir su conservación.
+3. Saneamiento controlado de referencias de checkpoint: copia de seguridad previa, inventario, ventana y verificación; nunca junto con una recolección de objetos no auditada.
+4. Retención, traslado o destrucción de informes, transcripciones y utilidades temporales.
+5. Confirmación de la ubicación y la política de retención de los respaldos de TEST y DEV.
+
+### Estado de este incremento
+
+No se modificó PostgreSQL DEV ni TEST, no se recreó ni detuvo ningún contenedor, no se ejecutaron operaciones destructivas de Git y no se borró evidencia. El único cambio es documental.
+
+**H03 — PENDIENTE DE CIERRE OPERATIVO**, a la espera de las respuestas del propietario en la sección K y de la autorización de los tratamientos de la sección L. El siguiente incremento recomendado, sin ejecutarlo, es la verificación de la ubicación y la retención de los respaldos.
