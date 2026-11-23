@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, gt, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
@@ -16,7 +16,7 @@ import type { UserRole } from "@/src/domain/auth/roles";
 import { db } from "@/src/infrastructure/db/client";
 import {
   classReservations, classSessions, classTemplates, reservationAttendanceRecords, reservationCancellations,
-  studentProfileEdits, studentProfiles, studentWithdrawals, users,
+  studentProfileEdits, studentProfiles, studentTemplateAssignmentCancellations, studentWithdrawals, users,
 } from "@/src/infrastructure/db/schema";
 import { ApplicationError } from "@/src/infrastructure/errors";
 
@@ -76,6 +76,34 @@ async function readProfileEdits(reader: TransactionClient, studentProfileId: str
       changes: profileEditChanges(changes),
     })),
   };
+}
+
+async function readAssignmentCancellations(reader: TransactionClient, assignmentIds: string[]) {
+  if (!assignmentIds.length) return new Map<string, {
+    source: "ADMIN_INDIVIDUAL" | "STUDENT_WITHDRAWAL";
+    cancelledAt: Date;
+    reason: string;
+    cancelledByEmail: string | null;
+    ambiguousCount: number;
+  }>();
+
+  const actor = alias(users, "assignment_cancellation_actor");
+  const rows = await reader.select({
+    assignmentId: studentTemplateAssignmentCancellations.assignmentId,
+    source: studentTemplateAssignmentCancellations.source,
+    cancelledAt: studentTemplateAssignmentCancellations.cancelledAt,
+    reason: studentTemplateAssignmentCancellations.reason,
+    cancelledByEmail: actor.email,
+    ambiguousReservationIds: studentTemplateAssignmentCancellations.ambiguousReservationIds,
+  }).from(studentTemplateAssignmentCancellations)
+    .leftJoin(actor, eq(actor.id, studentTemplateAssignmentCancellations.cancelledByUserId))
+    .where(inArray(studentTemplateAssignmentCancellations.assignmentId, assignmentIds));
+
+  return new Map(rows.map(({ ambiguousReservationIds, cancelledByEmail, ...row }) => [row.assignmentId, {
+    ...row,
+    cancelledByEmail: cancelledByEmail?.trim() || null,
+    ambiguousCount: ambiguousReservationIds.length,
+  }] as const));
 }
 
 function selectClassActivity(reader: TransactionClient) {
@@ -166,8 +194,13 @@ export async function getAdminStudentProfile(
 
     const limit = PAGE_SIZE + 1;
     const scope = eq(classReservations.studentProfileId, student.id);
-    const schedules = await selectHabitualSchedules(tx, regulationDate(now), eq(studentProfiles.id, student.id), true)
+    const scheduleRows = await selectHabitualSchedules(tx, regulationDate(now), eq(studentProfiles.id, student.id), true)
       .limit(limit).offset(offset("horarios"));
+    const assignmentCancellations = await readAssignmentCancellations(tx, scheduleRows.map(({ assignmentId }) => assignmentId));
+    const schedules = scheduleRows.map((schedule) => ({
+      ...schedule,
+      cancellation: assignmentCancellations.get(schedule.assignmentId) ?? null,
+    }));
     const upcoming = await selectClassActivity(tx).where(and(
       scope,
       eq(classReservations.status, "CONFIRMED"),

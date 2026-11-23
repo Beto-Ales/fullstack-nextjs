@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   getAdminStudentProfile, type ProfileClassEntry, type ProfilePageKey,
 } from "@/src/application/academic/admin-student-profile-service";
+import { regulationDate } from "@/src/application/academic/regulation-service";
 import { resolveCenterWeek } from "@/src/domain/time/center-week";
 import { CalendarDate, HistoryTime } from "@/app/components/history-time";
 import { HistoryText } from "@/app/components/history-text";
@@ -14,6 +15,7 @@ import { formatCreditMovement, formatCreditQuantity, formatHistoryInteger } from
 import { requireRole } from "@/src/interfaces/auth/session";
 
 import styles from "./profile.module.css";
+import { AssignmentCancellationPanel } from "./assignment-cancellation-form";
 import { submitStudentEdit } from "./student-edit-action";
 import { EditProfileLink, StudentEditForm } from "./student-edit-form";
 
@@ -132,6 +134,8 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
   if (!profile) notFound();
 
   const { student, totals, schedules, upcoming, history, recoveries, credits, movements, edits } = profile;
+  const localDate = regulationDate(now);
+  const studentName = `${student.firstName} ${student.lastName}`;
   const session = z.uuid().safeParse(query.sesion);
   const week = z.iso.date().safeParse(query.week);
   const normalizedWeek = week.success ? resolveCenterWeek(week.data, DateTime.fromJSDate(now)).week.toISODate() : null;
@@ -214,6 +218,33 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
               : !schedule.currentOrUpcoming ? "Vigencia finalizada" : schedule.upcoming ? "Próximo" : "Vigente"}</p>
             {schedule.assignmentStatus === "ENDED" && <p>Asignación cerrada</p>}
             <p>Desde <CalendarDate value={schedule.effectiveFrom} />{schedule.effectiveTo && <> hasta <CalendarDate value={schedule.effectiveTo} /></>}</p>
+            {schedule.cancellation && (
+              <div className={styles.audit}>
+                <p>
+                  {schedule.cancellation.source === "ADMIN_INDIVIDUAL"
+                    ? "Anulación administrativa individual" : "Anulación por baja de la cuenta"}
+                  {" · "}<HistoryTime value={schedule.cancellation.cancelledAt} />
+                </p>
+                <p>Responsable registrado · {schedule.cancellation.cancelledByEmail ?? "No disponible"}</p>
+                <p>Motivo registrado · {schedule.cancellation.reason}</p>
+                {schedule.cancellation.ambiguousCount > 0 && (
+                  <p>
+                    Reservas que requieren revisión administrativa: {formatHistoryInteger(schedule.cancellation.ambiguousCount)}.
+                    No se cancelaron ni se liberaron plazas automáticamente.
+                  </p>
+                )}
+              </div>
+            )}
+            <AssignmentCancellationPanel
+              studentProfileId={student.id}
+              assignmentId={schedule.assignmentId}
+              studentName={studentName}
+              courseName={schedule.courseName}
+              effectiveFrom={schedule.effectiveFrom}
+              effectiveTo={schedule.effectiveTo}
+              canCancel={student.status === "ACTIVE" && schedule.assignmentStatus === "ACTIVE"
+                && schedule.assignmentEffectiveFrom > localDate}
+            />
           </li>
         )} />
         <Pagination label="horarios habituales" {...schedules} href={(number) => pageHref("horarios", number)} />

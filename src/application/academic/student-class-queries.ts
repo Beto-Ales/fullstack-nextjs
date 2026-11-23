@@ -88,6 +88,9 @@ export function selectHabitualSchedules(reader: Pick<typeof db, "select">, local
     isoWeekday: classTemplates.isoWeekday,
     startsAtLocalTime: classTemplates.startsAtLocalTime,
     durationMinutes: classTemplates.durationMinutes,
+    // The persisted assignment start is the authority for future cancellation;
+    // the displayed range can start later when the template is newer.
+    assignmentEffectiveFrom: sql<string>`${studentTemplateAssignments.effectiveFrom}::text`,
     effectiveFrom: sql<string>`${effectiveFrom}::text`,
     effectiveTo: sql<string | null>`${effectiveTo}::text`,
     upcoming: sql<boolean>`${effectiveFrom} > ${localDate}::date`,

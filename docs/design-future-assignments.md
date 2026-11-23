@@ -23,7 +23,17 @@ La anulación individual exige `SUPER_ADMIN`, un motivo de 3 a 300 caracteres y 
 
 La baja comparte la tabla de auditoría: anula las asignaciones futuras sin cambiar su fin y cierra las iniciadas con el día local. Así ningún intervalo nuevo queda invertido. La generación, la capacidad, la habitualidad, la secuencia y el panel del alumno excluyen `CANCELLED`; la ficha administrativa conserva la fila y la etiqueta.
 
-Sigue pendiente exponer la acción en el panel, registrar la procedencia de nuevas reservas habituales para poder cancelar reservas inequívocamente vinculadas, y el saneamiento o la restricción de intervalos históricos. Las reservas antiguas sin procedencia se conservan e informan para revisión. [Pruebas](testing.md#incremento-1017--anulación-explícita-de-asignaciones-futuras)
+Sigue pendiente registrar la procedencia de nuevas reservas habituales para poder cancelar reservas inequívocamente vinculadas, y el saneamiento o la restricción de intervalos históricos. Las reservas antiguas sin procedencia se conservan e informan para revisión. [Pruebas](testing.md#incremento-1017--anulación-explícita-de-asignaciones-futuras)
+
+## Implementación 10.18
+
+La ficha administrativa del alumno expone «Anular asignación futura» en cada horario habitual que cumple las condiciones orientativas: cuenta activa, asignación `ACTIVE` y un `effective_from` persistido posterior al día local de Copenhague. La validación definitiva de fechas, bloqueos y auditoría sigue en `cancelFutureAssignment`; la interfaz solo evita ofrecer una operación que el contrato rechazaría por fecha o por estado anulado.
+
+La confirmación muestra alumno, curso, fechas originales, el efecto de la anulación y un motivo obligatorio de 3 a 300 caracteres. Incluye la advertencia de que las reservas existentes no se cancelan automáticamente y pueden requerir revisión administrativa. No promete liberar plazas ni identificar todas las reservas afectadas. El motivo no se envía por URL ni se guarda en el navegador.
+
+La Server Action exige `SUPER_ADMIN`, obtiene el actor de la sesión, rechaza campos ajenos y delega la transacción en el servicio de 10.17. Un resultado nuevo informa de la anulación, la conservación del historial y las reservas que requieren revisión. Un reintento devuelve la auditoría existente e informa de que no se registró una nueva operación. Los errores distinguen asignación iniciada, inexistente, cuenta no disponible, validación y fallo inesperado sin exponer SQL ni trazas.
+
+La ficha conserva las fechas originales y muestra en la misma fila la etiqueta «Asignación anulada», el origen `ADMIN_INDIVIDUAL` o `STUDENT_WITHDRAWAL`, el actor, el instante y el motivo. Solo se indica el número de reservas ambiguas, no sus identificadores técnicos. La anulación individual no crea una segunda auditoría ni cancela reservas. Sigue pendiente la procedencia persistida y el inventario histórico.
 
 ## Semántica propuesta
 
@@ -54,4 +64,4 @@ En un diseño que tome primero el perfil, una anulación A podría retenerlo y e
 ## Implementación posterior
 
 1. Tras aprobar la política, introducir en una migración aditiva la representación, la auditoría y la procedencia de nuevas reservas habituales. Implementar la anulación y adaptar la baja en el mismo incremento de servidor. Auditar todos los usos de vigencia, incluidos capacidad de asignaciones, generador y CLI, calendario, ficha, habitualidad y secuencia. Probar A–F como regresiones de la semántica aprobada, rollback, reintentos, reservas puntuales y solapadas, cambio de día tras bloqueo, integridad de créditos y cruces con generación, reprogramación, cancelación global, ajustes vinculados y baja en ambos órdenes. Usar H08.
-2. Exponer la acción administrativa accesible una vez estable el contrato. Separar el saneamiento de intervalos históricos y la eventual restricción PostgreSQL. Inventariar con la consulta de solo lectura de [10.15](testing.md#incremento-1015--vigencia-de-asignaciones-habituales), revisar cada fila con el propietario y ensayar el despliegue desde `0014` con H07. Activar y validar la restricción después de que los escritores compatibles estén desplegados y se hayan tratado las excepciones autorizadas. Una restricción `NOT VALID` también se aplica a nuevas escrituras, por lo que adelantarla podría revertir bajas con el código actual.
+2. El saneamiento de intervalos históricos y la eventual restricción PostgreSQL siguen pendientes. Inventariar con la consulta de solo lectura de [10.15](testing.md#incremento-1015--vigencia-de-asignaciones-habituales), revisar cada fila con el propietario y ensayar el despliegue desde `0014` con H07. Activar y validar la restricción después de que los escritores compatibles estén desplegados y se hayan tratado las excepciones autorizadas. Una restricción `NOT VALID` también se aplica a nuevas escrituras, por lo que adelantarla podría revertir bajas con el código actual.

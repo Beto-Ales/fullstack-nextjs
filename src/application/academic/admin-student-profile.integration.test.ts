@@ -9,6 +9,7 @@ describe("admin student profile (postgres)", () => {
   let academic: typeof import("./academic-service");
   let getCreditOverview: typeof import("../credits/credit-service").getCreditOverview;
   let withdrawStudent: typeof import("./student-withdrawal").withdrawStudent;
+  let cancelFutureAssignment: typeof import("./assignment-cancellation").cancelFutureAssignment;
   const admin = { userId: randomUUID(), role: "SUPER_ADMIN" } as const;
   const student = { userId: randomUUID(), role: "STUDENT" } as const;
   const studentProfileId = randomUUID();
@@ -19,6 +20,7 @@ describe("admin student profile (postgres)", () => {
     ({ getAdminStudentProfile: getProfile } = await import("./admin-student-profile-service"));
     ({ getCreditOverview } = await import("../credits/credit-service"));
     ({ withdrawStudent } = await import("./student-withdrawal"));
+    ({ cancelFutureAssignment } = await import("./assignment-cancellation"));
     academic = await import("./academic-service");
   });
 
@@ -56,6 +58,17 @@ describe("admin student profile (postgres)", () => {
     await client.query(`insert into student_template_assignments (id, student_profile_id, template_id, effective_from)
       values ($1, $2, $3, '2030-12-30')`, [randomUUID(), studentProfileId, templateId]);
     return templateId;
+  }
+
+  async function createFutureAssignment(name: string, effectiveFrom: string) {
+    const templateId = randomUUID();
+    const assignmentId = randomUUID();
+    await client.query(`insert into class_templates
+      (id, name, iso_weekday, starts_at_local_time, duration_minutes, effective_from)
+      values ($1, $2, 6, '17:00', 60, '2031-01-01')`, [templateId, name]);
+    await client.query(`insert into student_template_assignments (id, student_profile_id, template_id, effective_from)
+      values ($1, $2, $3, $4)`, [assignmentId, studentProfileId, templateId, effectiveFrom]);
+    return { assignmentId, templateId };
   }
 
   it("requires SUPER_ADMIN before looking up a valid student identifier and returns only account details", async () => {
@@ -96,7 +109,8 @@ describe("admin student profile (postgres)", () => {
 
     const profile = await getProfile(admin, studentProfileId);
     expect(profile?.schedules.items).toMatchObject([{
-      courseName: "Acuarela semanal", isoWeekday: 5, startsAtLocalTime: "17:00:00", assignmentStatus: "ACTIVE", effectiveFrom: "2031-01-01",
+      courseName: "Acuarela semanal", isoWeekday: 5, startsAtLocalTime: "17:00:00", assignmentStatus: "ACTIVE",
+      assignmentEffectiveFrom: "2030-12-30", effectiveFrom: "2031-01-01", cancellation: null,
     }]);
     expect(profile?.upcoming.items).toMatchObject([
       { reservationId: habitual.reservationId, habitual: true, origin: "ORDINARY" },
@@ -223,6 +237,44 @@ describe("admin student profile (postgres)", () => {
     expect(second?.movements.items.map(({ id }) => id)).toEqual([movements[20], grant]);
     expect(second?.recoveries.items).toHaveLength(20);
     expect(second?.recoveries.hasNext).toBe(true);
+  });
+
+  it("exposes individual and withdrawal assignment cancellations with their original dates and audit", async () => {
+    const individual = await createFutureAssignment("Anulación individual", "2031-02-01");
+    const withdrawal = await createFutureAssignment("Anulación por baja", "2031-03-01");
+    await reserve("2031-02-01", { templateId: individual.templateId });
+    await reserve("2031-03-01", { templateId: withdrawal.templateId });
+
+    await cancelFutureAssignment(admin, {
+      assignmentId: individual.assignmentId, reason: "El alumno cambia de horario",
+    });
+    await withdrawStudent(admin, { studentProfileId });
+
+    const profile = await getProfile(admin, studentProfileId);
+    const schedules = new Map(profile!.schedules.items.map((schedule) => [schedule.courseName, schedule]));
+    expect(schedules.get("Anulación individual")).toMatchObject({
+      assignmentStatus: "CANCELLED", assignmentEffectiveFrom: "2031-02-01", effectiveFrom: "2031-02-01", effectiveTo: null,
+      cancellation: {
+        source: "ADMIN_INDIVIDUAL", reason: "El alumno cambia de horario",
+        cancelledByEmail: "admin@example.com", ambiguousCount: 1, cancelledAt: expect.any(Date),
+      },
+    });
+    expect(schedules.get("Anulación por baja")).toMatchObject({
+      assignmentStatus: "CANCELLED", assignmentEffectiveFrom: "2031-03-01", effectiveFrom: "2031-03-01", effectiveTo: null,
+      cancellation: {
+        source: "STUDENT_WITHDRAWAL", reason: "Baja de la cuenta del alumno",
+        cancelledByEmail: "admin@example.com", ambiguousCount: 0, cancelledAt: expect.any(Date),
+      },
+    });
+
+    const { rows } = await client.query(
+      `select id,status,effective_from::text,effective_to::text from student_template_assignments
+       where student_profile_id=$1 order by effective_from`, [studentProfileId],
+    );
+    expect(rows).toEqual([
+      { id: individual.assignmentId, status: "CANCELLED", effective_from: "2031-02-01", effective_to: null },
+      { id: withdrawal.assignmentId, status: "CANCELLED", effective_from: "2031-03-01", effective_to: null },
+    ]);
   });
 
   it("keeps the recorded history, schedules and credits after a logical withdrawal", async () => {

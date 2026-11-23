@@ -1,0 +1,267 @@
+import { randomUUID } from "node:crypto";
+import { expect, test, type Page } from "@playwright/test";
+import { DateTime } from "luxon";
+
+import { CENTER_TIME_ZONE } from "../../src/domain/time/timezone";
+import { withCreditsAccount } from "./credits-fixtures";
+
+type Account = Parameters<Parameters<typeof withCreditsAccount>[1]>[0];
+
+async function login(page: Page, { email, password }: Account) {
+  await page.goto("/login");
+  await page.getByLabel("Email", { exact: true }).fill(email);
+  await page.getByLabel("Contraseña", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Iniciar sesión" }).click();
+  await expect(page).toHaveURL(/\/(admin|student)$/);
+}
+
+async function seedProfile({ client, userId }: Account) {
+  const id = randomUUID();
+  await client.query(
+    "insert into student_profiles (id, user_id, first_name, last_name) values ($1, $2, 'Nora', 'Futura')",
+    [id, userId],
+  );
+  return id;
+}
+
+async function seedAssignment(account: Account, profileId: string, input: {
+  name: string;
+  start: DateTime;
+  status?: "ACTIVE" | "ENDED";
+  effectiveTo?: string | null;
+  session?: boolean;
+  reservation?: boolean;
+}) {
+  const { client, sessionIds, templateIds } = account;
+  const templateId = randomUUID();
+  const assignmentId = randomUUID();
+  templateIds.push(templateId);
+  await client.query(`insert into class_templates
+    (id, name, iso_weekday, starts_at_local_time, duration_minutes, effective_from, max_capacity)
+    values ($1, $2, $3, $4, 60, $5, 1)`,
+  [templateId, input.name, input.start.weekday, input.start.toFormat("HH:mm"), input.start.minus({ days: 30 }).toISODate()]);
+  await client.query(`insert into student_template_assignments
+    (id, student_profile_id, template_id, effective_from, effective_to, status)
+    values ($1, $2, $3, $4, $5, $6)`,
+  [assignmentId, profileId, templateId, input.start.toISODate(), input.effectiveTo ?? null, input.status ?? "ACTIVE"]);
+
+  let sessionId: string | null = null;
+  let reservationId: string | null = null;
+  if (input.session) {
+    sessionId = randomUUID();
+    sessionIds.push(sessionId);
+    await client.query(`insert into class_sessions
+      (id, template_id, local_date, starts_at_utc, ends_at_utc, max_capacity)
+      values ($1, $2, $3, $4, $5, 1)`,
+    [sessionId, templateId, input.start.toISODate(), input.start.toJSDate(), input.start.plus({ hours: 1 }).toJSDate()]);
+    if (input.reservation) {
+      reservationId = randomUUID();
+      await client.query(`insert into class_reservations
+        (id, class_session_id, student_profile_id, origin, status)
+        values ($1, $2, $3, 'ORDINARY', 'CONFIRMED')`, [reservationId, sessionId, profileId]);
+    }
+  }
+  return { assignmentId, templateId, sessionId, reservationId };
+}
+
+function card(page: Page, name: string) {
+  return page.getByRole("region", { name: "Horarios habituales" }).getByRole("listitem")
+    .filter({ hasText: name });
+}
+
+test("SUPER_ADMIN cancels a future assignment with a reason and keeps its dates, audit and reservations", async ({ page }) => {
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withCreditsAccount("STUDENT", async (student) => {
+      const profileId = await seedProfile(student);
+      const today = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("day");
+      const futureStart = today.plus({ days: 21 }).set({ hour: 18 });
+      const future = await seedAssignment(student, profileId, {
+        name: "Acuarela futura", start: futureStart, session: true, reservation: true,
+      });
+      const todayAssignment = await seedAssignment(student, profileId, {
+        name: "Acuarela de hoy", start: today.set({ hour: 19 }),
+      });
+      const endedAssignment = await seedAssignment(student, profileId, {
+        name: "Acuarela cerrada", start: today.plus({ days: 28 }).set({ hour: 20 }),
+        status: "ENDED", effectiveTo: today.plus({ days: 35 }).toISODate(),
+      });
+      const followUpId = randomUUID();
+      student.sessionIds.push(followUpId);
+      await student.client.query(`insert into class_sessions
+        (id, template_id, local_date, starts_at_utc, ends_at_utc, max_capacity)
+        values ($1, $2, $3, $4, $5, 1)`,
+      [followUpId, future.templateId, futureStart.plus({ days: 7 }).toISODate(),
+        futureStart.plus({ days: 7 }).toJSDate(), futureStart.plus({ days: 7, hours: 1 }).toJSDate()]);
+
+      const stale = await page.context().newPage();
+      try {
+        await page.setViewportSize({ width: 360, height: 800 });
+        await login(page, admin);
+        await page.goto(`/admin/alumnos/${profileId}`);
+
+        const futureCard = card(page, "Acuarela futura");
+        const trigger = futureCard.getByRole("button", { name: "Anular asignación futura" });
+        await expect(trigger).toBeVisible();
+        await expect(futureCard.locator(`time[datetime="${futureStart.toISODate()}"]`)).toHaveCount(1);
+        await expect(card(page, "Acuarela de hoy").getByRole("button", { name: "Anular asignación futura" })).toHaveCount(0);
+        const closedCard = card(page, "Acuarela cerrada");
+        await expect(closedCard).toContainText("Asignación cerrada");
+        await expect(closedCard.getByRole("button", { name: "Anular asignación futura" })).toHaveCount(0);
+
+        await trigger.focus();
+        await page.keyboard.press("Enter");
+        const group = futureCard.getByRole("group", { name: "Anulación de Acuarela futura" });
+        const reason = group.getByLabel("Motivo de anulación");
+        await expect(reason).toBeFocused();
+        await expect(group).toContainText("Nora Futura");
+        await expect(group).toContainText("Acuarela futura");
+        await expect(group).toContainText(
+          "La anulación impedirá nuevas reservas habituales de esta asignación. Las reservas ya existentes no se cancelarán automáticamente y podrían requerir una revisión administrativa.",
+        );
+        await expect(group).toContainText("Esta anulación no libera las plazas que ya están reservadas.");
+        const confirm = group.getByRole("button", { name: "Confirmar anulación" });
+        const back = group.getByRole("button", { name: "Cancelar y volver" });
+        await page.keyboard.press("Tab");
+        await expect(confirm).toBeFocused();
+        await page.keyboard.press("Tab");
+        await expect(back).toBeFocused();
+        await back.click();
+        await expect(trigger).toBeFocused();
+        await trigger.press("Enter");
+        await expect(reason).toBeFocused();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+        await page.setViewportSize({ width: 320, height: 800 });
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+        await page.setViewportSize({ width: 360, height: 800 });
+
+        await reason.fill("ab");
+        await confirm.click();
+        await expect(reason).toHaveAttribute("aria-invalid", "true");
+        await expect(reason).toBeFocused();
+        await expect(group.getByText(
+          "Escribe un motivo de entre 3 y 300 caracteres, sin contar los espacios de los extremos.",
+        )).toBeVisible();
+
+        await reason.fill("");
+        await confirm.click();
+        await expect(reason).toHaveAttribute("aria-invalid", "true");
+        await expect(reason).toBeFocused();
+        await expect(group.getByText(
+          "Escribe un motivo de entre 3 y 300 caracteres, sin contar los espacios de los extremos.",
+        )).toBeVisible();
+
+        await reason.fill("Cambio de horario");
+        await group.locator("form").evaluate((form, id) => {
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = "assignmentId";
+          input.value = id;
+          form.append(input);
+        }, randomUUID());
+        await confirm.click();
+        await expect(group.getByRole("alert")).toContainText("La solicitud de anulación no es válida.");
+        expect((await student.client.query(
+          "select status from student_template_assignments where id=$1", [future.assignmentId],
+        )).rows).toEqual([{ status: "ACTIVE" }]);
+        await group.locator('input[name="assignmentId"]').evaluate((input) => input.remove());
+
+        await stale.goto(`/admin/alumnos/${profileId}`);
+        const staleGroup = card(stale, "Acuarela futura").getByRole("group", { name: "Anulación de Acuarela futura" });
+
+        await reason.fill("El alumno cambia de horario");
+        await confirm.click();
+        const status = group.getByRole("status");
+        await expect(status).toContainText("Asignación anulada. No generará nuevas reservas habituales.");
+        await expect(status).toContainText("No se canceló ni se liberó su plaza automáticamente.");
+        await expect(status).toBeFocused();
+        await expect(futureCard).toContainText("Asignación anulada");
+        await expect(futureCard).toContainText("Anulación administrativa individual");
+        await expect(futureCard).toContainText("Motivo registrado · El alumno cambia de horario");
+        await expect(futureCard).toContainText("Reservas que requieren revisión administrativa: 1");
+        await expect(futureCard).toContainText(admin.email);
+        await expect(futureCard.locator(`time[datetime="${futureStart.toISODate()}"]`)).toHaveCount(1);
+        await expect(futureCard.getByRole("button", { name: "Anular asignación futura" })).toHaveCount(0);
+
+        const { rows: [assignment] } = await student.client.query(
+          "select status,effective_from::text,effective_to::text from student_template_assignments where id=$1",
+          [future.assignmentId],
+        );
+        expect(assignment).toEqual({ status: "CANCELLED", effective_from: futureStart.toISODate(), effective_to: null });
+        const { rows: audit } = await student.client.query(
+          `select source,reason,effective_from::text,effective_to::text,ambiguous_reservation_ids
+           from student_template_assignment_cancellations where assignment_id=$1`, [future.assignmentId],
+        );
+        expect(audit).toEqual([{
+          source: "ADMIN_INDIVIDUAL", reason: "El alumno cambia de horario",
+          effective_from: futureStart.toISODate(), effective_to: null,
+          ambiguous_reservation_ids: [future.reservationId],
+        }]);
+        expect((await student.client.query(
+          "select status from class_reservations where id=$1", [future.reservationId],
+        )).rows).toEqual([{ status: "CONFIRMED" }]);
+        expect((await student.client.query(
+          "select max_capacity from class_sessions where id=$1", [future.sessionId],
+        )).rows).toEqual([{ max_capacity: 1 }]);
+        expect((await student.client.query(
+          "select id from class_reservations where class_session_id=$1", [followUpId],
+        )).rows).toEqual([]);
+        expect((await student.client.query(
+          "select status from student_template_assignments where id=$1", [todayAssignment.assignmentId],
+        )).rows).toEqual([{ status: "ACTIVE" }]);
+        expect((await student.client.query(
+          "select status from student_template_assignments where id=$1", [endedAssignment.assignmentId],
+        )).rows).toEqual([{ status: "ENDED" }]);
+
+        await staleGroup.getByRole("button", { name: "Anular asignación futura" }).click();
+        await staleGroup.getByLabel("Motivo de anulación").fill("Segunda solicitud");
+        await staleGroup.getByRole("button", { name: "Confirmar anulación" }).click();
+        const replay = staleGroup.getByRole("status");
+        await expect(replay).toContainText("La asignación ya estaba anulada. No se registró una nueva operación.");
+        await expect(replay).toContainText("Una reserva existente podría estar relacionada");
+        await expect(staleGroup.getByRole("button", { name: "Anular asignación futura" })).toHaveCount(0);
+        expect((await student.client.query(
+          "select id from student_template_assignment_cancellations where assignment_id=$1", [future.assignmentId],
+        )).rows).toHaveLength(1);
+      } finally {
+        await stale.close();
+      }
+    });
+  });
+});
+
+test("students and anonymous visitors cannot use the administrative cancellation", async ({ page, browser, baseURL }) => {
+  await withCreditsAccount("SUPER_ADMIN", async (admin) => {
+    await withCreditsAccount("STUDENT", async (student) => {
+      const profileId = await seedProfile(student);
+      const start = DateTime.now().setZone(CENTER_TIME_ZONE).startOf("day").plus({ days: 14 }).set({ hour: 18 });
+      const future = await seedAssignment(student, profileId, { name: "Acuarela protegida", start });
+      const url = `/admin/alumnos/${profileId}`;
+
+      await page.goto(url);
+      await expect(page).toHaveURL(/\/login$/);
+      await login(page, student);
+      await expect(page).toHaveURL(/\/student$/);
+      await page.goto(url);
+      await expect(page).toHaveURL(/\/student$/);
+      await expect(page.getByRole("button", { name: "Anular asignación futura" })).toHaveCount(0);
+      await expect(page.getByLabel("Motivo de anulación")).toHaveCount(0);
+      expect((await student.client.query(
+        "select status from student_template_assignments where id=$1", [future.assignmentId],
+      )).rows).toEqual([{ status: "ACTIVE" }]);
+      expect((await student.client.query(
+        "select id from student_template_assignment_cancellations where assignment_id=$1", [future.assignmentId],
+      )).rows).toEqual([]);
+
+      const context = await browser.newContext({ baseURL });
+      try {
+        const adminPage = await context.newPage();
+        await login(adminPage, admin);
+        await adminPage.goto(url);
+        await expect(card(adminPage, "Acuarela protegida")
+          .getByRole("button", { name: "Anular asignación futura" })).toBeVisible();
+      } finally {
+        await context.close();
+      }
+    });
+  });
+});

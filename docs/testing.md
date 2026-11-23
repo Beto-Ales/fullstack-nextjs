@@ -473,3 +473,16 @@ La regresión `assignment-cancellation.integration.test.ts` cubre permisos, moti
 - `scripts/db-schema-fingerprints.json` incorpora la huella del journal hasta `0015`. El ensayo H07 verifica todos los prefijos, la actualización desde `0005`/`0006`, la restauración y la detección de deriva.
 - Pasaron **356 pruebas Vitest** (133 unitarias y 223 integraciones), **46 escenarios Chromium** y **1 escenario Chromium adicional** con normativa sintética mediante H08. También pasaron TypeScript, ESLint y `drizzle-kit check`.
 - La consulta de diagnóstico de intervalos históricos del 10.15 sigue siendo de solo lectura. No se corrigieron filas anteriores ni se añadió una restricción de tabla.
+
+## Incremento 10.18 — Interfaz administrativa para anular asignaciones futuras
+
+La ficha administrativa ofrece «Anular asignación futura» cuando la cuenta está activa, la asignación sigue `ACTIVE` y su inicio persistido es posterior al día local de Copenhague. La confirmación muestra alumno, curso, fechas originales, la advertencia sobre reservas y un motivo obligatorio de 3 a 300 caracteres. La Server Action exige `SUPER_ADMIN`, rechaza campos ajenos al motivo y delega en `cancelFutureAssignment`, sin duplicar fechas, bloqueos ni auditoría. La revalidación actualiza la ficha, el panel y el área del alumno.
+
+La auditoría se muestra en la misma fila con origen `ADMIN_INDIVIDUAL` o `STUDENT_WITHDRAWAL`, actor, instante y motivo. Una reserva ambigua se resume por cantidad y no se presenta como reserva cancelada. La anulación individual no modifica reservas, no libera plazas, no mueve créditos y no crea una segunda auditoría. La generación posterior sigue cubierta por la regresión de 10.17.
+
+- `tests/e2e/admin-assignment-cancellation.spec.ts` cubre el recorrido completo en Chromium: condiciones de la acción, confirmación, advertencia, motivo vacío y demasiado corto, rechazo de campos manipulados, anulación válida, fechas conservadas, etiqueta, desaparición de la acción, auditoría única, reserva ambigua confirmada, aforo sin liberar, reintento idempotente desde una pestaña desactualizada, foco, teclado y presentación a 320/360 px. Otro escenario comprueba que un alumno y un visitante anónimo no acceden a la operación.
+- `admin-student-profile.integration.test.ts` incorpora la lectura del inicio persistido y de la auditoría de ambas fuentes sin escrituras durante la carga.
+- Ejecutar `npm run test:e2e -- tests/e2e/admin-assignment-cancellation.spec.ts` y `npm run test:integration -- admin-student-profile.integration.test.ts`. Después, la verificación completa con `npm run test:verify`.
+- Las pruebas usan exclusivamente PostgreSQL 15 desechable de H08. No se añadió una migración ni se modificó el esquema `0015`. No se ejecutaron migraciones en DEV, TEST persistente ni producción.
+- Queda pendiente registrar la procedencia de las reservas habituales para poder cancelarlas de forma inequívoca y el inventario de intervalos históricos. La interfaz no afirma que todas las reservas relacionadas puedan identificarse.
+- Pasaron **357 pruebas Vitest** (133 unitarias y 224 integraciones), **48 escenarios Chromium** y **1 escenario Chromium adicional** con normativa sintética mediante H08. También pasaron TypeScript, ESLint y `drizzle-kit check`.
