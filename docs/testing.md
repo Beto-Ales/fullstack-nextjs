@@ -550,3 +550,22 @@ R14-02 señalaba que las dos consultas de solo lectura de aforo podían informar
 - Ejecutar `npm run test:integration -- session-availability.integration.test.ts availability.test.ts` y `npm run test:unit -- availability.test.ts`. Después, la verificación completa con `npm run test:verify`.
 - Pasaron **385 pruebas Vitest** (136 unitarias y 249 integraciones), **50 escenarios Chromium** y **1 escenario Chromium adicional** con normativa sintética mediante H08. También pasaron TypeScript, ESLint y `drizzle-kit check`.
 - Las pruebas usan exclusivamente PostgreSQL 15 desechable de H08. No se añadió una migración ni se modificó el esquema `0016`. Los errores de permisos, sesión inexistente y la ausencia de escrituras se comprueban en la nueva suite; la concurrencia no cambió y no se registraron `40P01`.
+
+## Verificación final de la fase 10 (23 de noviembre de 2026)
+
+- **Alcance.** Se repitió la línea base completa del cierre de desarrollo. Cada etapa usó su propio PostgreSQL 15 desechable: contenedor efímero, datos en memoria temporal, contraseña aleatoria por ejecución, etiqueta de propiedad y retirada automática al terminar. No se ejecutó ninguna migración en las bases DEV o TEST persistentes ni en producción y no se reutilizó ningún contenedor entre etapas.
+- **Comandos y resultado.**
+
+| Comando | Resultado |
+| --- | --- |
+| `npm run test` (primera etapa de `npm run test:verify`) | 41 archivos y **385 pruebas aprobadas** en 51 s |
+| `npm run test:e2e` (segunda etapa) | **50 escenarios Chromium aprobados** sin reintentos en 2,4 min |
+| `npm run test:e2e:pending` (tercera etapa) | **1 escenario aprobado** con normativa sintética en 9,8 s |
+| `npm run typecheck` | Sin errores |
+| `npm run lint` | Sin errores ni avisos |
+| `npx drizzle-kit check` | Esquema correcto; journal hasta `0016_habitual_reservation_provenance` |
+
+- **Entorno.** Las tres etapas registraron la verificación y la retirada de su recurso desechable. Playwright levantó su servidor Next.js dedicado sobre un puerto libre. La etapa de créditos pendientes sembró su versión sintética de normativa en su propia base antes de ejecutar.
+- **Observación sin impacto en el resultado.** Vitest emitió un aviso de obsolescencia de `pg` por invocar `client.query()` mientras otra consulta seguía en curso. No produjo fallos ni resultados alterados; queda anotado para una futura actualización de la librería, fuera del alcance de este cierre.
+- **Estado del repositorio.** El cambio de este incremento es documental. Se conservan sin modificar los cambios preexistentes en `app/admin/sesiones/[sessionId]/session-capacity.tsx`, `docs/database-drizzle.md` y `test-results/`, así como los informes, los respaldos y las referencias de checkpoint. No se hizo `push`.
+- **Lectura del resultado.** La batería confirma el comportamiento desarrollado, no la preparación del despliegue. Los requisitos previos a producción y el estado abierto de H03 se documentan en el [cierre de la fase](../planificacion_general.md#cierre-de-la-fase-de-desarrollo-10) y en la [evaluación pública](secret-exposure-response.md#incremento-1033--verificación-pública-acotada-y-clasificación-de-h03).

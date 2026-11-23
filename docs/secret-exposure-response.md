@@ -945,3 +945,92 @@ El cierre será posible cuando se identifique el destino, se conozca su visibili
 No se modificó PostgreSQL DEV ni TEST, no se recreó ni detuvo ningún contenedor, no se alteraron secretos ni respaldos, no se retiró ni alteró ninguna referencia existente, no se reescribió historial y no se ejecutaron operaciones destructivas. El único cambio provocado por este incremento es documental.
 
 Siguiente incremento recomendado, sin ejecutarlo: identificación del destino remoto a partir de lo que declare el propietario, sin consultas de red ni apertura de objetos, y decisión sobre la retirada de esas copias.
+
+## Incremento 10.33 — Verificación pública acotada y clasificación de H03
+
+El propietario identificó el repositorio GitHub de este proyecto y aportó capturas de su rama pública, de la carpeta `docs` y de la plantilla `.env.compose.example`, junto con una comprobación externa previa. Este incremento contrasta esa información con metadatos públicos de solo lectura y clasifica H03. No repite las auditorías de 10.13, 10.24, 10.31 ni 10.32, no busca ni reproduce contraseñas, no abre informes, no descarga archivos del remoto, no conecta con PostgreSQL DEV ni TEST, no modifica contenedores, bases, secretos, respaldos ni referencias y no ejecuta `push`, `fetch`, `pull`, `clone`, `reset` ni `rebase`.
+
+Las dos únicas fuentes usadas fueron `git ls-remote` sobre el remoto configurado —que solo devuelve hashes y nombres de referencia— y el árbol de archivos público del proveedor, que devuelve rutas y tipos, no contenidos. Ninguna URL consultada contiene credenciales y no se registró aquí ninguna.
+
+### A. Comprobaciones realizadas
+
+| Comprobación | Método | Resultado | Alcance |
+| --- | --- | --- | --- |
+| 1. Rama publicada | `git ls-remote --heads --tags` | Una sola rama, `refs/heads/master`, en `edce2aa` | Solo referencias anunciadas por el remoto |
+| 2. Referencias anunciadas | `git ls-remote` completo | 2 referencias: `HEAD` y `refs/heads/master`; 0 etiquetas, 0 `refs/pull`, ninguna referencia de checkpoint | El remoto no publica ningún espacio de nombres de agente ni de checkpoint |
+| 3. Archivos del árbol público | Árbol recursivo de `master` | 293 entradas, 250 archivos, respuesta no truncada | Instantánea actual de esa rama, no su historial |
+| 4. Los 15 informes históricos | Comparación de los 15 nombres conocidos contra ese árbol | **0 coincidencias** | Nombres, no contenidos |
+| 5. Archivos de entorno reales | Filtro de rutas con patrón `.env` y de extensiones `.pem`, `.key`, `.dump`, `.bak`, `.log`, `.zip` | Único nombre coincidente: `.env.compose.example`; ningún `.env`, `.env.local` ni `.env.compose.local` | Nombres publicados en esa rama |
+| 6. Carpeta `docs` pública | Listado del árbol | 10 archivos: `academic-model.md`, `architecture.md`, `authentication.md`, `database-drizzle.md`, `datetime-timezone.md`, `design-future-assignments.md`, `postgres-upgrade-recovery.md`, `revision-fases-0-7.md`, `secret-exposure-response.md` y `testing.md` | El diagnóstico publicado es una versión anterior a 10.31; la comprobación externa del propietario no encontró valores de contraseñas y aquí no se reabrió |
+| 7. Migraciones publicadas | Listado del árbol | `0000`–`0014`; el journal local llega a `0016` | Confirma que la rama publicada es anterior al desarrollo actual |
+| 8. Diferencia con `HEAD` local | `git rev-list --count` y registro local | `HEAD` = `c5adcb2`, publicado = `edce2aa`; **17 commits sin publicar** | Incluyen anulación de asignaciones futuras, procedencia y cancelación de reservas, protección de recuperaciones, aforo físico frente a plazas reservables y la documentación de H03 entre 10.24 y 10.32 |
+| 9. Regla de exclusión de entornos | Revisión del `.gitignore` versionado | `.env*` excluido con la excepción `!.env.compose.example`; `*.pem` excluido | Coincide con lo declarado en la comprobación externa |
+
+La plantilla `.env.compose.example` contiene marcadores ficticios según la comprobación externa aportada por el propietario y no se interpretó aquí como credencial. La base local de exclusión mantiene sus 15 entradas exactas y los informes siguen fuera del índice y de las ramas de este repositorio.
+
+### B. Fuera del alcance de esta comprobación
+
+- **Historial del remoto.** Se revisó la instantánea actual de `master`, no cada árbol histórico. Comprobarlo exigiría descargar objetos (`fetch` o `clone`), operación prohibida en este incremento, y un archivo borrado del árbol actual seguiría siendo alcanzable por su identificador si alguien lo conoce.
+- **Réplicas, espejos, bifurcaciones y caché del proveedor.** El remoto público no anuncia más referencias, pero no se consultaron otros repositorios de la organización ni las copias internas del proveedor, y no se puede demostrar la retención de un objeto ya retirado.
+- **Contenidos.** No se abrió ningún archivo publicado ni local. Todos los resultados son de nombres, rutas, tamaños de árbol y hashes de referencia.
+- **Almacenes de las herramientas.** Los checkpoints de los agentes viven en el almacén local de cada herramienta y no se publican; su estado es el de 10.32, con 84 referencias y crecimiento por edición. Al cerrar la redacción, las ediciones de este incremento lo habían llevado a 87 —60 de agentes, 20 de la extensión del IDE y 5 de Codex—, sin que ninguna se publique: la única referencia anunciada por el remoto sigue siendo `refs/heads/master`.
+- **Terceros.** No se evaluó el acceso de los proveedores de agentes a las copias que conservan.
+
+Por tanto, **la ausencia de un archivo en `master` no demuestra su ausencia universal** en todos los objetos históricos, réplicas o respaldos externos.
+
+### C. Hipótesis de filtración en la publicación ordinaria
+
+Se descarta, con el alcance de la sección A, la hipótesis de que la publicación ordinaria de este repositorio exponga contraseñas reales:
+
+- Los 15 informes sensibles no aparecen con sus nombres en el árbol publicado.
+- No hay archivos `.env` reales ni volcados, claves o respaldos entre los archivos publicados; el único nombre de entorno es la plantilla con marcadores ficticios.
+- El diagnóstico publicado no contiene valores de contraseñas, según la comprobación externa aportada.
+- Ninguna referencia publicada apunta a un checkpoint de agente.
+
+Esta conclusión se limita a las referencias y nombres revisados. No cubre el historial de objetos, las réplicas del proveedor ni otros destinos, y no se convierte en una afirmación sobre la totalidad del servicio.
+
+Si en el futuro apareciera un secreto real accesible públicamente, el procedimiento no cambia: detener el cierre, comunicar solo la categoría y una ubicación no sensible, y contener antes de seguir.
+
+### D. Clasificación de H03
+
+| Situación | Estado | Evidencia |
+| --- | --- | --- |
+| A. Exposición pública visible | No se observan contraseñas reales en las referencias revisadas | Sección A, puntos 3 a 6, y comprobación externa del propietario |
+| B. Credenciales antiguas de PostgreSQL DEV y TEST | Sustituidas y verificadas | 10.27 (TEST) y 10.30 (DEV): verificador nuevo, autenticación desde el host y rechazo de la contraseña anterior |
+| C. Copias históricas y referencias locales | Documentadas y pendientes del saneamiento autorizado | 10.24, 10.31 y 10.32: 15 informes excluidos y 84 referencias de checkpoint en el último recuento |
+
+Con esa evidencia, H03 se clasifica como **riesgo de credenciales activas mitigado, con saneamiento histórico pendiente**. Los valores antiguos ya no autentican en DEV ni en TEST, de modo que una copia histórica publicada o retenida no reabre acceso activo a esos dos servidores; lo que persiste es la copia en sistemas con controles propios —el remoto de Git, las réplicas del proveedor y los almacenes de los agentes— y la ausencia de verificación sobre el historial de objetos.
+
+**H03 no se declara cerrado ni completamente saneado.** Persisten copias conocidas sin retirar y una parte del alcance —historial del remoto, réplicas y retención— sigue sin comprobar. El criterio 8 de 10.31 queda cumplido para las referencias publicadas revisadas y no verificable para el resto.
+
+### E. Estado de los criterios de cierre
+
+| Criterio de 10.31 | 10.32 | 10.33 |
+| --- | --- | --- |
+| 1. DEV y TEST con rotación verificada | Cumplido | Cumplido, sin repetir la verificación |
+| 2. Sin otros servicios con esas contraseñas activas | Declarado por el propietario | Sin cambios; sigue siendo declaración |
+| 3. Reutilización histórica evaluada | Declarada | Sin cambios |
+| 4. Copias locales clasificadas | Cumplido | Cumplido |
+| 5. Decisión sobre informes y checkpoints | Cumplido | Cumplido; saneamiento aún no ejecutado |
+| 6. Incertidumbres documentadas | Cumplido | Ampliado con el alcance del historial del remoto |
+| 7. Aceptación expresa del riesgo residual | Cumplido | Sin cambios |
+| 8. Sin exposición activa conocida sin mitigación | No cumplido: destino remoto sin evaluar | **Cumplido para las referencias publicadas revisadas; no verificable en el historial de objetos, réplicas y retención sin operaciones de descarga autorizadas** |
+
+### F. Observación sobre la publicación
+
+El `master` publicado está 17 commits por detrás del desarrollo local y su carpeta `docs` no incluye la evaluación de H03 de 10.24 a 10.33. No es un hallazgo de seguridad, pero tiene dos consecuencias: la verificación pública describe un estado anterior del proyecto y cualquier despliegue que dependa de esa rama no incluiría las correcciones funcionales recientes. Publicar el estado actual es una acción independiente y autorizada que este incremento no ejecuta.
+
+### G. Acciones actualizadas
+
+| Acción | Responsable | Condición |
+| --- | --- | --- |
+| Decidir si se inspecciona el historial de objetos del remoto mediante una descarga autorizada y acotada | Propietario | Incremento independiente; hoy prohibido por el alcance |
+| Decidir la retirada de copias en el historial, si esa inspección las encuentra | Propietario y administración del repositorio | Coordinación, respaldo y procedimiento de recuperación |
+| Ejecutar el saneamiento local de informes, checkpoints, utilidades y transcripciones | Propietario | Ventana sin ediciones; respaldo previo y verificación posterior |
+| Limpiar los almacenes de las herramientas | Propietario | Decisión propia; no depende de Git |
+| Confirmar ubicación y retención de los respaldos y de las réplicas del proveedor | Propietario | Antes de cualquier borrado |
+| Publicar el estado actual de la rama principal o confirmar que el despliegue no depende de ella | Propietario | Acción autorizada; no ejecutada aquí |
+
+### Estado de este incremento
+
+Las comprobaciones fueron de solo lectura y de metadatos: no se descargó ningún archivo del remoto, no se abrió ningún informe ni transcripción, no se reprodujo ninguna contraseña y no se consultó ningún servicio de base de datos. No se modificó PostgreSQL DEV ni TEST, no se recreó ni detuvo ningún contenedor, no se alteraron secretos ni respaldos, no se retiró ni alteró ninguna referencia y no se reescribió historial. El único cambio es documental.
