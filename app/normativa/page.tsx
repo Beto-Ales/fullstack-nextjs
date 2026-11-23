@@ -69,7 +69,7 @@ export default async function AcademicRegulationPage({
   const feedback = isAdmin ? await searchParams : {};
 
   return (
-    <main>
+    <main id="contenido-principal" tabIndex={-1}>
       <Link href={getRoleHomePath(actor.role)}>Volver a mi área</Link>
       <h1>Normativa de clases y recuperaciones</h1>
       <h2>Versión vigente</h2>

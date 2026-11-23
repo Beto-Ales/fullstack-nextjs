@@ -1,5 +1,7 @@
 import { and, eq, gt, gte, isNull, or } from "drizzle-orm";
 import { DateTime } from "luxon";
+import { ActionFeedback } from "@/app/components/action-feedback";
+import { PendingSubmit } from "@/app/components/pending-submit";
 import { redirect } from "next/navigation";
 import { ZodError } from "zod";
 
@@ -82,13 +84,12 @@ export async function CourseAdministration({ capacityLimit, students, query }: C
 
   return (
     <>
-      <section aria-labelledby="weekly-course">
-        <h2 id="weekly-course">Crear curso semanal</h2>
+      <section aria-labelledby="weekly-course" className="dashboard-section">
+        <h2 id="weekly-course" tabIndex={-1}>Crear curso semanal</h2>
         <p>Una clase cada semana durante tres meses desde la fecha indicada, en hora de Copenhague.</p>
-        {courseError && <p role="alert">{courseError}</p>}
-        {createdCourse && (
-          <p role="status">Curso {createdCourse.name} creado. Vigencia del {createdCourse.effectiveFrom} al {createdCourse.effectiveTo}.</p>
-        )}
+        <ActionFeedback error={courseError} confirmation={createdCourse
+          ? `Curso ${createdCourse.name} creado. Vigencia del ${createdCourse.effectiveFrom} al ${createdCourse.effectiveTo}.`
+          : undefined} />
         <form action={createWeeklyCourseFormAction}>
           <div>
             <label htmlFor="course-name">Nombre del curso</label>{" "}
@@ -110,13 +111,13 @@ export async function CourseAdministration({ capacityLimit, students, query }: C
             <label htmlFor="course-capacity">Aforo por sesión</label>{" "}
             <input id="course-capacity" name="maxCapacity" type="number" min={1} max={capacityLimit} defaultValue={capacityLimit} required />
           </div>
-          <button type="submit">Guardar curso semanal</button>
+          <PendingSubmit label="Guardar curso semanal" pendingLabel="Guardando curso…" />
         </form>
       </section>
-      <section aria-labelledby="enroll-student">
-        <h2 id="enroll-student">Inscribir alumno</h2>
-        {enrollmentError && <p role="alert">{enrollmentError}</p>}
-        {enrolledSessions !== undefined && <p role="status">Alumno inscrito. Sesiones reservadas: {enrolledSessions}.</p>}
+      <section aria-labelledby="enroll-student" className="dashboard-section">
+        <h2 id="enroll-student" tabIndex={-1}>Inscribir alumno</h2>
+        <ActionFeedback error={enrollmentError} confirmation={enrolledSessions === undefined
+          ? undefined : `Alumno inscrito. Sesiones reservadas: ${enrolledSessions}.`} />
         {canEnroll ? (
           <form action={enrollStudentFormAction}>
             <div>
@@ -144,7 +145,7 @@ export async function CourseAdministration({ capacityLimit, students, query }: C
                 </optgroup>}
               </select>
             </div>
-            <button type="submit">Confirmar inscripción</button>
+            <PendingSubmit label="Confirmar inscripción" pendingLabel="Inscribiendo…" />
           </form>
         ) : <p>Se necesita un perfil de alumno y un curso abierto o una clase futura.</p>}
       </section>

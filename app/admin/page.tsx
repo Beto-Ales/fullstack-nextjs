@@ -14,6 +14,9 @@ import { redirect } from "next/navigation";
 import { getPublicErrorMessage } from "@/src/infrastructure/errors";
 import { getRecoveryHistory } from "@/src/application/recovery/recovery-service";
 import Link from "next/link";
+import { ActionFeedback } from "@/app/components/action-feedback";
+import { PendingSubmit } from "@/app/components/pending-submit";
+import { SectionNavigation } from "@/app/components/section-navigation";
 import { AdminWeeklyCalendar } from "./weekly-calendar";
 import { AdminWeeklySummary } from "./weekly-summary";
 import { CourseAdministration } from "./course-administration";
@@ -88,23 +91,31 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
     : null;
 
   return (
-    <main>
+    <main id="contenido-principal" tabIndex={-1}>
       <h1>Área de administración</h1>
       <p>Sesión iniciada como: {user.email}</p>
-      <p><Link href="/normativa">Consultar y gestionar la normativa</Link></p>
+      <SectionNavigation label="Secciones del panel administrativo" policyLabel="Consultar y gestionar la normativa" sections={[
+        { id: "calendario-semanal", label: "Calendario" },
+        { id: "perfiles-de-alumnos", label: "Alumnos" },
+        { id: "creditos", label: "Créditos" },
+        { id: "one-off-class", label: "Crear clase única" },
+        { id: "weekly-course", label: "Crear curso semanal" },
+        { id: "enroll-student", label: "Inscribir alumno" },
+        { id: "student-account", label: "Dar de alta" },
+        { id: "student-withdrawal", label: "Dar de baja" },
+      ]} />
+      <form action={logoutAction}>
+        <PendingSubmit label="Cerrar sesión" pendingLabel="Cerrando sesión…" />
+      </form>
       <AdminWeeklyCalendar week={week} sessions={calendarSessions} summary={<AdminWeeklySummary overview={overview} />} />
-      <section aria-labelledby="one-off-class">
-        <h2 id="one-off-class">Crear clase única</h2>
+      <section aria-labelledby="one-off-class" className="dashboard-section">
+        <h2 id="one-off-class" tabIndex={-1}>Crear clase única</h2>
         <p>La fecha y la hora se interpretan en la zona de Copenhague.</p>
-        {classCreationError && <p role="alert">{classCreationError}</p>}
-        {createdClass && (
-          <p role="status">
-            Clase única creada para el {createdClass.localDate} de{" "}
-            {DateTime.fromJSDate(createdClass.startsAtUtc, { zone: CENTER_TIME_ZONE }).toFormat("HH:mm")} a{" "}
-            {DateTime.fromJSDate(createdClass.endsAtUtc, { zone: CENTER_TIME_ZONE }).toFormat("HH:mm")}.
-            {" "}Aforo de {createdClass.maxCapacity} plazas.
-          </p>
-        )}
+        <ActionFeedback error={classCreationError} confirmation={createdClass
+          ? `Clase única creada para el ${createdClass.localDate} de ${
+            DateTime.fromJSDate(createdClass.startsAtUtc, { zone: CENTER_TIME_ZONE }).toFormat("HH:mm")} a ${
+            DateTime.fromJSDate(createdClass.endsAtUtc, { zone: CENTER_TIME_ZONE }).toFormat("HH:mm")}. Aforo de ${createdClass.maxCapacity} plazas.`
+          : undefined} />
         <form action={createOneOffClassFormAction}>
           <div>
             <label htmlFor="class-local-date">Fecha de la clase</label>{" "}
@@ -122,15 +133,15 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
             <label htmlFor="class-capacity">Aforo</label>{" "}
             <input id="class-capacity" name="maxCapacity" type="number" min={1} max={capacityLimit} defaultValue={capacityLimit} required />
           </div>
-          <button type="submit">Guardar clase única</button>
+          <PendingSubmit label="Guardar clase única" pendingLabel="Guardando clase única…" />
         </form>
       </section>
       <CourseAdministration capacityLimit={capacityLimit} students={activeStudents} query={query} />
       <StudentAccountForm created={query.studentAccount === "created"}
         error={typeof query.studentAccountError === "string" ? query.studentAccountError : undefined} />
       <StudentWithdrawalForm students={activeStudents} query={query} />
-      <section aria-labelledby="perfiles-de-alumnos">
-        <h2 id="perfiles-de-alumnos">Perfiles de alumnos</h2>
+      <section aria-labelledby="perfiles-de-alumnos" className="dashboard-section">
+        <h2 id="perfiles-de-alumnos" tabIndex={-1}>Perfiles de alumnos</h2>
         {students.length === 0 ? <p>No hay alumnos registrados.</p> : (
           <ul>
             {students.map(({ id, firstName, lastName, email, status }) => (
@@ -144,8 +155,9 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
           </ul>
         )}
       </section>
-      <h2>Créditos</h2>
-      <form method="get">
+      <h2 id="creditos" tabIndex={-1}>Créditos</h2>
+      <form method="get" action="/admin#creditos">
+        {typeof query.week === "string" && <input type="hidden" name="week" value={week.toISODate()!} />}
         <label htmlFor="studentProfileId">Alumno</label>
         <select id="studentProfileId" name="studentProfileId" defaultValue={selectedStudentProfileId}>
           <option value="">Seleccionar...</option>
@@ -213,9 +225,6 @@ export default async function AdminHomePage({ searchParams }: AdminPageProps) {
         </section>
       ) : null}
 
-      <form action={logoutAction}>
-        <button type="submit">Cerrar sesión</button>
-      </form>
     </main>
   );
 }

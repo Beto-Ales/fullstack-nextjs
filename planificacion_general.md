@@ -486,6 +486,6 @@ No crear documentación duplicada innecesariamente.
 - Interfaz accesible.
 - Documentación actualizada.
 
-**Propuesta pendiente de planificación.** Realizar una revisión visual transversal de los paneles y páginas compartidas. Comprobar la consistencia de navegación y estados, el diseño en móvil y escritorio y el uso con teclado. Quedan por acordar su alcance y el momento de ejecución.
+El incremento 10.10 revisa la navegación y el teclado en los paneles existentes. Añade accesos a las secciones, conserva la semana al consultar créditos, mejora el foco en formularios y paginación de recuperaciones y corrige el desbordamiento móvil. El calendario y el bloque de perfiles del panel administrativo siguen siendo los puntos de entrada a sesiones y alumnos. [Cobertura y mejoras menores pendientes](docs/testing.md#incremento-1010--navegación-móvil-y-teclado)
 
 Este documento define los requisitos funcionales de referencia. Las decisiones técnicas definitivas deberán respetar el estado real del repositorio y quedar documentadas antes de implementar cambios importantes.

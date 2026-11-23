@@ -21,7 +21,7 @@ function formatOutcome(entry: ClassHistoryEntry) {
 export function ClassHistory({ entries }: { entries: ClassHistoryEntry[] }) {
   return (
     <section aria-labelledby="class-history-heading" className="my-4 space-y-3">
-      <h2 id="class-history-heading">Historial de clases</h2>
+      <h2 id="class-history-heading" tabIndex={-1}>Historial de clases</h2>
       {entries.length === 0 ? <p>Aún no tienes clases en el historial.</p> : (
         <>
           <p>Hora de Copenhague</p>

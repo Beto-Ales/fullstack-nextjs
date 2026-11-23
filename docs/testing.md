@@ -374,6 +374,16 @@ npm.cmd run test:e2e -- --workers=1
 - La verificación cubre los escenarios de espera reproducidos. El CLI conserva hasta el commit los bloqueos sobre las plantillas de su ejecución. La regularización histórica requiere autorización expresa. [Inventario y procedimiento](academic-model.md#inventario-de-solicitudes-anteriores-a-h09)
 - `npm run test:verify` pasó 322 pruebas Vitest, 43 escenarios Chromium y un escenario Chromium adicional con normativa sintética, en instancias PostgreSQL 15 desechables de H08. Pasaron TypeScript, ESLint y `drizzle-kit check`. El journal sigue en `0014`.
 
+### Incremento 10.10 — Navegación, móvil y teclado
+
+- Se revisaron el acceso y cierre de sesión, el calendario y las próximas clases, los créditos, las solicitudes pendientes, la reserva y cancelación de recuperaciones y el historial del alumno. En administración se revisaron el panel, los alumnos y sus perfiles, la edición y auditoría, movimientos y ajustes de créditos, y el calendario y detalle de sesión con asistencia, aforo, inscripciones y cancelaciones. El calendario y la sección de perfiles son los listados disponibles en el panel.
+- P1 de móvil. Chromium midió 817 px de exceso horizontal en el panel administrativo a 320 px con un nombre largo. El layout carga ahora la hoja común. Los formularios se ajustan al ancho disponible y los nombres y correos pueden ocupar varias líneas. La presentación conserva los controles nativos.
+- P1. Se añadió un salto al contenido, accesos directos por rol y foco visible. El filtro de créditos conserva la semana y enfoca la sección correspondiente. La edición devuelve el foco al enlace de origen al cancelar y señala el primer campo con error. La paginación de recuperaciones lleva el foco a la primera clase añadida, y las confirmaciones de las operaciones revisadas se anuncian en el panel. Los desplegables de cancelación y asistencia usan `details` nativo.
+- Las pruebas Chromium ejercitan los paneles y los detalles administrativos a 320, 360, 390, 768 y 1280 px. Comprueban el orden de tabulación, Enter, Space, foco en mensajes y campos, estados vacíos, límites de rol, enlaces de retorno con contexto, paginación y una recuperación confirmada.
+- Pasaron 27 escenarios Chromium focalizados. Para repetir las dos regresiones nuevas, ejecutar `npm run test:e2e -- portal-navigation.spec.ts`. Las capturas temporales de ambos paneles permitieron comprobar la distribución de enlaces, los saltos de línea y la visibilidad de los controles.
+- `npm run test:verify` completó 322 pruebas Vitest, 45 escenarios Chromium y un escenario adicional con normativa sintética mediante H08. Se repitió la suite completa después de un fallo de manifiesto durante una recarga de Next dev. Pasaron TypeScript, ESLint y `drizzle-kit check`. El journal sigue en `0014`.
+- P2. Unificar la presentación de horas y cantidades en las listas de saldo e historial y revisar los textos de opciones extensas. La revisión se limita a Chromium y a los recorridos indicados. Sigue pendiente la validación manual con tecnologías de asistencia en varios navegadores.
+
 ## Matriz de pruebas (Fase 06.2)
 
 Estado:

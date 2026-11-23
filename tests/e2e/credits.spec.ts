@@ -245,16 +245,21 @@ test.describe("credits flows", () => {
           expect(await getIds()).toEqual(expected.slice(0, 100));
           await expect(items.last()).toContainText(later.sharedTimestamp);
           await expect(more).toBeVisible();
-          await more.click();
+          await more.press("Enter");
 
           await expect(items).toHaveCount(101);
           expect(await getIds()).toEqual(expected);
           await expect(items.nth(99)).toContainText(later.sharedTimestamp);
           await expect(items.nth(100)).toContainText(later.sharedTimestamp);
           await expect(more).toHaveCount(0);
+          await expect(items.last()).toBeFocused();
 
-          await items.last().getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" }).click();
-          await expect(page.getByRole("status")).toHaveText("Recuperación reservada.");
+          await page.keyboard.press("Tab");
+          await expect(items.last().getByRole("button", { name: "Reservar recuperación (consume 1 crédito)" })).toBeFocused();
+          await page.keyboard.press("Enter");
+          const confirmation = page.getByRole("status");
+          await expect(confirmation).toHaveText("Recuperación reservada.");
+          await expect(confirmation).toBeFocused();
           await expect(items).toHaveCount(100);
           expect(await getIds()).toEqual(expected.slice(0, 100));
           await expect(more).toHaveCount(0);

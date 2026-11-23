@@ -46,7 +46,7 @@ export function WeeklyCalendarLayout<Entry extends { startsAtUtc: Date }>({
   }
 
   return (
-    <section id="calendario-semanal" aria-labelledby="calendar-heading" className="my-4 space-y-3">
+    <section id="calendario-semanal" tabIndex={-1} aria-labelledby="calendar-heading" className="my-4 space-y-3">
       <h2 id="calendar-heading">{title}</h2>
       <p>
         <time dateTime={week.toISODate()!}>{week.toFormat("dd/MM/yyyy")}</time>

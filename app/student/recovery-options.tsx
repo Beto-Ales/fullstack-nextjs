@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
+import { PendingSubmit } from "@/app/components/pending-submit";
 import { listFutureRecoveryOptionsAction } from "@/src/interfaces/recovery/actions";
 
 type RecoveryOptionsPage = Awaited<ReturnType<typeof listFutureRecoveryOptionsAction>>;
@@ -14,11 +15,24 @@ type RecoveryOptionsProps = {
 };
 
 export function RecoveryOptions({ initialPage, nextGrantId, nextGrantExpiresAt, reserveAction }: RecoveryOptionsProps) {
-  const [loaded, setLoaded] = useState<{ initialPage: RecoveryOptionsPage; options: RecoveryOptionsPage; error?: string }>();
+  const [loaded, setLoaded] = useState<{
+    initialPage: RecoveryOptionsPage;
+    options: RecoveryOptionsPage;
+    firstNewId?: string;
+    message?: string;
+    error?: string;
+  }>();
   const [pending, startTransition] = useTransition();
+  const newOption = useRef<HTMLLIElement>(null);
+  const feedback = useRef<HTMLParagraphElement>(null);
   // Booking and cancellation render a fresh first page. Discard pages from the previous render.
   const current = loaded?.initialPage === initialPage ? loaded : undefined;
   const options = current?.options ?? initialPage;
+
+  useEffect(() => {
+    if (current?.firstNewId) newOption.current?.focus();
+    else if (current?.message || current?.error) feedback.current?.focus();
+  }, [current]);
 
   function showMore() {
     const cursor = options.nextCursor;
@@ -28,11 +42,14 @@ export function RecoveryOptions({ initialPage, nextGrantId, nextGrantExpiresAt, 
       try {
         const next = await listFutureRecoveryOptionsAction(cursor);
         const existingIds = new Set(options.sessions.map(({ id }) => id));
+        const newSessions = next.sessions.filter(({ id }) => !existingIds.has(id));
         setLoaded({
           initialPage,
+          firstNewId: newSessions[0]?.id,
+          message: newSessions.length === 0 ? "No se encontraron más clases disponibles." : undefined,
           options: {
             nextCursor: next.nextCursor,
-            sessions: [...options.sessions, ...next.sessions.filter(({ id }) => !existingIds.has(id))],
+            sessions: [...options.sessions, ...newSessions],
           },
         });
       } catch {
@@ -43,9 +60,9 @@ export function RecoveryOptions({ initialPage, nextGrantId, nextGrantExpiresAt, 
 
   return (
     <>
-      <ul>
+      {options.sessions.length === 0 ? <p>No hay clases de recuperación disponibles.</p> : <ul>
         {options.sessions.map((session) => (
-          <li key={session.id}>
+          <li key={session.id} tabIndex={-1} ref={current?.firstNewId === session.id ? newOption : undefined}>
             {session.localDate} · {session.startsAtUtc.toISOString()} · plazas: {session.availableSpots} · cupo mensual:{" "}
             {session.monthlyRecoveryRemaining}
             {nextGrantId ? (
@@ -58,17 +75,18 @@ export function RecoveryOptions({ initialPage, nextGrantId, nextGrantExpiresAt, 
             )}
             <form action={reserveAction}>
               <input type="hidden" name="classSessionId" value={session.id} />
-              <button type="submit">Reservar recuperación (consume 1 crédito)</button>
+              <PendingSubmit label="Reservar recuperación (consume 1 crédito)" pendingLabel="Reservando…" />
             </form>
           </li>
         ))}
-      </ul>
+      </ul>}
       {options.nextCursor && (
-        <button type="button" onClick={showMore} disabled={pending}>
+        <button type="button" onClick={showMore} aria-disabled={pending}>
           {pending ? "Cargando clases…" : "Ver más clases"}
         </button>
       )}
-      {current?.error && !pending && <p role="alert">{current.error}</p>}
+      {current?.message && !pending && <p ref={feedback} role="status" tabIndex={-1}>{current.message}</p>}
+      {current?.error && !pending && <p ref={feedback} role="alert" tabIndex={-1}>{current.error}</p>}
     </>
   );
 }

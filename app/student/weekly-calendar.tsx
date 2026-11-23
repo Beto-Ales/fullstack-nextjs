@@ -1,6 +1,7 @@
 import type { DateTime } from "luxon";
 
 import { CalendarTimeRange, WeeklyCalendarLayout } from "@/app/components/weekly-calendar";
+import { PendingSubmit } from "@/app/components/pending-submit";
 import type { listStudentCalendarReservations } from "@/src/application/academic/academic-service";
 
 type WeeklyCalendarProps = {
@@ -30,9 +31,8 @@ export function WeeklyCalendar({ week, now, reservations, cancelClass, cancelRec
             {reservation.sessionStatus === "SCHEDULED" && reservation.startsAtUtc.getTime() > now && (
               <form action={makeup ? cancelRecovery : cancelClass}>
                 <input type="hidden" name="reservationId" value={reservation.reservationId} />
-                <button type="submit" className="underline">
-                  {makeup ? "Cancelar recuperación" : "Cancelar clase"}
-                </button>
+                <PendingSubmit label={makeup ? "Cancelar recuperación" : "Cancelar clase"}
+                  pendingLabel="Cancelando…" className="underline" />
               </form>
             )}
           </>

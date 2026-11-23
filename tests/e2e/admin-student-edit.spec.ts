@@ -71,10 +71,12 @@ test("edits, cancels and saves on mobile with keyboard while retaining the acade
       await expect(edits).toContainText("El alumno no tiene modificaciones registradas.");
       const edit = page.getByRole("link", { name: "Editar datos" });
       await edit.press("Enter");
+      await expect(page.getByRole("heading", { name: "Editar datos" })).toBeFocused();
       await expect(page.getByLabel("Correo de acceso")).toHaveValue(student.email);
       await page.getByLabel("Nombre", { exact: true }).fill("Sin guardar");
       await page.getByRole("link", { name: "Cancelar", exact: true }).press("Enter");
       await expect(page.getByRole("heading", { name: "Ana Soler" })).toBeVisible();
+      await expect(edit).toBeFocused();
       await edit.press("Enter");
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
       await page.getByLabel("Nombre", { exact: true }).focus();
@@ -86,6 +88,7 @@ test("edits, cancels and saves on mobile with keyboard while retaining the acade
       await page.getByLabel("Correo de acceso").fill(` ${id.toUpperCase()}@EXAMPLE.COM `);
       await page.getByRole("button", { name: "Guardar cambios" }).press("Enter");
       await expect(page.getByRole("status")).toHaveText("Cambios guardados.");
+      await expect(page.getByRole("status")).toBeFocused();
       await expect(page.getByRole("heading", { name: "Ana María Soler Díaz" })).toBeVisible();
       await expect(edits.getByRole("listitem")).toHaveCount(1);
       await expect(edits).toContainText(admin.email);
@@ -114,6 +117,8 @@ test("reports validation, duplicate emails and stale edits without losing a newe
       await email.fill("invalido");
       await save.click();
       await expect(email).toHaveAttribute("aria-invalid", "true");
+      await expect(email).toBeFocused();
+      await expect(email).toHaveAccessibleDescription("Escribe un correo de acceso válido de hasta 255 caracteres.");
       await expect(page.getByText("Escribe un correo de acceso válido de hasta 255 caracteres.")).toBeVisible();
       await email.fill(admin.email.toUpperCase());
       await save.click();

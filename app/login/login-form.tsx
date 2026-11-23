@@ -1,8 +1,8 @@
 "use client";
 
 import { useActionState } from "react";
-import { useFormStatus } from "react-dom";
 
+import { PendingSubmit } from "@/app/components/pending-submit";
 import { loginAction, type LoginActionState } from "@/app/login/actions";
 
 type LoginFormProps = {
@@ -10,15 +10,6 @@ type LoginFormProps = {
 };
 
 const initialState: LoginActionState = {};
-
-function SubmitButton() {
-  const { pending } = useFormStatus();
-  return (
-    <button type="submit" disabled={pending}>
-      {pending ? "Entrando..." : "Iniciar sesión"}
-    </button>
-  );
-}
 
 export function LoginForm({ returnTo }: LoginFormProps) {
   const [state, formAction] = useActionState(loginAction, initialState);
@@ -35,11 +26,11 @@ export function LoginForm({ returnTo }: LoginFormProps) {
       </div>
       {returnTo ? <input type="hidden" name="returnTo" value={returnTo} /> : null}
       {state.error ? (
-        <p role="alert" aria-live="polite">
+        <p role="alert">
           {state.error}
         </p>
       ) : null}
-      <SubmitButton />
+      <PendingSubmit label="Iniciar sesión" pendingLabel="Entrando…" />
     </form>
   );
 }

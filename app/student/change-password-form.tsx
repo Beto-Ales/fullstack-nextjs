@@ -29,7 +29,7 @@ async function changePasswordFormAction(form: FormData) {
 export function ChangePasswordForm({ error }: { error?: string }) {
   return (
     <section aria-labelledby="change-password">
-      <h2 id="change-password">Cambiar contraseña</h2>
+      <h2 id="change-password" tabIndex={-1}>Cambiar contraseña</h2>
       {error && <p role="alert">{error}</p>}
       <form action={changePasswordFormAction}>
         <div>

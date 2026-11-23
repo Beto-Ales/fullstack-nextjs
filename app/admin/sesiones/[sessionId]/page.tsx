@@ -44,7 +44,7 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
   })} · Hora de Copenhague`;
 
   return (
-    <main className="space-y-3">
+    <main id="contenido-principal" tabIndex={-1} className="space-y-3">
       <Link className="underline" href={`/admin?week=${week.toISODate()}#calendario-semanal`}>Volver al calendario</Link>
       <h1>Inscritos en {session.name ?? "clase única"}</h1>
       <p>
@@ -67,7 +67,7 @@ export default async function SessionEnrollmentsPage({ params, searchParams }: S
         {cancelled && <p>La sesión está cancelada. Solo se pueden consultar los registros existentes.</p>}
         {!cancelled && !ended && <p>El registro y la corrección estarán disponibles cuando finalice la clase.</p>}
         <section aria-labelledby="confirmed-enrollments" className="space-y-2">
-          <h3 id="confirmed-enrollments">Reservas confirmadas</h3>
+          <h3 id="confirmed-enrollments" tabIndex={-1}>Reservas confirmadas</h3>
           <p>Total de inscritos: {session.enrollments.length}</p>
           <SessionCancellationPanel sessionId={sessionId}>
             {session.enrollments.length === 0 ? <p>No hay inscritos en esta sesión.</p> : (

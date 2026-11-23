@@ -13,7 +13,7 @@ import { requireRole } from "@/src/interfaces/auth/session";
 
 import styles from "./profile.module.css";
 import { submitStudentEdit } from "./student-edit-action";
-import { StudentEditForm } from "./student-edit-form";
+import { EditProfileLink, StudentEditForm } from "./student-edit-form";
 
 type StudentProfilePageProps = {
   params: Promise<{ studentId: string }>;
@@ -184,7 +184,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
   ] as const;
 
   return (
-    <main lang="es" className={styles.profile}>
+    <main id="contenido-principal" tabIndex={-1} className={styles.profile}>
       <Link href={backUrl} prefetch={false}>{session.success ? "Volver a la sesión" : "Volver a alumnos"}</Link>
       <header>
         <h1>{student.firstName} {student.lastName}</h1>
@@ -198,7 +198,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
         </dl>
         <p>Fechas y horas de Copenhague</p>
         {student.status === "ACTIVE" && !editing && (
-          <Link href={`${profilePath}?${editContext}#editar-datos`} prefetch={false}>Editar datos</Link>
+          <EditProfileLink href={`${profilePath}?${editContext}#editar-datos`} />
         )}
         <p><a href="#modificaciones">Ver historial de modificaciones</a></p>
       </header>
@@ -207,7 +207,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
         initial={{ firstName: student.firstName, lastName: student.lastName, email: student.email,
           contactEmail: student.contactEmail, contactPhone: student.contactPhone }}
         action={submitStudentEdit.bind(null, student.id, profile.editVersion)}
-        cancelHref={`${profilePath}${context.size ? `?${context}` : ""}`}
+        cancelHref={`${profilePath}${context.size ? `?${context}` : ""}#editar-perfil`}
       />}
 
       <section aria-labelledby="resumen">
@@ -221,7 +221,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
       </section>
 
       <section aria-labelledby="horarios">
-        <h2 id="horarios">Horarios habituales</h2>
+        <h2 id="horarios" tabIndex={-1}>Horarios habituales</h2>
         <ProfileList page={schedules} empty="El alumno no tiene horarios habituales asignados." render={(schedule) => (
           <li key={schedule.assignmentId} className={styles.card}>
             <p className={styles.label}>{schedule.courseName}</p>
@@ -236,7 +236,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
       </section>
 
       <section aria-labelledby="proximas">
-        <h2 id="proximas">Próximas clases</h2>
+        <h2 id="proximas" tabIndex={-1}>Próximas clases</h2>
         <ProfileList page={upcoming} empty="El alumno no tiene próximas clases confirmadas." render={(entry) => (
           <li key={entry.reservationId} className={styles.card}><ClassDetails entry={entry} /><p>Confirmada</p></li>
         )} />
@@ -244,7 +244,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
       </section>
 
       <section aria-labelledby="historial">
-        <h2 id="historial">Historial académico</h2>
+        <h2 id="historial" tabIndex={-1}>Historial académico</h2>
         <ProfileList page={history} empty="No hay registros en el historial académico." render={(entry) => (
           <li key={entry.reservationId} className={styles.card}>
             <ClassDetails entry={entry} /><p>{classOutcome(entry)}</p><ClassAudit entry={entry} />
@@ -272,7 +272,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
           </ul>
         ) : <p>No hay créditos disponibles con vencimiento programado.</p>}
         {credits.moreExpirations && <p>Se muestran los cinco vencimientos más próximos.</p>}
-        <h3 id="movimientos">Movimientos del ledger</h3>
+        <h3 id="movimientos" tabIndex={-1}>Movimientos del ledger</h3>
         <ProfileList page={movements} empty="No hay movimientos de créditos." render={(movement) => (
           <li key={movement.id} className={styles.card}>
             <p className={styles.label}>{movementLabels[movement.movementType]} · {movement.amount}</p>
@@ -290,7 +290,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
       </section>
 
       <section aria-labelledby="recuperaciones">
-        <h2 id="recuperaciones">Recuperaciones</h2>
+        <h2 id="recuperaciones" tabIndex={-1}>Recuperaciones</h2>
         <ProfileList page={recoveries} empty="El alumno no tiene reservas de recuperación." render={(entry) => (
           <li key={entry.reservationId} className={styles.card}>
             <ClassDetails entry={entry} />
@@ -311,7 +311,7 @@ export default async function AdminStudentProfilePage({ params, searchParams }: 
       </section>
 
       <section aria-labelledby="modificaciones">
-        <h2 id="modificaciones">Historial de modificaciones</h2>
+        <h2 id="modificaciones" tabIndex={-1}>Historial de modificaciones</h2>
         <ProfileList page={edits} empty="El alumno no tiene modificaciones registradas." render={(event) => (
           <li key={event.id} className={styles.card}>
             <h3>{event.operation === "UPDATE_STUDENT_DETAILS" ? "Actualización del perfil" : "Operación no disponible"}</h3>

@@ -22,7 +22,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const returnTo = sanitizeReturnPath(params.returnTo);
 
   return (
-    <main>
+    <main id="contenido-principal" tabIndex={-1}>
       <h1>Iniciar sesión</h1>
       <p>Accede con tu email y contraseña.</p>
       {params.password === "changed" && <p role="status">Contraseña actualizada. Inicia sesión con la nueva contraseña.</p>}

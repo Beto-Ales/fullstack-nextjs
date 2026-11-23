@@ -676,6 +676,11 @@ test("cancels a single ordinary enrollment by keyboard, preserves capacity block
           const reason = row.getByLabel("Motivo de la cancelación");
           const confirm = row.getByRole("button", { name: "Confirmar cancelación" });
           await expect(reason).toBeVisible();
+          await page.keyboard.press("Space");
+          await expect(reason).toBeHidden();
+          await expect(trigger).toBeFocused();
+          await page.keyboard.press("Enter");
+          await expect(reason).toBeVisible();
           await expect(row).toContainText("Cancelar la reserva ordinaria de Ada Ordinaria");
           await expect(row).toContainText("Hora de Copenhague");
           await expect(row).toContainText("Esta cancelación queda fuera de la racha y no genera crédito");

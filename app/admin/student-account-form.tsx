@@ -1,4 +1,6 @@
 import { redirect } from "next/navigation";
+import { ActionFeedback } from "@/app/components/action-feedback";
+import { PendingSubmit } from "@/app/components/pending-submit";
 import { ZodError } from "zod";
 
 import { withdrawStudent } from "@/src/application/academic/student-withdrawal";
@@ -45,10 +47,9 @@ async function withdrawStudentFormAction(form: FormData) {
 
 export function StudentAccountForm({ created, error }: { created: boolean; error?: string }) {
   return (
-    <section aria-labelledby="student-account">
-      <h2 id="student-account">Dar de alta a un alumno</h2>
-      {created && <p role="status">Cuenta de alumno creada.</p>}
-      {error && <p role="alert">{error}</p>}
+    <section aria-labelledby="student-account" className="dashboard-section">
+      <h2 id="student-account" tabIndex={-1}>Dar de alta a un alumno</h2>
+      <ActionFeedback error={error} confirmation={created ? "Cuenta de alumno creada." : undefined} />
       <form action={createStudentAccountFormAction}>
         <div><label>Nombre <input name="firstName" required maxLength={120} /></label></div>
         <div><label>Apellido <input name="lastName" required maxLength={120} /></label></div>
@@ -60,7 +61,7 @@ export function StudentAccountForm({ created, error }: { created: boolean; error
               minLength={PASSWORD_MIN_LENGTH} maxLength={PASSWORD_MAX_LENGTH} />
           </label>
         </div>
-        <button type="submit">Crear cuenta de alumno</button>
+        <PendingSubmit label="Crear cuenta de alumno" pendingLabel="Creando cuenta…" />
       </form>
     </section>
   );
@@ -77,16 +78,15 @@ export function StudentWithdrawalForm({ students, query }: {
   const recoveries = typeof query.cancelledRecoveries === "string" && /^\d+$/.test(query.cancelledRecoveries)
     ? Number(query.cancelledRecoveries)
     : undefined;
+  const confirmation = released !== undefined && recoveries !== undefined
+    ? `Baja registrada. Reservas ordinarias liberadas: ${released}. Recuperaciones canceladas: ${recoveries}.`
+    : query.withdrawal === "already-disabled" ? "La cuenta ya estaba desactivada." : undefined;
 
   return (
-    <section aria-labelledby="student-withdrawal">
-      <h2 id="student-withdrawal">Dar de baja a un alumno</h2>
+    <section aria-labelledby="student-withdrawal" className="dashboard-section">
+      <h2 id="student-withdrawal" tabIndex={-1}>Dar de baja a un alumno</h2>
       <p>La baja bloquea el acceso, termina las inscripciones y cancela las reservas ordinarias y las recuperaciones de clases que aún no han empezado.</p>
-      {error && <p role="alert">{error}</p>}
-      {released !== undefined && recoveries !== undefined && (
-        <p role="status">Baja registrada. Reservas ordinarias liberadas: {released}. Recuperaciones canceladas: {recoveries}.</p>
-      )}
-      {query.withdrawal === "already-disabled" && <p role="status">La cuenta ya estaba desactivada.</p>}
+      <ActionFeedback error={error} confirmation={confirmation} />
       {students.length > 0 ? (
         <form action={withdrawStudentFormAction}>
           <label>
@@ -98,7 +98,7 @@ export function StudentWithdrawalForm({ students, query }: {
               ))}
             </select>
           </label>{" "}
-          <button type="submit">Confirmar baja</button>
+          <PendingSubmit label="Confirmar baja" pendingLabel="Registrando baja…" />
         </form>
       ) : <p>No hay alumnos activos.</p>}
     </section>

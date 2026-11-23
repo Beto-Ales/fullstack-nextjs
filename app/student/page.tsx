@@ -8,7 +8,6 @@ import {
 } from "@/src/interfaces/recovery/actions";
 import { getPublicErrorMessage, isApplicationError } from "@/src/infrastructure/errors";
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { DateTime } from "luxon";
 import { getCurrentAcademicRegulation } from "@/src/application/academic/regulation-service";
 import {
@@ -23,6 +22,9 @@ import { CreditExpirations } from "./credit-expirations";
 import { HabitualSchedules } from "./habitual-schedules";
 import { RecoveryOptions } from "./recovery-options";
 import { WeeklyCalendar } from "./weekly-calendar";
+import { ActionFeedback } from "@/app/components/action-feedback";
+import { PendingSubmit } from "@/app/components/pending-submit";
+import { SectionNavigation } from "@/app/components/section-navigation";
 
 type StudentHomePageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -101,35 +103,39 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
   ]);
 
   return (
-    <main>
+    <main id="contenido-principal" tabIndex={-1}>
       <h1>Área de alumno</h1>
       <p>Sesión iniciada como: {user.email}</p>
-      <p><Link href="/normativa">Consultar la normativa</Link></p>
-      <ChangePasswordForm error={typeof query.passwordError === "string" ? query.passwordError : undefined} />
-      {actionError ? (
-        <p role="alert" aria-live="polite">
-          {actionError}
-        </p>
-      ) : null}
-      {confirmation && <p role="status">{confirmation}</p>}
+      <SectionNavigation label="Secciones del portal del alumno" policyLabel="Consultar la normativa" sections={[
+        { id: "calendario-semanal", label: "Calendario" },
+        { id: "upcoming-classes", label: "Próximas clases" },
+        { id: "creditos", label: "Créditos" },
+        { id: "recuperaciones", label: "Recuperaciones" },
+        { id: "class-history-heading", label: "Historial" },
+        { id: "change-password", label: "Cambiar contraseña" },
+      ]} />
+      <form action={logoutAction}>
+        <PendingSubmit label="Cerrar sesión" pendingLabel="Cerrando sesión…" />
+      </form>
+      <ActionFeedback error={actionError} confirmation={confirmation} />
       <WeeklyCalendar week={week} now={now.toMillis()} reservations={calendarReservations}
         cancelClass={cancelClass} cancelRecovery={cancelRecovery} />
       <HabitualSchedules schedules={habitualSchedules} />
-      <section aria-labelledby="upcoming-classes">
-        <h2 id="upcoming-classes">Mis próximas clases</h2>
-        <ul>
+      <section aria-labelledby="upcoming-classes" className="dashboard-section">
+        <h2 id="upcoming-classes" tabIndex={-1}>Mis próximas clases</h2>
+        {upcomingClasses.length === 0 ? <p>No tienes próximas clases reservadas.</p> : <ul>
           {upcomingClasses.map((reservation) => (
             <li key={reservation.reservationId}>
               {reservation.localDate} · {reservation.startsAtUtc.toISOString()}
               <form action={cancelClass}>
                 <input type="hidden" name="reservationId" value={reservation.reservationId} />
-                <button type="submit">Cancelar clase</button>
+                <PendingSubmit label="Cancelar clase" pendingLabel="Cancelando clase…" />
               </form>
             </li>
           ))}
-        </ul>
+        </ul>}
       </section>
-      <h2>Créditos</h2>
+      <h2 id="creditos" tabIndex={-1}>Créditos</h2>
       {streak && maximum !== null && (
         <section aria-labelledby="racha-de-cancelaciones">
           <h3 id="racha-de-cancelaciones">Racha de cancelaciones habituales</h3>
@@ -152,7 +158,7 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
       <p>Caducados: {creditOverview.expiredCredits}</p>
       <CreditExpirations expirations={creditOverview.availableExpirations} />
       <h3>Historial de movimientos</h3>
-      <ul>
+      {creditOverview.history.length === 0 ? <p>Todavía no hay movimientos de crédito.</p> : <ul>
         {creditOverview.history.map((movement) => (
           <li key={movement.id}>
             {movement.movementType} · +/−{movement.amount} · {movement.createdAt.toISOString()}
@@ -160,9 +166,9 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
             {movement.reason ? ` · motivo: ${movement.reason}` : ""}
           </li>
         ))}
-      </ul>
+      </ul>}
 
-      <h2>Reservas de recuperación</h2>
+      <h2 id="recuperaciones" tabIndex={-1}>Reservas de recuperación</h2>
       <section aria-labelledby="available-recoveries">
         <h3 id="available-recoveries">Clases futuras disponibles</h3>
         <RecoveryOptions
@@ -175,24 +181,22 @@ export default async function StudentHomePage({ searchParams }: StudentHomePageP
 
       <section aria-labelledby="my-recoveries">
         <h3 id="my-recoveries">Mis recuperaciones</h3>
-        <ul>
+        {pendingRecoveries.length === 0 ? <p>No tienes recuperaciones reservadas.</p> : <ul>
           {pendingRecoveries.map((reservation) => (
             <li key={reservation.reservationId}>
               {reservation.localDate} · {reservation.startsAtUtc.toISOString()} · estado: {reservation.status}
               <form action={cancelRecovery}>
                 <input type="hidden" name="reservationId" value={reservation.reservationId} />
                 <p>El crédito se devuelve si sigue vigente y cancelas con al menos {regulation.cancellationNoticeDays} días naturales de antelación.</p>
-                <button type="submit">Cancelar recuperación</button>
+                <PendingSubmit label="Cancelar recuperación" pendingLabel="Cancelando recuperación…" />
               </form>
             </li>
           ))}
-        </ul>
+        </ul>}
       </section>
       <ClassHistory entries={history} />
 
-      <form action={logoutAction}>
-        <button type="submit">Cerrar sesión</button>
-      </form>
+      <ChangePasswordForm error={typeof query.passwordError === "string" ? query.passwordError : undefined} />
     </main>
   );
 }
