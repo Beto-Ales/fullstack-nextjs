@@ -133,3 +133,7 @@ El journal del repositorio llega hasta `0016_habitual_reservation_provenance`. P
 ## Migración 0016 (procedencia de reservas habituales)
 
 `0016_habitual_reservation_provenance` añade `class_reservations.habitual_assignment_id` como columna anulable con referencia a `student_template_assignments` y `ON DELETE SET NULL`, más el índice `class_reservations_habitual_assignment_idx`. La migración es aditiva: no rellena reservas existentes ni modifica las migraciones anteriores. El aprovisionador de pruebas la aplica automáticamente y `scripts/db-schema-fingerprints.json` incorpora su huella.
+
+## Ensayo de despliegue (Incremento 11.1)
+
+`npm run staging:rehearse` lleva el journal completo desde una base vacía hasta `0016_habitual_reservation_provenance`, comprobando antes el prefijo `0000`–`0004`, y demuestra la equivalencia de un respaldo lógico restaurado en otra instancia. No usa las bases persistentes: cada etapa aprovisiona su propio `postgres:15` desechable, y los contenedores `fullstack_nextjs_postgres_dev` y `fullstack_nextjs_postgres_test` solo se inspeccionan antes y después para confirmar que no cambian. La compilación se ejecuta sin credenciales reales. [Procedimiento y límites](staging-deployment.md)

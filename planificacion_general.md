@@ -81,6 +81,7 @@ Fase 11 — Preparación para producción
 
 Variables de entorno, migraciones, configuración de despliegue, backups y documentación.
 
+El incremento 11.1 ensaya el despliegue completo sin tocar entornos persistentes. `npm run staging:rehearse` aprovisiona dos instancias PostgreSQL 15 desechables, aplica el prefijo `0000`–`0004` y después el journal hasta `0016`, siembra datos sintéticos, verifica un respaldo lógico y su restauración equivalente, compila con un entorno inerte y arranca `next start` para comprobar sesiones administrativas y de alumno. La ejecución del 23 de noviembre de 2026 terminó con **66 comprobaciones** y conservó la línea base de pruebas; DEV, TEST y producción no se modificaron. El ensayo valida el procedimiento de despliegue, no un staging alojado ni el cierre de H03. [Procedimiento, aislamiento y límites](docs/staging-deployment.md)
 
 
 
@@ -558,4 +559,4 @@ El desarrollo de la fase 10 queda cerrado el 23 de noviembre de 2026 con el comm
 
 **Verificación final.** El 23 de noviembre de 2026 pasaron 385 pruebas Vitest en 41 archivos, 50 escenarios Chromium y la regresión de créditos pendientes con normativa sintética, cada etapa sobre su propio PostgreSQL 15 desechable; `typecheck`, `lint` y `drizzle-kit check` terminaron sin errores y el esquema llega a `0016`. No se aplicaron migraciones en DEV, TEST persistentes ni producción. [Resultados](docs/testing.md#verificación-final-de-la-fase-10-23-de-noviembre-de-2026)
 
-La fase 11 no se ha iniciado. Su contenido —variables de entorno, migraciones de despliegue, configuración, respaldos y documentación operativa— depende de los requisitos anteriores y de las autorizaciones que el propietario todavía no ha dado.
+La fase 11 comenzó con el incremento 11.1, que ensaya el despliegue completo sobre PostgreSQL 15 desechable: journal hasta `0016`, datos sintéticos, respaldo y restauración equivalentes, compilación de producción, arranque y humo HTTP, con retirada automática de todos los recursos y sin escribir en DEV ni en TEST. [Ensayo y límites](docs/staging-deployment.md) La publicación, la configuración alojada, los respaldos operativos y el resto de la fase siguen dependiendo de los requisitos anteriores y de las autorizaciones que el propietario todavía no ha dado.

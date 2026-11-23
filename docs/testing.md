@@ -25,6 +25,8 @@ Dejar lista una infraestructura de pruebas segura y mantenible, sin tocar datos 
 | `npm run test:e2e` | Chromium con Next.js dedicado y una instancia desechable distinta. |
 | `npm run test:e2e:pending` | Regresión de créditos pendientes, con una versión sintética de normativa en otra instancia desechable. |
 | `npm run test:verify` | Vitest completo, Chromium y la regresión de créditos pendientes. Cada etapa debe aprobar. |
+| `npm run staging:rehearse` | Ensayo de despliegue sobre PostgreSQL 15 desechable: migraciones hasta `0016`, datos sintéticos, respaldo y restauración, compilación, arranque y humo HTTP. |
+| `npm run staging:verify` | `typecheck`, `lint`, `drizzle-kit check`, el ensayo H08 y el ensayo de despliegue. |
 
 Para las pruebas de escritura, iniciar Docker y disponer localmente de la imagen `postgres:15`. Si falta, ejecutar `docker pull postgres:15`. Para Chromium, instalar el navegador con `npx playwright install chromium` si hace falta. El repositorio carece de pipeline de CI. Un agente de CI puede preparar esos requisitos y ejecutar `npm run test:verify` sin credenciales persistentes.
 
@@ -569,3 +571,16 @@ R14-02 señalaba que las dos consultas de solo lectura de aforo podían informar
 - **Observación sin impacto en el resultado.** Vitest emitió un aviso de obsolescencia de `pg` por invocar `client.query()` mientras otra consulta seguía en curso. No produjo fallos ni resultados alterados; queda anotado para una futura actualización de la librería, fuera del alcance de este cierre.
 - **Estado del repositorio.** El cambio de este incremento es documental. Se conservan sin modificar los cambios preexistentes en `app/admin/sesiones/[sessionId]/session-capacity.tsx`, `docs/database-drizzle.md` y `test-results/`, así como los informes, los respaldos y las referencias de checkpoint. No se hizo `push`.
 - **Lectura del resultado.** La batería confirma el comportamiento desarrollado, no la preparación del despliegue. Los requisitos previos a producción y el estado abierto de H03 se documentan en el [cierre de la fase](../planificacion_general.md#cierre-de-la-fase-de-desarrollo-10) y en la [evaluación pública](secret-exposure-response.md#incremento-1033--verificación-pública-acotada-y-clasificación-de-h03).
+
+## Incremento 11.1 — Ensayo de despliegue en staging (23 de noviembre de 2026)
+
+`npm run staging:rehearse` añade a la batería un ensayo de despliegue reproducible sobre PostgreSQL 15 desechable. El proceso reutiliza el aprovisionador de H08 con la etiqueta `staging`, migra un contenedor vacío hasta `0016` —aplicando primero el prefijo histórico `0000`–`0004` y validando su estado intermedio—, siembra datos sintéticos, toma un respaldo `pg_dump` en formato personalizado y lo restaura en una segunda instancia, compila con un entorno inerte que no puede alcanzar ninguna base y arranca `next start` para comprobar sesiones administrativas y de alumno con cookies reales. Al terminar retira sus contenedores y el respaldo temporal, y falla si DEV o TEST persistentes cambiaron de estado.
+
+- La equivalencia del respaldo se comprueba por journal, catálogo, huella del esquema, recuentos, filas serializadas y seis consultas de integridad, no por el código de salida de `pg_restore`.
+- La compilación elimina `.next/cache` y busca en `.next` los secretos del ensayo y las credenciales leídas de `.env`; el bundle cliente debe carecer de URLs de base de datos. Las identidades persistentes de `.env` se tapan con valores vacíos para que Next no las inyecte.
+- La salida usa 66 comprobaciones con identificadores estables y redacta los valores sensibles, también en los errores.
+
+Resultado del 23 de noviembre de 2026: código 0, **66 comprobaciones** y journal en `0016_habitual_reservation_provenance`. En la misma jornada se repitió la línea base completa con **385 pruebas Vitest** en 41 archivos, **50 escenarios Chromium** y **1 escenario** con normativa sintética, y pasaron `typecheck`, `lint` y `drizzle-kit check`. No se aplicó ninguna migración en DEV, TEST ni producción, no se modificó ningún contenedor persistente y no se añadió la migración `0017`.
+
+- Ejecutar `npm run staging:rehearse` para el ensayo aislado o `npm run staging:verify` para encadenarlo con `typecheck`, `lint`, `drizzle-kit check` y `npm run db:rehearse`.
+- La actualización de un esquema intermedio con datos sigue siendo el procedimiento de H07, documentado aparte; el ensayo prueba el despliegue desde una base vacía. [Procedimiento, aislamiento y resolución de problemas](staging-deployment.md)
