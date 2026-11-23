@@ -103,7 +103,7 @@ describe("session generation (postgres)", () => {
 
   async function reservations(classSessionId: string) {
     return (await client.query(
-      "select student_profile_id, origin, status, regulation_version_id from class_reservations where class_session_id = $1",
+      "select student_profile_id, origin, status, regulation_version_id, habitual_assignment_id from class_reservations where class_session_id = $1",
       [classSessionId],
     )).rows;
   }
@@ -115,7 +115,7 @@ describe("session generation (postgres)", () => {
     const later = await createStudent();
     await assign(active);
     await assign(active, date, date);
-    await assign(bounded, now.toISODate()!, date);
+    const boundedAssignment = await assign(bounded, now.toISODate()!, date);
     await assign(expired, now.toISODate()!, now.plus({ days: 1 }).toISODate()!);
     await assign(later, now.plus({ days: 3 }).toISODate()!);
 
@@ -131,9 +131,11 @@ describe("session generation (postgres)", () => {
     })]);
     const booked = await reservations(created[0].id);
     expect(booked).toHaveLength(2);
-    expect(booked).toEqual(expect.arrayContaining([active, bounded].map((id) => ({
-      student_profile_id: id, origin: "ORDINARY", status: "CONFIRMED", regulation_version_id: versionId,
-    }))));
+    // Two overlapping live assignments keep the origin of the first student's reservation ambiguous.
+    expect(booked).toEqual(expect.arrayContaining([
+      { student_profile_id: active, origin: "ORDINARY", status: "CONFIRMED", regulation_version_id: versionId, habitual_assignment_id: null },
+      { student_profile_id: bounded, origin: "ORDINARY", status: "CONFIRMED", regulation_version_id: versionId, habitual_assignment_id: boundedAssignment.assignmentId },
+    ]));
   });
 
   it.each(["application", "cli-date"] as const)("reports an over-capacity group without selecting a subset with %s", async (generator) => {
@@ -171,12 +173,15 @@ describe("session generation (postgres)", () => {
 
   it("keeps one session and one booking when the CLI, application and assignment run concurrently", async () => {
     const student = await createStudent();
-    await Promise.all([generate("application"), generate("cli-date"), assign(student)]);
+    const assignment = assign(student);
+    await Promise.all([generate("application"), generate("cli-date"), assignment]);
+    const { assignmentId } = await assignment;
 
     const created = await sessions();
     expect(created).toHaveLength(1);
     expect(await reservations(created[0].id)).toEqual([{
-      student_profile_id: student, origin: "ORDINARY", status: "CONFIRMED", regulation_version_id: versionId,
+      student_profile_id: student, origin: "ORDINARY", status: "CONFIRMED",
+      regulation_version_id: versionId, habitual_assignment_id: assignmentId,
     }]);
   });
 
@@ -255,7 +260,7 @@ describe("session generation (postgres)", () => {
   it("does not reserve seats for an annulled future assignment", async () => {
     const active = await createStudent();
     const cancelled = await createStudent();
-    await assign(active);
+    const { assignmentId: activeAssignmentId } = await assign(active);
     const { assignmentId } = await assign(cancelled, now.plus({ days: 1 }).toISODate()!);
 
     await expect(cancellation.cancelFutureAssignment(admin, {
@@ -265,7 +270,8 @@ describe("session generation (postgres)", () => {
     await generate("application");
     const [created] = await sessions();
     expect(await reservations(created.id)).toEqual([{
-      student_profile_id: active, origin: "ORDINARY", status: "CONFIRMED", regulation_version_id: versionId,
+      student_profile_id: active, origin: "ORDINARY", status: "CONFIRMED",
+      regulation_version_id: versionId, habitual_assignment_id: activeAssignmentId,
     }]);
   });
 });

@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 
 import { classSessions } from "@/src/infrastructure/db/schema/class-sessions";
 import { studentProfiles } from "@/src/infrastructure/db/schema/student-profiles";
+import { studentTemplateAssignments } from "@/src/infrastructure/db/schema/student-template-assignments";
 import { users } from "@/src/infrastructure/db/schema/users";
 
 import { academicRegulations } from "@/src/infrastructure/db/schema/academic-regulations";
@@ -22,6 +23,8 @@ export const classReservations = pgTable(
       .references(() => studentProfiles.id, { onDelete: "cascade" }),
     status: classReservationStatusEnum("status").notNull().default("CONFIRMED"),
     origin: classReservationOriginEnum("origin").notNull().default("ORDINARY"),
+    habitualAssignmentId: text("habitual_assignment_id")
+      .references(() => studentTemplateAssignments.id, { onDelete: "set null" }),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     regulationVersionId: text("regulation_version_id").references(() => academicRegulations.id),
     cancellationRegulationVersionId: text("cancellation_regulation_version_id").references(() => academicRegulations.id),
@@ -36,6 +39,7 @@ export const classReservations = pgTable(
       .where(sql`${table.status} = 'CONFIRMED'`),
     index("class_reservations_session_idx").on(table.classSessionId),
     index("class_reservations_profile_idx").on(table.studentProfileId),
+    index("class_reservations_habitual_assignment_idx").on(table.habitualAssignmentId),
   ],
 );
 

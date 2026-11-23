@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 
 /** @typedef {Pick<import("drizzle-orm/node-postgres").NodePgDatabase, "execute">} QueryExecutor */
 /** @typedef {{ classSessionId: string, capacity: number, regulationVersionId: string }} SessionSeats */
+/** @typedef {{ studentProfileId: string, habitualAssignmentId?: string | null }} HabitualSeat */
 
 /** @param {QueryExecutor} tx @param {string} templateId */
 export async function lockTemplateAssignments(tx, templateId) {
@@ -69,15 +70,18 @@ async function assessHabitualSeats(tx, session, studentProfileIds) {
  * Reserve the whole group while holding the session row lock or owning its uncommitted insert.
  * @param {QueryExecutor} tx
  * @param {SessionSeats} session
- * @param {string[]} studentProfileIds
+ * @param {HabitualSeat[]} students
  */
-export async function reserveHabitualSeats(tx, session, studentProfileIds) {
-  const { pending, capacityConflict } = await assessHabitualSeats(tx, session, studentProfileIds);
+export async function reserveHabitualSeats(tx, session, students) {
+  const { pending, capacityConflict } = await assessHabitualSeats(tx, session, students.map(({ studentProfileId }) => studentProfileId));
   if (!pending.length || capacityConflict) return { reserved: 0, capacityConflict };
+  const assignmentByStudent = new Map(students.map(({ studentProfileId, habitualAssignmentId }) =>
+    [studentProfileId, habitualAssignmentId ?? null]));
   await tx.execute(sql`
-    insert into class_reservations (id, class_session_id, student_profile_id, status, origin, regulation_version_id)
+    insert into class_reservations
+      (id, class_session_id, student_profile_id, status, origin, regulation_version_id, habitual_assignment_id)
     values ${sql.join(pending.map((studentId) =>
-      sql`(${randomUUID()}, ${session.classSessionId}, ${studentId}, 'CONFIRMED', 'ORDINARY', ${session.regulationVersionId})`
+      sql`(${randomUUID()}, ${session.classSessionId}, ${studentId}, 'CONFIRMED', 'ORDINARY', ${session.regulationVersionId}, ${assignmentByStudent.get(studentId) ?? null})`
     ), sql`, `)}
   `);
   return { reserved: pending.length, capacityConflict: false };
@@ -104,6 +108,36 @@ async function readHabitualStudentIds(tx, session) {
   return /** @type {{ student_profile_id: string }[]} */ (assignments.rows).map((row) => row.student_profile_id);
 }
 
+/**
+ * Resolve the assignment that provably originated a generated habitual reservation.
+ * Overlapping assignments for the same student and date make the origin ambiguous, so no reference is kept.
+ * @param {QueryExecutor} tx @param {{ templateId: string, localDate: string }} session
+ */
+async function readHabitualAssignmentIds(tx, session) {
+  const result = await tx.execute(sql`
+    select a.student_profile_id as "studentProfileId",
+      case when count(distinct a.id) = 1 then min(a.id) end as "assignmentId"
+    from student_template_assignments a
+    join student_profiles p on p.id = a.student_profile_id
+    join users u on u.id = p.user_id
+    where a.template_id = ${session.templateId}
+      and a.status <> 'CANCELLED'
+      and a.effective_from <= ${session.localDate}
+      and (a.effective_to is null or a.effective_to >= ${session.localDate})
+      and u.status = 'ACTIVE'
+    group by a.student_profile_id
+  `);
+  return new Map(/** @type {{ studentProfileId: string, assignmentId: string | null }[]} */ (result.rows)
+    .map(({ studentProfileId, assignmentId }) => [studentProfileId, assignmentId]));
+}
+
+/** @param {QueryExecutor} tx @param {{ templateId: string, localDate: string }} session */
+async function readHabitualStudents(tx, session) {
+  const studentIds = await readHabitualStudentIds(tx, session);
+  const assignmentIds = await readHabitualAssignmentIds(tx, session);
+  return studentIds.map((studentProfileId) => ({ studentProfileId, habitualAssignmentId: assignmentIds.get(studentProfileId) ?? null }));
+}
+
 /** @typedef {SessionSeats & { templateId: string, localDate: string }} GeneratedSessionSeats */
 
 /** @param {QueryExecutor} tx @param {GeneratedSessionSeats[]} sessions */
@@ -111,8 +145,8 @@ export async function reserveGeneratedSessionHabitualSeats(tx, sessions) {
   const bookings = [];
   const profileIds = new Set();
   for (const session of sessions) {
-    const students = await readHabitualStudentIds(tx, session);
-    for (const id of students) profileIds.add(id);
+    const students = await readHabitualStudents(tx, session);
+    for (const { studentProfileId } of students) profileIds.add(studentProfileId);
     bookings.push({ session, students });
   }
   if (profileIds.size) {

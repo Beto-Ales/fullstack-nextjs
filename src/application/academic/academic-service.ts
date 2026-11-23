@@ -270,6 +270,7 @@ async function autoReserveSessionsForTemplateAssignment(
   tx: TransactionClient,
   sessions: Awaited<ReturnType<typeof lockSessionsForTemplateAssignment>>,
   studentProfileId: string,
+  habitualAssignmentId: string,
   regulation: AcademicRegulation,
 ): Promise<number> {
   let createdReservations = 0;
@@ -280,7 +281,7 @@ async function autoReserveSessionsForTemplateAssignment(
       classSessionId: row.id,
       capacity: Math.min(row.max_capacity, regulation.maxClassCapacity),
       regulationVersionId: regulation.id,
-    }, [studentProfileId]);
+    }, [{ studentProfileId, habitualAssignmentId }]);
     createdReservations += result.reserved;
   }
 
@@ -712,7 +713,7 @@ async function createHabitualAssignment(
     });
 
     const autoReservedReservationCount = await autoReserveSessionsForTemplateAssignment(
-      tx, sessions, payload.studentProfileId, regulation,
+      tx, sessions, payload.studentProfileId, assignmentId, regulation,
     );
     await resolvePendingCancellationCredits(tx, payload.studentProfileId);
 

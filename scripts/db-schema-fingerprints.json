@@ -14,5 +14,6 @@
   "0012_consecutive_cancellation_eligibility": "712b180b0061c594fa821d5886495445de9bdc9de7f06d81b942e058b7e1d485",
   "0013_manual_credit_adjustment_requests": "b1ee0c2f37e7487f3c3e419928be1e08b584ff5f2175d4059a8618c2aa7a8da9",
   "0014_login_attempt_budgets": "087a3a90327aaa8ca9f3253a3f64629fac4eb0074750f39a8ee1fc8040ce7a0a",
-  "0015_future_assignment_cancellation": "68acf25e7294b7fccb9da114a87082e2a13109c55161838f5c88dfda161d2e95"
+  "0015_future_assignment_cancellation": "68acf25e7294b7fccb9da114a87082e2a13109c55161838f5c88dfda161d2e95",
+  "0016_habitual_reservation_provenance": "1714744711cd63978190788094609b8c7954e0ed42e5e24459b902b5681de2a3"
 }

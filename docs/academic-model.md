@@ -83,6 +83,8 @@ En `/admin`, el formulario **Crear clase única** solicita fecha, hora de inicio
 - Estado (`CONFIRMED`, `CANCELLED`) y origen (`ORDINARY`, `MAKEUP`).
 - Incluye trazabilidad de cancelación (`cancelled_at`, `cancelled_by_user_id`).
 - Las inscripciones desde el detalle administrativo registran el responsable en `created_by_user_id` y el instante en `created_at`.
+- `habitual_assignment_id` referencia la asignación que originó una reserva habitual y queda vacío en inscripciones manuales y recuperaciones. Es anulable y usa `ON DELETE SET NULL`.
+
 - Índice único parcial para impedir reservas activas duplicadas por alumno+sesión.
 
 ### `session_capacity_blocks`
@@ -291,6 +293,16 @@ La migración aditiva `0012` conserva las versiones existentes con el máximo nu
 - La migración `0010_admin_reservation_cancellation` añade el origen explícito de la decisión y el motivo administrativo a `reservation_cancellations`. Las nuevas filas ordinarias distinguen `ADMIN_DECISION` de `STUDENT_REQUEST`. La auditoría registra reserva, alumno, sesión, ejecutor, fecha y versión normativa. La fila administrativa registra la transición de confirmada a cancelada. Los registros anteriores conservan origen y motivo desconocidos, incluso si se conoce el ejecutor.
 - La cancelación usa los bloqueos de sesión, reserva y perfil del alumno del flujo ordinario. Comprueba el estado después de bloquear y guarda la transición y la auditoría en la misma transacción. Un reintento con el mismo UUID, sesión, reserva, actor y motivo normalizado devuelve la auditoría original. Una solicitud diferente sobre una reserva cancelada se rechaza.
 - Calendario y detalle actualizan el aforo. La cancelación administrativa de un habitual se reconoce para esa fecha en el indicador de habituales pendientes. El historial del alumno distingue la decisión administrativa y el motivo queda en el historial de administración. Se revalidan el detalle, el calendario administrativo y el panel del alumno.
+
+### Procedencia de reservas habituales
+
+- Cada reserva creada por el alta de una asignación habitual o por la generación de sesiones guarda en `habitual_assignment_id` la asignación que la originó. La inscripción administrativa, el alta ordinaria y las recuperaciones no escriben la columna. Cancelar la reserva conserva la referencia.
+- El alta escribe su propio identificador. La generación lo resuelve por alumno, plantilla y fecha local dentro de la misma transacción y solo cuando exactamente una asignación no anulada, vigente y de una cuenta activa cubre la sesión. Con dos o más coincidencias la reserva se crea sin referencia: el origen es ambiguo y no se elige al azar.
+- La columna es aditiva y no se rellena hacia atrás. Las reservas anteriores a la migración y las ambiguas siguen sin procedencia demostrable; la revisión administrativa de 10.17–10.19 no cambia.
+- La referencia se comprueba con `FOR KEY SHARE` después del perfil, en el mismo orden que ya usaban el alta y la generación. Ningún escritor de asignaciones escribe la fila antes del perfil, así que la nueva clave foránea no invierte el orden ni crea un ciclo con la anulación.
+- La migración aditiva `0016_habitual_reservation_provenance` añade la columna, la referencia `ON DELETE SET NULL` y el índice `class_reservations_habitual_assignment_idx`. Borrar una asignación deja la reserva sin procedencia, nunca la elimina.
+
+
 
 ## Registro y corrección de asistencia
 

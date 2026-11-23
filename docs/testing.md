@@ -499,3 +499,18 @@ El estado que exige revisión se deriva de los datos persistidos: reserva `CONFI
 - Las pruebas usan exclusivamente PostgreSQL 15 desechable de H08. No se añadió una migración ni se modificó el esquema `0015`. No se ejecutaron migraciones en DEV, TEST persistente ni producción.
 - Pasaron **360 pruebas Vitest** (133 unitarias y 227 integraciones), **49 escenarios Chromium** y **1 escenario Chromium adicional** con normativa sintética mediante H08. También pasaron TypeScript, ESLint y `drizzle-kit check`.
 - Sigue pendiente registrar la procedencia de las reservas habituales, el saneamiento de intervalos históricos y el inventario de reservas antiguas. La lista muestra únicamente los identificadores que la auditoría ya conservaba y no deduce reservas nuevas.
+
+## Incremento 10.20 — Procedencia de reservas habituales
+
+La migración aditiva `0016_habitual_reservation_provenance` añade `class_reservations.habitual_assignment_id`, una referencia anulable a `student_template_assignments` con `ON DELETE SET NULL`, y el índice `class_reservations_habitual_assignment_idx`. No rellena filas existentes.
+
+El alta de una asignación escribe su identificador en las reservas automáticas que crea. La generación conserva la asignación solo cuando exactamente una asignación no anulada, vigente y de una cuenta activa cubre la sesión; con dos o más coincidencias la reserva se crea sin referencia. La cancelación de la reserva mantiene la columna y la anulación de asignaciones futuras no la usa todavía.
+
+- `habitual-provenance.integration.test.ts` añade cinco pruebas: la reserva generada registra la asignación; la cancelación conserva la referencia; la inscripción administrativa queda sin procedencia; dos asignaciones solapadas generan reservas sin referencia; y borrar la asignación deja la reserva con la columna vacía.
+- `session-generation.integration.test.ts` selecciona la columna en su lector de reservas y comprueba la asignación del alta, el caso ambiguo de dos asignaciones vigentes, el rechazo de una asignación anulada y la reserva única del cruce entre CLI, aplicación y alta concurrente.
+- `postgres-rehearsal.integration.test.ts` verifica que la columna es anulable y que el ensayo H07 conserva los prefijos y detecta la deriva con la nueva huella.
+- Ejecutar `npm run test:integration -- habitual-provenance.integration.test.ts session-generation.integration.test.ts habitual-assignment.integration.test.ts` y después la verificación completa con `npm run test:verify`.
+- Las pruebas usan exclusivamente PostgreSQL 15 desechable de H08. La migración `0016_habitual_reservation_provenance` se aplica desde el aprovisionador; no se ejecutó en DEV, TEST persistente ni producción.
+- `scripts/db-schema-fingerprints.json` incorpora la huella del journal hasta `0016`. El ensayo H07 verifica todos los prefijos, la actualización desde `0005`/`0006`, la restauración y la detección de deriva.
+- Pasaron **365 pruebas Vitest** (133 unitarias y 232 integraciones), **49 escenarios Chromium** y **1 escenario Chromium adicional** con normativa sintética mediante H08. También pasaron TypeScript, ESLint y `drizzle-kit check`.
+- Las pruebas de concurrencia no registraron `40P01`. Siguen pendientes el saneamiento de intervalos históricos, el inventario de reservas anteriores sin procedencia y el uso de la columna para cancelar reservas de forma automática.

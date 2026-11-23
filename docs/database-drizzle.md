@@ -128,4 +128,8 @@ Resultado de validación local sin migraciones:
 
 ## Estado de migraciones
 
-El journal del repositorio llega hasta `0014_login_attempt_budgets`. Para comprobar el estado local en solo lectura usa `npm run db:inspect -- dev` o `npm run db:inspect -- test`. Para repetir el ensayo con datos sintéticos usa `npm run db:rehearse`. Las escrituras en bases persistentes requieren autorización independiente. [Inventario y procedimiento de actualización y recuperación](postgres-upgrade-recovery.md)
+El journal del repositorio llega hasta `0016_habitual_reservation_provenance`. Para comprobar el estado local en solo lectura usa `npm run db:inspect -- dev` o `npm run db:inspect -- test`. Para repetir el ensayo con datos sintéticos usa `npm run db:rehearse`. Las escrituras en bases persistentes requieren autorización independiente. [Inventario y procedimiento de actualización y recuperación](postgres-upgrade-recovery.md)
+
+## Migración 0016 (procedencia de reservas habituales)
+
+`0016_habitual_reservation_provenance` añade `class_reservations.habitual_assignment_id` como columna anulable con referencia a `student_template_assignments` y `ON DELETE SET NULL`, más el índice `class_reservations_habitual_assignment_idx`. La migración es aditiva: no rellena reservas existentes ni modifica las migraciones anteriores. El aprovisionador de pruebas la aplica automáticamente y `scripts/db-schema-fingerprints.json` incorpora su huella.

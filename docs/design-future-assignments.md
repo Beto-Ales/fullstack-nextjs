@@ -45,6 +45,14 @@ El recuento vigente se deriva del estado persistido, no del número almacenado e
 
 Cada fila con sesión legible enlaza a `/admin/sesiones/[sessionId]?week=...` conservando la semana de la sesión para que «Volver al calendario» mantenga el contexto. El enlace y la página de destino exigen `SUPER_ADMIN`. La sección conserva la advertencia de que la procedencia habitual no está demostrada y de que corresponde revisar cada caso antes de cancelar. Una baja de cuenta no presenta reservas pendientes por el mero hecho de conservar identificadores históricos: el flujo de baja cancela las reservas futuras que corresponda y el recuento vigente refleja ese estado. Las reservas antiguas sin procedencia demostrable siguen pendientes de saneamiento. [Pruebas](testing.md#incremento-1019--enlaces-administrativos-para-revisar-reservas-ambiguas)
 
+## Implementación 10.20
+
+La migración aditiva `0016_habitual_reservation_provenance` añade `class_reservations.habitual_assignment_id`, una referencia anulable a `student_template_assignments` con `ON DELETE SET NULL`, y el índice `class_reservations_habitual_assignment_idx`. No hay relleno histórico ni cambios en cancelación, créditos o prioridad FIFO.
+
+El alta de una asignación escribe su propio identificador en las reservas que crea. La generación lo resuelve por alumno, plantilla y fecha local dentro de la misma transacción y solo cuando exactamente una asignación no anulada, vigente y de una cuenta activa cubre la sesión. Con dos o más coincidencias la reserva se crea sin referencia: el origen es ambiguo y no se elige al azar. La inscripción administrativa, el alta ordinaria y las recuperaciones no escriben la columna.
+
+La referencia no altera la elegibilidad ni el aforo: las reservas se crean con las mismas reglas y la cancelación conserva la columna. `ON DELETE SET NULL` impide que la procedencia bloquee o elimine reservas. La anulación de una asignación futura todavía no cancela reservas a partir de esta columna; la revisión administrativa del 10.17–10.19 sigue vigente y el inventario de reservas históricas sin procedencia continúa pendiente. [Pruebas](testing.md#incremento-1020--procedencia-de-reservas-habituales)
+
 
 ## Semántica propuesta
 

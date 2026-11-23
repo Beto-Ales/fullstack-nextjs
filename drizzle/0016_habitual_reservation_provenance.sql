@@ -1,0 +1,3 @@
+ALTER TABLE "class_reservations" ADD COLUMN "habitual_assignment_id" text;--> statement-breakpoint
+ALTER TABLE "class_reservations" ADD CONSTRAINT "class_reservations_habitual_assignment_id_student_template_assignments_id_fk" FOREIGN KEY ("habitual_assignment_id") REFERENCES "public"."student_template_assignments"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "class_reservations_habitual_assignment_idx" ON "class_reservations" USING btree ("habitual_assignment_id");

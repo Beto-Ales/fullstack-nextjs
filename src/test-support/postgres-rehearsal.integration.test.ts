@@ -144,7 +144,7 @@ const regulationColumns = {
 };
 const finalColumns = {
   academic_regulations: { max_eligible_consecutive_cancellations: null },
-  class_reservations: { created_by_user_id: null },
+  class_reservations: { created_by_user_id: null, habitual_assignment_id: null },
   session_capacity_blocks: { released_by_user_id: null, released_at: null, release_reason: null },
   credit_ledger_movements: { manual_request_id: null },
   reservation_cancellations: { decision_source: null, administrative_reason: null, sequence_pending: false, credit_resolution: null },
