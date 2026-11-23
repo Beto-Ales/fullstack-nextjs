@@ -446,3 +446,21 @@ Estado:
 | E2E-AUTH-001 | Guardas de autenticación y rutas protegidas | E2E | `tests/e2e/auth-guards.spec.ts` | Ejecutada correctamente | `npm run test:e2e` |
 | E2E-BASE-001 | Carga página inicial | E2E | `tests/e2e/home.spec.ts` | Ejecutada correctamente | `npm run test:e2e` |
 | E2E-CRED-001 | Cancelación habitual, crédito, reserva de recuperación y saldo actualizado desde el panel | E2E | `tests/e2e/credits.spec.ts` | Ejecutada correctamente en Chromium con PostgreSQL TEST aislado | `npm run test:e2e -- tests/e2e/credits.spec.ts` con `TEST_DATABASE_URL` |
+
+## Incremento 10.15 — Vigencia de asignaciones habituales
+
+La reproducción previa a la corrección, ejecutada mediante H08, confirmó que una asignación futura con inicio el 5 de abril aceptaba el 4 de abril como fin. La transacción guardaba el intervalo invertido, resolvía la solicitud pendiente y añadía una concesión al ledger. La regresión comprueba que el rechazo conserva la fila, la solicitud y el ledger, que dos cambios concurrentes de la misma asignación solo permiten el válido y que un rechazo posterior conserva la concesión consolidada.
+
+Las 35 pruebas focalizadas de normativa y generación pasaron en PostgreSQL 15 desechable. Cubren el fin inclusivo, la fecha por omisión, fechas inexistentes, permisos, cruces de mes, año y horario de verano en Copenhague, además del rollback y la concurrencia de H09. La regresión verifica con `pg_blocking_pids` que la solicitud inválida espera el bloqueo de plantilla y comprueba el rechazo al liberarlo. La acción de servidor existente exige el rol administrativo. La interfaz actual carece de formulario de finalización, por lo que no hay un campo visible al que asociar el error.
+
+Una futura restricción de tabla protegería también otras escrituras, con `effective_to IS NULL OR effective_to >= effective_from`. Requiere inventariar filas históricas, revisar la baja de cuenta (que puede cerrar una asignación futura con la fecha de baja) y ensayar una migración aditiva mediante H07. El esquema sigue en `0014`. La consulta de diagnóstico para un operador autorizado es de solo lectura. No se ejecutó en bases persistentes.
+
+```sql
+BEGIN READ ONLY;
+SELECT count(*) AS invalid_assignment_count
+FROM student_template_assignments
+WHERE effective_to < effective_from;
+COMMIT;
+```
+
+`npm run test:verify` pasó con 348 pruebas Vitest, 46 casos Chromium y un caso Chromium con normativa sintética. Se repitieron las pruebas focalizadas tras añadir la comprobación explícita de espera, sin cambios adicionales al código de producción. También pasaron TypeScript, ESLint y Drizzle.

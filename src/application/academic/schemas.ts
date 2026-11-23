@@ -70,7 +70,7 @@ export const assignStudentTemplateSchema = z.object({
 
 export const endStudentTemplateAssignmentSchema = z.object({
   assignmentId: z.string().uuid("Invalid assignment id."),
-  effectiveTo: isoDateSchema.optional(),
+  effectiveTo: z.iso.date("Introduce una fecha de fin válida en formato AAAA-MM-DD.").optional(),
 });
 
 export const reserveSeatSchema = z.object({

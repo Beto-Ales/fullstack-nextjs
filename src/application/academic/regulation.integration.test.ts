@@ -66,11 +66,11 @@ describe("academic regulation (postgres)", () => {
     return result.classSessionId;
   }
 
-  async function createHabitualTemplate() {
+  async function createHabitualTemplate(assignmentStart = "2030-03-01") {
     const { templateId } = await academicService.createClassTemplate(admin, {
       name: "Habitual", isoWeekday: 2, startsAtLocalTime: "18:00", durationMinutes: 60, effectiveFrom: "2030-03-01",
     });
-    await academicService.assignStudentToTemplate(admin, { templateId, studentProfileId: profileId, effectiveFrom: "2030-03-01" });
+    await academicService.assignStudentToTemplate(admin, { templateId, studentProfileId: profileId, effectiveFrom: assignmentStart });
     return templateId;
   }
 
@@ -494,12 +494,12 @@ describe("academic regulation (postgres)", () => {
     }]);
   });
 
-  async function pendingAssignmentCredit() {
+  async function pendingAssignmentCredit(assignmentStart?: string) {
     const version = await regulationService.publishAcademicRegulation(admin, {
       ...INITIAL_REGULATION, effectiveFrom: "2030-04-02", maxEligibleConsecutiveCancellations: 3,
     });
     vi.setSystemTime(new Date("2030-04-02T10:00:00Z"));
-    const templateId = await createHabitualTemplate();
+    const templateId = await createHabitualTemplate(assignmentStart);
     const { rows: [assignment] } = await client.query(
       "select id from student_template_assignments where template_id = $1", [templateId],
     );
@@ -517,6 +517,73 @@ describe("academic regulation (postgres)", () => {
     expect(await request()).toMatchObject({ sequence_pending: true, credit_resolution: null });
     return { assignmentId: assignment.id as string, version, templateId, target, request, movements };
   }
+
+  it("rejects an inverted future assignment without settling its pending credit", async () => {
+    const { assignmentId, templateId, request, movements } = await pendingAssignmentCredit("2030-04-05");
+    const assignment = async () => (await client.query(
+      "select * from student_template_assignments where id = $1", [assignmentId],
+    )).rows[0];
+    const original = await assignment();
+    const pending = await request();
+    const gate = await createVerifiedTestClient();
+    let rejectedAfterWait: Promise<unknown> | undefined;
+    try {
+      await gate.query("begin");
+      const { rows: [{ pid }] } = await gate.query("select pg_backend_pid() as pid");
+      await gate.query("select pg_advisory_xact_lock(903000044, hashtext($1))", [templateId]);
+      rejectedAfterWait = academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-04-04" })
+        .then(() => null, (error: unknown) => error);
+      await expect.poll(async () => (await client.query(
+        "select pid from pg_stat_activity where $1 = any(pg_blocking_pids(pid))", [pid],
+      )).rowCount).toBe(1);
+    } finally {
+      await gate.query("rollback");
+      await gate.end();
+      expect(await rejectedAfterWait).toMatchObject({ code: "invalid_date_range" });
+    }
+    await expect(academicService.endStudentTemplateAssignment(admin, { assignmentId }))
+      .rejects.toMatchObject({ code: "invalid_date_range" });
+    await expect(academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-02-30" }))
+      .rejects.toMatchObject({ name: "ZodError" });
+    await expect(academicService.endStudentTemplateAssignment(student, { assignmentId, effectiveTo: "2030-04-05" }))
+      .rejects.toMatchObject({ code: "forbidden" });
+    expect(await assignment()).toEqual(original);
+    expect(await request()).toEqual(pending);
+    expect(await movements()).toEqual([]);
+
+    const results = await Promise.allSettled([
+      academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-04-04" }),
+      academicService.endStudentTemplateAssignment(admin, { assignmentId, effectiveTo: "2030-04-05" }),
+    ]);
+    expect(results).toMatchObject([
+      { status: "rejected", reason: { code: "invalid_date_range" } },
+      { status: "fulfilled" },
+    ]);
+    expect(await request()).toMatchObject({ sequence_pending: false, credit_resolution: "GRANTED" });
+    const ledger = await movements();
+    expect(ledger).toHaveLength(1);
+    await expect(academicService.endStudentTemplateAssignment(admin, { assignmentId }))
+      .rejects.toMatchObject({ code: "invalid_date_range" });
+    expect(await movements()).toEqual(ledger);
+  });
+
+  it.each([
+    ["2030-03-31", "2030-03-31T00:30:00Z", "2030-03-31"],
+    ["2030-03-31", "2030-03-31T22:30:00Z", "2030-04-01"],
+    ["2030-12-31", "2030-12-31T23:30:00Z", "2031-01-01"],
+  ])("uses Copenhagen calendar dates to end an assignment starting %s at %s", async (start, now, end) => {
+    const templateId = await createHabitualTemplate(start);
+    const { rows: [assignment] } = await client.query(
+      "select id, effective_to from student_template_assignments where template_id = $1", [templateId],
+    );
+    expect(assignment.effective_to).toBeNull();
+    vi.setSystemTime(new Date(now));
+    await academicService.endStudentTemplateAssignment(admin, { assignmentId: assignment.id });
+    const { rows } = await client.query(
+      "select effective_to::text, status from student_template_assignments where id = $1", [assignment.id],
+    );
+    expect(rows).toEqual([{ effective_to: end, status: "ENDED" }]);
+  });
 
   it("settles on assignment end, respects the inclusive day and preserves a consolidated grant on replay", async () => {
     const { assignmentId, version, request, movements } = await pendingAssignmentCredit();

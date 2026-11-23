@@ -23,6 +23,8 @@ Se contrastaron la [planificación](../planificacion_general.md), la [arquitectu
 
 ### R14-01 · Fase 4 · Medio · Confirmado por inspección
 
+El incremento 10.15 reprodujo y corrigió la finalización con rango invertido. [Reproducción y pruebas](testing.md#incremento-1015--vigencia-de-asignaciones-habituales)
+
 [`academic-service.ts`](../src/application/academic/academic-service.ts), función `endStudentTemplateAssignment`. El alta rechaza un fin anterior al inicio. La finalización escribe el fin sin compararlo con el inicio, incluso cuando usa la fecha actual por omisión para una asignación futura. La acción comprueba el formato y la tabla permite guardar el intervalo invertido. La asignación puede quedar almacenada con un rango vacío y el conciliador H09 reevaluar la secuencia a partir de ese cambio.
 
 Las pruebas existentes en [`regulation.integration.test.ts`](../src/application/academic/regulation.integration.test.ts) cubren fin, ampliación y rollback de conciliación. No se localizó cobertura para el intervalo invertido. Validar el rango tras resolver la fecha de fin y acordar cómo anular explícitamente una asignación futura antes de su inicio, preservando el contrato de baja. Confianza alta en la falta de validación y media en el impacto sobre casos existentes. Sin reproducción dinámica.

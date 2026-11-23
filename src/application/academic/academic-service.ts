@@ -752,6 +752,12 @@ export async function endStudentTemplateAssignment(actor: Actor, input: unknown)
       .where(eq(studentTemplateAssignments.id, payload.assignmentId));
     if (!current) return;
     const effectiveTo = payload.effectiveTo ?? nowCenterTime().toISODate()!;
+    if (effectiveTo < current.effectiveFrom) {
+      throw new ApplicationError(
+        "La fecha de fin debe ser igual o posterior al inicio de la asignación.",
+        "invalid_date_range", 400, true,
+      );
+    }
     if (current.effectiveTo && current.effectiveTo < effectiveTo) {
       const nextDay = DateTime.fromISO(current.effectiveTo, { zone: CENTER_TIME_ZONE }).plus({ days: 1 }).toISODate()!;
       await assertHabitualEnrollmentCapacity(tx, {
