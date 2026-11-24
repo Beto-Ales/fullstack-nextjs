@@ -22,6 +22,7 @@
     "db:inspect": "node scripts/db-inspection.mjs",
     "db:rehearse": "node scripts/run-postgres-tests.mjs integration postgres-rehearsal.integration.test.ts",
     "staging:rehearse": "node scripts/run-staging-rehearsal.mjs",
+    "pooler:check": "node scripts/run-pooler-check.mjs",
     "staging:verify": "npm run typecheck && npm run lint && drizzle-kit check && npm run db:rehearse && npm run staging:rehearse",
     "db:studio": "drizzle-kit studio",
     "admin:create-super-admin": "node scripts/create-super-admin.mjs",

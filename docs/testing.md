@@ -594,3 +594,17 @@ El incremento es documental: audita la compatibilidad del proyecto con Vercel y 
 - No se ejecutaron las suites de Vitest, Playwright ni `npm run staging:rehearse`. Tampoco se probó el proyecto contra un agrupador en modo transacción (PgBouncer, el puerto 6543 de Supabase o el endpoint agrupado de Neon): esa compatibilidad se argumenta por código, no por ejecución, porque el proyecto solo usa bloqueos de transacción, `SET LOCAL` y sentencias sin nombre.
 - No se creó `vercel.json`, no se añadió ninguna dependencia y no se modificó código de ejecución. [Auditoría de compatibilidad, variables y procedimiento](vercel-deployment.md)
 
+## Incremento 11.3 — Verificación real del agrupador (24 de noviembre de 2026)
+
+El incremento añade `npm run pooler:check`, que convierte en ejecución la compatibilidad del pool que 11.2 solo argumentaba por código. El script `scripts/run-pooler-check.mjs` reutiliza el aprovisionador de H08 con el nuevo tipo de ejecución `pooler`: crea un `postgres:15` desechable, migra por la conexión directa hasta `0016`, coloca delante un PgBouncer en modo transacción y ejecuta 27 comprobaciones con identificadores estables. Al terminar retira el agrupador y la base, y falla si los contenedores DEV o TEST persistentes cambian de estado.
+
+- El agrupador es `edoburu/pgbouncer` 1.26.1 (digest `sha256:8638aa56…`), con `POOL_MODE=transaction`, `DEFAULT_POOL_SIZE=5`, `MAX_CLIENT_CONN=50` y TLS desactivado por ser local. La imagen se descarga una vez; el script no hace `pull` por su cuenta.
+- Cubre journal y catálogo por ambas conexiones, bloqueos asesores de transacción y de fila, rollback y commit, claves foráneas, `SET LOCAL statement_timeout`, sentencias sin nombre, 20 transacciones concurrentes, idempotencia, estado de sesión y liberación de conexiones.
+- El catálogo se compara con `readDatabaseState` y `checkDatabaseState` de `scripts/db-inspection.mjs`, la misma inspección que usan el ensayo de staging y `db:inspect`, de modo que la huella del esquema es comparable entre ambos.
+
+Resultado: **27 de 27 comprobaciones** sobre PostgreSQL 15.20, con huella de catálogo `17147447…` idéntica por la conexión directa y por el agrupador. La clave global 903000042 serializó dos transacciones independientes y liberó el bloqueo al confirmar; 20 transacciones concurrentes produjeron exactamente 20 incrementos y una sola fila en la inserción idempotente; al cerrar los clientes quedaron 2 conexiones de servidor, ninguna `idle in transaction`.
+
+- **Hallazgo relevante:** con su configuración por defecto, PgBouncer no ejecuta `DISCARD ALL` en cada transacción, así que un `SET` de sesión persiste en el backend agrupado: otra conexión directa observó el `application_name` fijado. El código del proyecto solo usa `SET LOCAL` y bloqueos `_xact_`, y `statement_timeout` volvió a `0` en la transacción siguiente; la comprobación `session.advisory_lock.blocks.other.client` demuestra el riesgo de usar bloqueos de sesión sobre un pool.
+- **Límites:** la prueba es local y sin TLS, con PgBouncer y no con el proxy de Neon ni el puerto 6543 de Supabase. El humo contra el endpoint alojado sigue pendiente y es requisito del primer Preview.
+- No se ejecutaron las suites de Vitest, Playwright ni el ensayo de staging, no se aplicó ninguna migración en DEV, TEST ni producción y no se modificó código de ejecución de la aplicación. [Verificación del agrupador](vercel-deployment.md#verificación-real-del-agrupador-incremento-113)
+

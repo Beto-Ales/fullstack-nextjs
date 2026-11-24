@@ -1,8 +1,8 @@
 # Despliegue en Vercel
 
-Este documento audita la compatibilidad del repositorio con un despliegue alojado en Vercel y describe la preparación de la cuenta, la base de datos y las variables de entorno. Corresponde al incremento 11.2 de la fase 11.
+Este documento audita la compatibilidad del repositorio con un despliegue alojado en Vercel y describe la preparación de la cuenta, la base de datos y las variables de entorno. Corresponde a los incrementos 11.2 y 11.3 de la fase 11. El 11.3 añade la verificación real del agrupador en modo transacción ([apartado 8](#8-bloqueos-transacciones-y-concurrencia)), ejecutada en local sobre PostgreSQL 15 desechable.
 
-**No se ha creado ninguna cuenta, no se ha aprovisionado ninguna base, no se ha configurado ningún proyecto ni se ha ejecutado ningún despliegue.** Todo lo que sigue es análisis y procedimiento. Un despliegue real exige las decisiones del propietario del [apartado 3](#3-requisitos-previos-y-decisiones-del-propietario) y sigue sin cerrar H03.
+**No se ha creado ninguna cuenta, no se ha aprovisionado ninguna base, no se ha configurado ningún proyecto ni se ha ejecutado ningún despliegue.** Todo lo que sigue es análisis y procedimiento. Un despliegue real exige las decisiones del propietario del [apartado 3](#3-requisitos-previos-y-decisiones-del-propietario) y sigue sin cerrar H03. La verificación de 11.3 demuestra el comportamiento de PgBouncer, no el del proxy propietario de cada proveedor, y no sustituye la prueba contra el endpoint alojado.
 
 ## 1. Alcance y estado
 
@@ -14,12 +14,14 @@ Este documento audita la compatibilidad del repositorio con un despliegue alojad
 | `npm run staging:rehearse` (11.1, 23 de noviembre de 2026; no repetido en 11.2) | Código 0, **66 comprobaciones** y journal `0016_habitual_reservation_provenance`, con compilación de producción, arranque y recorridos HTTP sobre cookies reales. |
 | `npm run test:verify` (línea base de 11.1, 23 de noviembre de 2026; no repetida en 11.2) | **385 pruebas Vitest** en 41 archivos, **50 escenarios Chromium** y **1 escenario** con normativa sintética, cada etapa sobre su PostgreSQL 15 desechable. |
 | `npm run typecheck`, `npm run lint`, `npx drizzle-kit check` (24 de noviembre de 2026) | Sin errores. El journal sigue en `0016`. |
+| `npm run pooler:check` (11.3, 24 de noviembre de 2026) | **27 comprobaciones** sobre PgBouncer 1.26.1 en modo transacción delante de un PostgreSQL 15 desechable: journal `0016` por conexión directa, catálogo idéntico a través del agrupador, bloqueos de transacción y de fila, rollback, claves foráneas, `SET LOCAL statement_timeout`, sentencias sin nombre, concurrencia serializada e idempotente y liberación de conexiones. |
 | Lectura de la configuración y del código de datos, sesión, bloqueos y scripts | Sin dependencias de rutas absolutas, del sistema de archivos ni de estado de proceso en tiempo de ejecución. |
 | Documentación vigente de Vercel, Neon y Supabase | Límites de funciones, versiones de Node, entornos, protección de despliegues y modo transacción de los agrupadores. |
 
 ### Qué no se comprobó
 
 - Ningún despliegue real en Vercel, ni siquiera de prueba.
+- El agrupador **alojado**: la verificación de 11.3 es local, con PgBouncer 1.26.1 y sin TLS; no cubre el endpoint agrupado de Neon ni el puerto 6543 de Supabase.
 - La batería de pruebas y el ensayo de staging no se repitieron en este incremento: las cifras de la tabla son las de 11.1, del 23 de noviembre de 2026.
 - Ninguna base alojada: la línea base se ejecutó sobre PostgreSQL 15 local y desechable.
 - Proveedor, región, plan, dominio, protección de despliegues y respaldos operativos.
@@ -146,6 +148,8 @@ Consecuencias en Vercel:
 - **Congelación.** Cuando una función deja de recibir peticiones, Vercel puede congelarla. `idleTimeoutMillis` cierra las conexiones inactivas del lado del cliente, pero una instancia congelada no ejecuta ese temporizador mientras duerme: el socket lo acaba reciclando el agrupador o el proveedor. Hay que confiar en el agrupador, no en el cliente.
 - **Sin driver serverless.** No se usa `@neondatabase/serverless` ni transporte HTTP: la aplicación habla el protocolo de PostgreSQL mediante `pg`, así que necesita una cadena agrupada compatible, no una cadena de solo HTTP.
 
+El comportamiento del pool se verificó de forma empírica en 11.3: con `DEFAULT_POOL_SIZE=5`, al cerrar los clientes no quedaron conexiones `idle in transaction` y el servidor retuvo como máximo cinco. [Verificación del agrupador](#verificación-real-del-agrupador-incremento-113)
+
 Recomendaciones, ninguna aplicada al código en este incremento:
 
 1. Usar siempre la cadena agrupada del proveedor en `DATABASE_URL`.
@@ -176,6 +180,29 @@ Riesgos que sí existen:
 - **Ámbito global.** `pg_advisory_xact_lock` es global a la base, no a la sesión: dos usuarios distintos que publican normativa se serializan, igual que dos intentos de login. Es intencionado, pero significa que una transacción larga bloquea a todas las instancias, no solo a la que la inició.
 - **Transacción colgada.** Si una instancia se congela con una transacción abierta, el bloqueo persiste hasta que el servidor la corta. `statement_timeout` solo se aplica al limitador de login; el resto depende de que las transacciones sean cortas, como lo son hoy, y de un `idle_in_transaction_session_timeout` en el proveedor.
 - **Ninguna ruta declara `maxDuration`**, así que el límite de la plataforma es el que corta una ejecución desbocada. Es una red de seguridad, no un plan.
+
+### Verificación real del agrupador (incremento 11.3)
+
+`npm run pooler:check` aprovisiona un `postgres:15` desechable, migra hasta `0016` por la conexión directa y coloca delante un PgBouncer 1.26.1 (`edoburu/pgbouncer`, digest `sha256:8638aa56…`) en modo transacción con `DEFAULT_POOL_SIZE=5` y `MAX_CLIENT_CONN=50`. Ejecuta 27 comprobaciones con identificadores estables y retira el agrupador y la base al terminar; falla si los contenedores DEV o TEST cambian de estado.
+
+| Grupo | Comprobaciones |
+| --- | --- |
+| Migración y esquema | `migration.direct`, `schema.direct`, `schema.via.pooler`, `schema.pooler.matches.direct`: huella de catálogo idéntica por ambas conexiones. |
+| Identidad y modo | `pooler.mode` (`pool_mode = transaction` leído del registro del contenedor), `pooler.identity`. |
+| Bloqueos | `advisory.xact.serialized` y `advisory.xact.released` sobre la clave global 903000042, `rowlock.for.update.blocks`, `rowlock.released.after.commit`. |
+| Integridad | `rollback.discards.writes`, `commit.persists.writes`, `fk.enforced`, `fk.no.partial.writes`, `writes.no.partial`. |
+| Sentencias | `setlocal.timeout.enforced` y `setlocal.timeout.not.leaked` con `statement_timeout` de 250 ms, `unnamed.statements` con 100 ejecuciones parametrizadas. |
+| Concurrencia | `concurrency.transactions`, `concurrency.serialized`, `concurrency.idempotent`, con 20 transacciones simultáneas sobre el bloqueo 903000044 y una clave única. |
+| Sesión y conexiones | `ddl.via.pooler`, `session.set.persists.on.pooled.backend`, `session.advisory_lock.blocks.other.client`, `session.advisory_lock.released`, `connections.released`, `persistent.untouched`. |
+
+Resultado del 24 de noviembre de 2026 sobre PostgreSQL 15.20: **27 de 27**. Lo relevante:
+
+- **Los bloqueos de transacción funcionan.** Dos transacciones independientes se serializan en la clave global y el bloqueo se libera al confirmar; el bloqueo de fila rechaza con `55P03` mientras la otra transacción lo retiene.
+- **El estado de sesión persiste en el backend agrupado.** Después de un `SET application_name` confirmado, otra conexión directa observó la conexión del agrupador con ese valor: con su configuración por defecto, PgBouncer no ejecuta `DISCARD ALL` en cada transacción. Por eso la regla del proyecto —solo `SET LOCAL` y bloqueos `_xact_`— es un requisito, no una preferencia: un `pg_advisory_lock` de sesión queda retenido en el pool y bloquea a otros clientes, como demostró `session.advisory_lock.blocks.other.client`.
+- **`SET LOCAL` no se filtra**: en la transacción siguiente `statement_timeout` volvió a `0`.
+- **La concurrencia no deja escrituras parciales**: 20 transacciones produjeron 20 incrementos exactos y una sola fila en la inserción idempotente.
+
+Límites de la evidencia: PgBouncer no es el proxy de Neon, que tiene su propio comportamiento, y la prueba es local y sin TLS. La compatibilidad con el endpoint alojado sigue pendiente y debe comprobarse sobre la base de ensayo antes de abrir el Preview ([apartado 12](#12-procedimiento-de-despliegue)).
 
 ## 9. Limitación de intentos de login
 
@@ -230,6 +257,8 @@ Orden previsto, con el resultado que debe observarse en cada paso. Los pasos 1 a
 | 8 | Publicar la normativa inicial y generar las sesiones | `npm run academic:generate-sessions` informa de las sesiones creadas. |
 | 9 | Desplegar desde `master` y ejecutar la verificación del [apartado 13](#13-verificación-posterior) | Sin 500 en los registros y con los recorridos de rol correctos. |
 
+Antes del paso 1, `npm run pooler:check` debe terminar con **27 comprobaciones**: fija el comportamiento esperado del agrupador y detecta regresiones en el código de transacciones. Cuando exista la base de ensayo, repetir ese humo contra su endpoint agrupado real y comparar el journal y la huella del catálogo con la conexión directa.
+
 El primer despliegue puede hacerse antes de las migraciones: la compilación no necesita base. Pero la aplicación responderá 500 en las rutas dinámicas hasta que el journal esté aplicado y las variables configuradas.
 
 ## 13. Verificación posterior
@@ -250,6 +279,7 @@ Comprobaciones mínimas tras el primer despliegue, en orden. Si el proyecto tien
 | Conexiones | Panel del proveedor | Conexiones activas por debajo del límite del plan y sin esperas anómalas. |
 | Limitador | Un intento fallido y consulta a `login_attempt_budgets` | Filas con clave HMAC y `expires_at` coherente. |
 | Journal | `select count(*) from drizzle.__drizzle_migrations;` | 17. |
+| Agrupador alojado | Abrir una transacción de lectura por la cadena agrupada y comparar el catálogo con la conexión directa | Misma huella de catálogo y ninguna conexión `idle in transaction` al cerrar. |
 | Integridad del repositorio | `npm run typecheck`, `npm run lint`, `npx drizzle-kit check` en local | Sin errores antes y después del despliegue. |
 
 ## 14. Rollback y continuidad
@@ -268,6 +298,7 @@ Comprobaciones mínimas tras el primer despliegue, en orden. Si el proyecto tien
 | Node.js 26 es el valor predeterminado de Vercel | La línea base se verificó en 24.18.0; 26 no se ha probado. | Fijar 24.x en el proyecto hasta verificar 26. |
 | PostgreSQL 16 o 17 en el proveedor | No se ha ejecutado la batería en esas versiones. | Elegir 15 si el plan lo permite, o repetir la batería contra una instancia desechable de la versión elegida. |
 | Pool de 10 conexiones por instancia | Un pico puede agotar el límite del plan o del servidor. | Cadena agrupada, métricas y, si hace falta, reducir `max` con un cambio de código verificado. |
+| Endpoint agrupado alojado sin probar | La evidencia de 11.3 es local (PgBouncer 1.26.1); el proxy de cada proveedor puede diferir. | Repetir el humo transaccional contra la base de ensayo antes de abrir el Preview. |
 | `idle_in_transaction_session_timeout` no configurado | Una transacción colgada retiene bloqueos y conexiones. | Configurarlo en el proveedor. |
 | Preview compartiendo base con Production | Cada `push` escribiría en datos reales. | Base o rama separada para Preview, o no conectar Preview. |
 | Presupuesto global de login agotable | Un atacante puede consumir los 600 intentos y bloquear el acceso durante la ventana. | Es el compromiso de H05; vigilar los registros y considerar ajustes si ocurre. |
@@ -278,7 +309,7 @@ Comprobaciones mínimas tras el primer despliegue, en orden. Si el proyecto tien
 | Portada heredada de la plantilla | `/` muestra el ejemplo de Full Stack Open, no el taller. | Es estática y no expone datos; decidir su contenido o retirarla antes de publicar. |
 | Validación con lector de pantalla pendiente | Accesibilidad sin cierre manual con NVDA. | Pendiente heredado de la fase 10. |
 
-Nada de esta lista se ha ejecutado ni modificado en este incremento: es un inventario para decidir antes de desplegar.
+Ningún elemento de esta lista se ha resuelto en este incremento: es un inventario para decidir antes de desplegar. Lo único que cambió es la evidencia del [apartado 8](#verificación-real-del-agrupador-incremento-113), que pasa de argumento por código a 27 comprobaciones ejecutadas en local.
 
 ## Documentación relacionada
 
