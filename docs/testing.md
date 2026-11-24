@@ -584,3 +584,13 @@ Resultado del 23 de noviembre de 2026: código 0, **66 comprobaciones** y journa
 
 - Ejecutar `npm run staging:rehearse` para el ensayo aislado o `npm run staging:verify` para encadenarlo con `typecheck`, `lint`, `drizzle-kit check` y `npm run db:rehearse`.
 - La actualización de un esquema intermedio con datos sigue siendo el procedimiento de H07, documentado aparte; el ensayo prueba el despliegue desde una base vacía. [Procedimiento, aislamiento y resolución de problemas](staging-deployment.md)
+
+## Incremento 11.2 — Preparación del despliegue en Vercel (24 de noviembre de 2026)
+
+El incremento es documental: audita la compatibilidad del proyecto con Vercel y escribe el procedimiento de despliegue. No repite la batería de 11.1 y no ejecuta ningún despliegue. La única comprobación nueva es de compilación, y las tres de integridad del repositorio se repitieron para dejar constancia de que el árbol del que se despliega está limpio.
+
+- `npm run build` con `DATABASE_URL` vacía terminó con código 0 y «Compiled successfully». El reparto de rutas fue: `/` y `/_not-found` estáticas; `/admin`, `/admin/alumnos/[studentId]`, `/admin/sesiones/[sessionId]`, `/login`, `/normativa` y `/student` bajo demanda. La compilación no necesita la base conectada.
+- `npm run typecheck`, `npm run lint` y `npx drizzle-kit check` terminaron sin errores. El journal sigue en `0016_habitual_reservation_provenance` y `drizzle-kit check` leyó `drizzle.config.ts` con la `DATABASE_URL` de `.env`, sin conectarse a ninguna base.
+- No se ejecutaron las suites de Vitest, Playwright ni `npm run staging:rehearse`. Tampoco se probó el proyecto contra un agrupador en modo transacción (PgBouncer, el puerto 6543 de Supabase o el endpoint agrupado de Neon): esa compatibilidad se argumenta por código, no por ejecución, porque el proyecto solo usa bloqueos de transacción, `SET LOCAL` y sentencias sin nombre.
+- No se creó `vercel.json`, no se añadió ninguna dependencia y no se modificó código de ejecución. [Auditoría de compatibilidad, variables y procedimiento](vercel-deployment.md)
+
