@@ -2,7 +2,7 @@
 
 Este documento audita la compatibilidad del repositorio con un despliegue alojado en Vercel y describe la preparación de la cuenta, la base de datos y las variables de entorno. Corresponde a los incrementos 11.2, 11.3, 11.4 y 11.5 de la fase 11: el 11.3 añade la verificación real del agrupador en modo transacción ([apartado 8](#8-bloqueos-transacciones-y-concurrencia)); el 11.4 fija la plataforma elegida por el propietario —**Vercel Hobby con repositorio público de GitHub y PostgreSQL Neon Free**, proyecto personal, educativo y no comercial— y deja preparado el primer Preview en el [apartado 16](#16-vercel-hobby-y-neon-free-incremento-114); y el 11.5 cambia la estrategia: el **primer despliegue va directamente a Production**, público y con datos ficticios, sobre el proyecto Neon ya existente ([apartado 17](#17-primer-despliegue-de-production-educativo-incremento-115)).
 
-**No se ha creado ninguna cuenta, no se ha aprovisionado ninguna base, no se ha configurado ningún proyecto ni se ha ejecutado ningún despliegue; en 11.5 tampoco.** Todo lo que sigue es análisis, procedimiento y una rama preparada en local: `preview/vercel-11-4`, que apunta a HEAD y sigue sin publicarse. En 11.5 se repitió la batería local completa y se fijó Node.js 24.x en `package.json`, pero el despliegue, la migración de la base Neon y el `push` de `master` dependen de acciones del propietario ([apartado 17.12](#1712-estado-de-este-incremento)). Un despliegue real exige las decisiones del [apartado 3](#3-requisitos-previos-y-decisiones-del-propietario), y sigue sin cerrar H03. La verificación de 11.3 demuestra el comportamiento de PgBouncer, no el del proxy de Neon, y no sustituye la prueba contra el endpoint alojado.
+**No se ha creado ninguna cuenta, no se ha aprovisionado ninguna base, no se ha configurado ningún proyecto ni se ha ejecutado ningún despliegue; en 11.5 tampoco.** En 11.5 se repitió la batería local completa, se fijó Node.js 24.x en `package.json` y, con autorización expresa del propietario, se publicó `master` en `cd73de8`; la rama `preview/vercel-11-4` sigue solo en local. El despliegue, la migración de la base Neon y las variables de Production dependen todavía de acciones del propietario ([apartado 17.12](#1712-estado-de-este-incremento)). Un despliegue real exige las decisiones del [apartado 3](#3-requisitos-previos-y-decisiones-del-propietario), y sigue sin cerrar H03. La verificación de 11.3 demuestra el comportamiento de PgBouncer, no el del proxy de Neon, y no sustituye la prueba contra el endpoint alojado.
 
 ## 1. Alcance y estado
 
@@ -571,6 +571,8 @@ El procedimiento existente (`npm run admin:create-super-admin`) exige `DATABASE_
 
 No se crea un Preview antes del primer despliegue, no se habilita cron y no se promueve nada desde Preview.
 
+El paso 3 se ejecutó el 24 de noviembre de 2026 con autorización expresa del propietario: `origin/master` pasó de `af64702` a `cd73de8` y `git ls-remote --heads origin` anuncia una sola referencia, `refs/heads/master`. Los pasos 4 a 8 siguen pendientes y requieren el panel de Vercel.
+
 ### 17.9 Validación alojada
 
 | Comprobación | Cómo | Resultado esperado |
@@ -615,9 +617,8 @@ Todas las escrituras ocurrieron en PostgreSQL 15 desechable; los contenedores DE
 
 ### 17.12 Estado de este incremento
 
-Hecho: el cambio de estrategia documentado, `engines.node` fijado y probado, la auditoría del contenido saliente y la batería local completa. Pendiente y **bloqueado** por depender del propietario:
+Hecho: el cambio de estrategia documentado, `engines.node` fijado y probado, la auditoría del contenido saliente, la batería local completa y la publicación de `master` con autorización expresa: `origin/master` pasó de `af64702` a `cd73de8`, el remoto anuncia solo `refs/heads/master` y `preview/vercel-11-4` sigue sin publicar en `3853d88`. Pendiente y **bloqueado** por depender del propietario:
 
-- `git push origin master` (autorización y credenciales de GitHub).
 - Importación del repositorio en Vercel, variables de Production y pulsación de **Deploy**.
 - Autorización escrita para migrar la base Neon concreta y ejecución de `0000`–`0016`.
 - Cadena directa y agrupada y clave HMAC nueva: las introduce el propietario en su terminal o en el panel, nunca en el chat.
