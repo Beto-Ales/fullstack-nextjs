@@ -1,8 +1,8 @@
 # Despliegue en Vercel
 
-Este documento audita la compatibilidad del repositorio con un despliegue alojado en Vercel y describe la preparación de la cuenta, la base de datos y las variables de entorno. Corresponde a los incrementos 11.2 y 11.3 de la fase 11. El 11.3 añade la verificación real del agrupador en modo transacción ([apartado 8](#8-bloqueos-transacciones-y-concurrencia)), ejecutada en local sobre PostgreSQL 15 desechable.
+Este documento audita la compatibilidad del repositorio con un despliegue alojado en Vercel y describe la preparación de la cuenta, la base de datos y las variables de entorno. Corresponde a los incrementos 11.2, 11.3 y 11.4 de la fase 11: el 11.3 añade la verificación real del agrupador en modo transacción ([apartado 8](#8-bloqueos-transacciones-y-concurrencia)), y el 11.4 fija la plataforma elegida por el propietario —**Vercel Hobby con repositorio público de GitHub y PostgreSQL Neon Free**, proyecto personal, educativo y no comercial— y deja preparado el primer Preview en el [apartado 16](#16-vercel-hobby-y-neon-free-incremento-114).
 
-**No se ha creado ninguna cuenta, no se ha aprovisionado ninguna base, no se ha configurado ningún proyecto ni se ha ejecutado ningún despliegue.** Todo lo que sigue es análisis y procedimiento. Un despliegue real exige las decisiones del propietario del [apartado 3](#3-requisitos-previos-y-decisiones-del-propietario) y sigue sin cerrar H03. La verificación de 11.3 demuestra el comportamiento de PgBouncer, no el del proxy propietario de cada proveedor, y no sustituye la prueba contra el endpoint alojado.
+**No se ha creado ninguna cuenta, no se ha aprovisionado ninguna base, no se ha configurado ningún proyecto ni se ha ejecutado ningún despliegue.** Todo lo que sigue es análisis, procedimiento y una rama preparada en local: `preview/vercel-11-4`, que apunta a HEAD, cuya publicación requiere autorización expresa del propietario. Un despliegue real exige las decisiones del [apartado 3](#3-requisitos-previos-y-decisiones-del-propietario) y las autorizaciones del [apartado 16.7](#167-bloqueo-actual-y-autorizaciones-que-faltan), y sigue sin cerrar H03. La verificación de 11.3 demuestra el comportamiento de PgBouncer, no el del proxy de Neon, y no sustituye la prueba contra el endpoint alojado.
 
 ## 1. Alcance y estado
 
@@ -15,14 +15,17 @@ Este documento audita la compatibilidad del repositorio con un despliegue alojad
 | `npm run test:verify` (línea base de 11.1, 23 de noviembre de 2026; no repetida en 11.2) | **385 pruebas Vitest** en 41 archivos, **50 escenarios Chromium** y **1 escenario** con normativa sintética, cada etapa sobre su PostgreSQL 15 desechable. |
 | `npm run typecheck`, `npm run lint`, `npx drizzle-kit check` (24 de noviembre de 2026) | Sin errores. El journal sigue en `0016`. |
 | `npm run pooler:check` (11.3, 24 de noviembre de 2026) | **27 comprobaciones** sobre PgBouncer 1.26.1 en modo transacción delante de un PostgreSQL 15 desechable: journal `0016` por conexión directa, catálogo idéntico a través del agrupador, bloqueos de transacción y de fila, rollback, claves foráneas, `SET LOCAL statement_timeout`, sentencias sin nombre, concurrencia serializada e idempotente y liberación de conexiones. |
+| `npm run staging:verify` y `npm run pooler:check` (11.4, 24 de noviembre de 2026) | Encadena `typecheck`, `lint`, `drizzle-kit check`, `db:rehearse` y el ensayo de staging: **66 comprobaciones**, journal `0016` y compilación de producción servida en un puerto libre. Después, **27 de 27** del agrupador. |
+| Documentación oficial de Vercel y Neon (11.4, 24 de noviembre de 2026) | El primer despliegue de un proyecto nuevo **siempre** es de Production, aunque se lance por CLI o desde otra rama, y compila con las variables de Production; los proyectos nuevos arrancan con **Standard Protection + Vercel Authentication**; Vercel Authentication con alcance *All Deployments* no requiere complemento de pago; Password Protection no existe en Hobby y proteger solo Production exige Enterprise. Neon Free: 100 CU-horas, 1 GB por proyecto y 20 GB por cuenta, 10 ramas y suspensión a los 5 minutos. |
 | Lectura de la configuración y del código de datos, sesión, bloqueos y scripts | Sin dependencias de rutas absolutas, del sistema de archivos ni de estado de proceso en tiempo de ejecución. |
 | Documentación vigente de Vercel, Neon y Supabase | Límites de funciones, versiones de Node, entornos, protección de despliegues y modo transacción de los agrupadores. |
 
 ### Qué no se comprobó
 
-- Ningún despliegue real en Vercel, ni siquiera de prueba.
-- El agrupador **alojado**: la verificación de 11.3 es local, con PgBouncer 1.26.1 y sin TLS; no cubre el endpoint agrupado de Neon ni el puerto 6543 de Supabase.
-- La batería de pruebas y el ensayo de staging no se repitieron en este incremento: las cifras de la tabla son las de 11.1, del 23 de noviembre de 2026.
+- Ningún despliegue real en Vercel, ni siquiera de prueba: en 11.4 no se creó cuenta, proyecto ni rama remota. La rama `preview/vercel-11-4` solo existe en local.
+- El agrupador **alojado**: la verificación de 11.3 es local, con PgBouncer 1.26.1 y sin TLS; no cubre el endpoint agrupado de Neon (`-pooler`) ni el puerto 6543 de Supabase.
+- La protección de despliegues en una cuenta real: la disponibilidad en Hobby se leyó en la documentación, no se comprobó en un panel.
+- La batería completa no se repitió en 11.4: se ejecutó `npm run staging:verify`, que compila y sirve la aplicación, pero no Vitest ni Playwright. Las cifras de 385 pruebas y 50 escenarios siguen siendo las de 11.1.
 - Ninguna base alojada: la línea base se ejecutó sobre PostgreSQL 15 local y desechable.
 - Proveedor, región, plan, dominio, protección de despliegues y respaldos operativos.
 - Node.js 26, que hoy es la versión predeterminada de Vercel, y PostgreSQL 16 o 17, que son las versiones que suelen ofrecer los proveedores.
@@ -35,7 +38,7 @@ Este documento audita la compatibilidad del repositorio con un despliegue alojad
 ## 2. Modelo de despliegue
 
 - **Origen.** Integración Git de Vercel con GitHub sobre el repositorio público `Beto-Ales/fullstack-nextjs`. `git ls-remote --heads origin` anuncia una sola rama, `master`, en `af64702` (`build(staging): ensayar despliegue reproducible con PostgreSQL aislado`), que es el mismo commit que `HEAD`. El requisito del cierre de la fase 10 de publicar el estado actual queda cubierto por esa observación de solo lectura; este incremento no hizo `push`.
-- **Proyecto.** Se crea conectando el repositorio desde el panel. Cada `push` a `master` genera un despliegue de Production y el resto de ramas y pull requests, despliegues de Preview.
+- **Proyecto.** Se crea conectando el repositorio desde el panel. Cada `push` a `master` genera un despliegue de Production y el resto de ramas y pull requests, despliegues de Preview. La excepción es el **primer despliegue**: Vercel lo clasifica como Production aunque se lance desde otra rama o por CLI y lo compila con las variables de Production ([apartado 16.2](#162-el-primer-despliegue-es-de-production)).
 - **Configuración esperada.** Root Directory en la raíz del repositorio, Framework Preset `Next.js` detectado automáticamente, Install Command `npm install` (respeta `package-lock.json`, `lockfileVersion` 3), Build Command `npm run build` y Output Directory por defecto. No hay `vercel.json`, `now.json` ni carpeta `.vercel` versionada; `.gitignore` ya excluye `.vercel`.
 - **Node.js.** Vercel usa por defecto la última LTS disponible (26.x en la consulta del 24 de noviembre de 2026) y permite fijar 24.x o 22.x en *Settings → Build and Deployment*. La línea base se verificó con Node.js 24.18.0 y `next` 16.3.8 exige Node.js 20.9 o superior. El repositorio no declara `engines`, así que **la versión queda a cargo de la configuración del proyecto**: se recomienda fijar 24.x para igualar el entorno verificado antes de desplegar.
 - **Región.** Las funciones se ejecutan en una sola región, `iad1` por defecto, y solo los planes Pro y Enterprise admiten varias. Debe elegirse la región más próxima a la base de datos; cada salto transatlántico se paga en cada consulta.
@@ -44,7 +47,7 @@ Este documento audita la compatibilidad del repositorio con un despliegue alojad
 
 ## 3. Requisitos previos y decisiones del propietario
 
-Ninguna de estas decisiones está tomada. Sin ellas no debe iniciarse el despliegue.
+El 11.4 el propietario decidió la plataforma: **Vercel Hobby** para un proyecto personal, educativo y no comercial, el **repositorio público `Beto-Ales/fullstack-nextjs`**, **Neon Free** con una base exclusiva de Preview en región europea y protección **All Deployments** con Vercel Authentication. Siguen abiertas la región y el nombre exactos de la base, la ventana de migración, el respaldo operativo, el dominio y las autorizaciones para crear recursos externos y publicar la rama. Sin ellas no debe iniciarse el despliegue ([apartado 16](#16-vercel-hobby-y-neon-free-incremento-114)).
 
 | Decisión | Por qué importa | Efecto si falta |
 | --- | --- | --- |
@@ -94,7 +97,7 @@ El código solo lee las variables de la tabla siguiente. Cualquier otra que apar
 
 ### Reglas de configuración
 
-- **Ámbito.** Cada variable se declara por entorno (`Production`, `Preview`, `Development`). Un valor exclusivo de Production no llega a Preview y viceversa. Si Preview comparte `DATABASE_URL` con Production, cada `push` de una rama escribirá en datos reales: la recomendación es una base o rama distinta para Preview, o no conectar Preview.
+- **Ámbito.** Cada variable se declara por entorno (`Production`, `Preview`, `Development`). Un valor exclusivo de Production no llega a Preview y viceversa. Si Preview comparte `DATABASE_URL` con Production, cada `push` de una rama escribirá en datos reales: la recomendación es una base o rama distinta para Preview, o no conectar Preview. El **primer despliegue de un proyecto nuevo compila con las variables de Production** aunque acabe siendo un Preview, así que Production debe quedarse sin secretos hasta que exista una base de Production decidida ([apartado 16.2](#162-el-primer-despliegue-es-de-production)).
 - **Secretos.** Marcar `DATABASE_URL` y `AUTH_RATE_LIMIT_HMAC_KEY` como *Sensitive*: Vercel no permite volver a leerlas y las oculta en los registros. El resto puede quedar como *Config*.
 - **Vigencia.** Los cambios de variables **solo afectan a despliegues nuevos**; hay que volver a desplegar para que se apliquen. Cambiar una variable no reinicia las funciones en curso.
 - **Un solo valor por entorno.** Vercel no admite dos valores para la misma variable en el mismo entorno; si se necesita una base distinta por rama, hay que usar variables por entorno o duplicar el proyecto.
@@ -243,7 +246,7 @@ Las migraciones son aditivas y **no tienen vuelta atrás**. Un rollback de códi
 
 ## 12. Procedimiento de despliegue
 
-Orden previsto, con el resultado que debe observarse en cada paso. Los pasos 1 a 5 los ejecuta quien administra la cuenta; los pasos 6 a 9, quien opera la base.
+Orden previsto, con el resultado que debe observarse en cada paso. Los pasos 1 a 5 los ejecuta quien administra la cuenta; los pasos 6 a 9, quien opera la base. Antes del paso 1 hay una condición de seguridad: fijar la protección **All Deployments** del equipo, porque el primer despliegue se clasifica como Production y, con la protección predeterminada *Standard*, su URL quedaría pública ([apartado 16.3](#163-secuencia-de-inicialización-protegida)).
 
 | # | Acción | Resultado esperado |
 | --- | --- | --- |
@@ -259,7 +262,7 @@ Orden previsto, con el resultado que debe observarse en cada paso. Los pasos 1 a
 
 Antes del paso 1, `npm run pooler:check` debe terminar con **27 comprobaciones**: fija el comportamiento esperado del agrupador y detecta regresiones en el código de transacciones. Cuando exista la base de ensayo, repetir ese humo contra su endpoint agrupado real y comparar el journal y la huella del catálogo con la conexión directa.
 
-El primer despliegue puede hacerse antes de las migraciones: la compilación no necesita base. Pero la aplicación responderá 500 en las rutas dinámicas hasta que el journal esté aplicado y las variables configuradas.
+El primer despliegue puede hacerse antes de las migraciones: la compilación no necesita base. Pero la aplicación responderá 500 en las rutas dinámicas hasta que el journal esté aplicado y las variables configuradas. Con Hobby ese primer despliegue es de **inicialización** y de Production: no debe compartirse su URL, no debe tratarse como lanzamiento y su protección debe verificarse antes de usarlo ([apartado 16.3](#163-secuencia-de-inicialización-protegida)).
 
 ## 13. Verificación posterior
 
@@ -304,12 +307,142 @@ Comprobaciones mínimas tras el primer despliegue, en orden. Si el proyecto tien
 | Presupuesto global de login agotable | Un atacante puede consumir los 600 intentos y bloquear el acceso durante la ventana. | Es el compromiso de H05; vigilar los registros y considerar ajustes si ocurre. |
 | Respaldos y restauración no definidos | Sin recuperación verificada ante borrado o migración fallida. | Decisión y prueba pendientes del propietario. |
 | Generación de sesiones manual | El horizonte de sesiones se agota si nadie ejecuta el comando. | Programar la ejecución periódica fuera de Vercel o documentar el calendario operativo. |
+| Primer despliegue clasificado como Production | Aunque se lance desde una rama de Preview o por CLI, Vercel lo trata como Production y lo compila con las variables de Production. | Asumido y documentado: se protege el equipo antes de importar y no se declaran secretos de Production ([apartado 16.2](#162-el-primer-despliegue-es-de-production)). |
+| Protección predeterminada *Standard* | Protege los despliegues de Preview pero deja pública la URL de producción, que es la del primer despliegue. | Cambiar a **All Deployments** con Vercel Authentication antes de importar; sin esa garantía, detenerse ([apartado 16.3](#163-secuencia-de-inicialización-protegida)). |
+| Neon Free se suspende a los cinco minutos | La primera petición tras la inactividad espera el arranque del compute; la compilación no se ve afectada. | Aceptado en Preview; no justifica un plan de pago. |
+| Integración automática Neon-Vercel | Puede inyectar variables en entornos que no son Preview o conectar una rama distinta de la prevista. | No se usa en 11.4: las variables se declaran a mano y se comprueba el entorno después de cada despliegue. |
+| Límites de Hobby | 100 despliegues al día, una compilación concurrente y 200 proyectos por cuenta. | Suficiente para un uso educativo; los `push` frecuentes consumen la cuota diaria. |
 | H03 abierto | Credenciales históricas y saneamiento pendiente. | No lo resuelve este incremento. |
 | Protección de despliegues sin decidir | Los paneles podrían quedar públicos o las comprobaciones bloqueadas. | Decisión del propietario en el [apartado 3](#3-requisitos-previos-y-decisiones-del-propietario). |
 | Portada heredada de la plantilla | `/` muestra el ejemplo de Full Stack Open, no el taller. | Es estática y no expone datos; decidir su contenido o retirarla antes de publicar. |
 | Validación con lector de pantalla pendiente | Accesibilidad sin cierre manual con NVDA. | Pendiente heredado de la fase 10. |
 
-Ningún elemento de esta lista se ha resuelto en este incremento: es un inventario para decidir antes de desplegar. Lo único que cambió es la evidencia del [apartado 8](#verificación-real-del-agrupador-incremento-113), que pasa de argumento por código a 27 comprobaciones ejecutadas en local.
+En 11.4 el propietario resolvió la plataforma —Hobby y Neon Free—, la rama de Preview y el modo de protección; el inventario sigue vigente para el resto. Lo que cambió es la evidencia del [apartado 8](#verificación-real-del-agrupador-incremento-113), que pasa de argumento por código a 27 comprobaciones ejecutadas en local, y la preparación del [apartado 16](#16-vercel-hobby-y-neon-free-incremento-114).
+
+## 16. Vercel Hobby y Neon Free (incremento 11.4)
+
+El propietario confirmó que el proyecto es **personal, educativo y no comercial** y eligió **Vercel Hobby con el repositorio público `Beto-Ales/fullstack-nextjs` y PostgreSQL Neon Free**, sin planes de pago. Este apartado convierte esa decisión en un procedimiento comprobado contra la documentación oficial el 24 de noviembre de 2026 y en una rama preparada en local. **Ningún recurso externo existe todavía**: no hay cuenta, ni proyecto, ni base, ni despliegue.
+
+### 16.1 Encaje en los planes gratuitos
+
+| Límite | Vercel Hobby | Neon Free |
+| --- | --- | --- |
+| Coste | 0 € | 0 $ |
+| Uso previsto | Personal y no comercial (fair use) | Prototipos y proyectos pequeños |
+| Proyectos | 200 por cuenta | 100 por cuenta; 10 ramas por proyecto |
+| Despliegues | 100 al día, **1 concurrente**, 45 min de compilación | No aplica |
+| Cómputo | — | **100 CU-horas** por proyecto, autoscalado hasta 2 CU (8 GB de RAM) |
+| Inactividad | Las funciones se congelan sin tráfico | Suspensión del compute a los **5 minutos** |
+| Datos | — | **1 GB por proyecto** y 20 GB por cuenta; 5 GB de transferencia pública |
+| Recuperación | Retención de despliegues | Restauración instantánea de 6 h y 1 GB; 1 instantánea manual; monitorización de 1 día |
+
+Nada de lo que hace la aplicación se acerca a esos límites: ocho rutas, un puñado de usuarios ficticios y consultas cortas. Si el panel ofrece una prueba de Pro, créditos o un complemento de pago, debe rechazarse: no hay ninguna necesidad técnica que lo justifique.
+
+### 16.2 El primer despliegue es de Production
+
+La documentación de entornos de Vercel lo dice literalmente: «The exception is the first deployment of a new project, which is always a production deployment and builds with your Production variables». Las consecuencias para este proyecto son tres:
+
+1. **`vercel deploy` sin `--prod` no evita la clasificación.** Tampoco desplegar desde `preview/vercel-11-4`: el primer despliegue de un proyecto nuevo es Production. Será un despliegue de **inicialización**, no un lanzamiento.
+2. **Compila con las variables de Production.** Por eso Production debe quedarse **sin secretos**: sin `DATABASE_URL` y sin `AUTH_RATE_LIMIT_HMAC_KEY`. Es seguro porque `next build` completo se verificó con la variable vacía; las rutas dinámicas responderán 500 hasta que existan las variables de Preview y la base migrada.
+3. **Su URL de producción queda pública con la protección predeterminada.** Los proyectos nuevos arrancan con *Standard Protection* y Vercel Authentication: eso protege los despliegues de Preview, pero **no** las URL de producción. La protección elegida —*All Deployments*— cubre también esas URL y, según la documentación, «Vercel Authentication for All Deployments … do not require a paid add-on», así que está disponible en Hobby. Password Protection no existe en Hobby y limitar la protección a Production exige Enterprise.
+
+### 16.3 Secuencia de inicialización protegida
+
+| # | Acción | Verificación |
+| --- | --- | --- |
+| 1 | En el equipo personal, *Settings → Deployment Protection*, elegir **All Deployments** con **Vercel Authentication** y guardarlo como valor predeterminado del equipo | El panel muestra la protección activa antes de que exista ningún proyecto |
+| 2 | Importar `Beto-Ales/fullstack-nextjs`, Root Directory en la raíz, framework `Next.js`, rama de producción `master` | El proyecto detecta el framework y no crea variables |
+| 3 | En *Settings → Build and Deployment*, fijar **Node.js 24.x**; en *Functions*, la región europea elegida | La compilación usará la misma línea que la verificación local |
+| 4 | No declarar variables de Production, no habilitar cron ni tareas programadas, no conectar la base todavía | *Environment Variables* vacío para Production |
+| 5 | Crear el primer despliegue (el panel lo hará al importar; por CLI sería `npx vercel@latest deploy`, nunca `--prod`) | El despliegue aparece como **Production** y es el de inicialización |
+| 6 | Comprobar la protección **antes** de usar la URL | `Invoke-WebRequest https://<url>/ -MaximumRedirection 0` devuelve 401 o redirección al inicio de sesión de Vercel; con sesión en Vercel, 200 |
+| 7 | Registrar la URL internamente y no compartirla | Ninguna mención pública, ningún enlace en el repositorio |
+| 8 | Publicar `preview/vercel-11-4` con autorización expresa y desplegar desde esa rama | El despliegue figura como **Preview**, usa las variables de Preview y vuelve a pedir autenticación |
+
+Si el paso 1 no puede completarse, **el despliegue no debe iniciarse**: una URL de producción pública con el login del taller accesible no es aceptable ni con datos ficticios. La comprobación del paso 6 es la puerta: sin 401 no hay Preview válido.
+
+### 16.4 Rama de Preview
+
+`git branch preview/vercel-11-4 HEAD` se ejecutó en 11.4 sobre `36aeafc`, sin cambiar el árbol de trabajo, y después avanzó al commit de documentación de este incremento: un avance de puntero, no una reescritura. Contiene los tres commits locales pendientes —11.2, 11.3 y 11.4— y ninguno de los cambios ajenos en curso (`app/admin/sesiones/[sessionId]/session-capacity.tsx`, `docs/database-drizzle.md`, `test-results/`), que siguen sin confirmar.
+
+Auditoría previa a cualquier publicación:
+
+- `git log --oneline origin/master..HEAD` muestra los dos commits anteriores y el de documentación de este incremento, en ese orden.
+- El diff acumulado toca seis archivos: un script nuevo, un guard, `package.json` y tres documentos. No hay `.env`, respaldos, volcados, checkpoints ni informes de incidentes.
+- La búsqueda de cadenas de conexión con credenciales, claves privadas, `VERCEL_TOKEN`, `NEON_API_KEY` y tokens de GitHub solo devuelve la plantilla de aprovisionador `postgresql://${run.user}:${password}@127.0.0.1:${port}/…`, que se construye en memoria y no contiene valores.
+- `.gitignore` excluye `.env*`, `.vercel`, `.next`, `coverage` y `build`; `test-results/` no está versionado.
+
+La publicación requiere autorización expresa y se limita a `git push -u origin preview/vercel-11-4`. **No se publica `master`**, no se usa `--force`, `--mirror` ni `--all`, y no se publica ninguna referencia de agente.
+
+### 16.5 Base Neon Free
+
+- **Proyecto independiente.** Se crea desde el panel de Neon con su propia cuenta, sin vincularlo a nada más. Nombre propuesto del proyecto: `art-workshop-preview`; nombre de la base: `art_workshop_preview`. El nombre no puede contener `test`, `testing`, `e2e` ni `ci` como token separado, porque `drizzle.config.ts` y `scripts/run-db-migrate.mjs` lo rechazan.
+- **Región.** La europea más próxima entre las que ofrezca el panel (Fráncfort es la habitual) y, en Vercel, la región de funciones correspondiente —`fra1`—. Hobby permite una sola región: si la base queda en Europa y las funciones en `iad1`, cada consulta cruza el Atlántico. Es latencia, no corrección, pero se nota en cada carga.
+- **Dos cadenas.** La **directa** se usa solo para migraciones, `npm run admin:create-super-admin` y `npm run academic:generate-sessions`. La **agrupada** (`-pooler`) es la única que se declara en `DATABASE_URL`. Ambas con TLS: `sslmode=require` como mínimo; `pg` lee el parámetro de la cadena y la aplicación no añade ninguno.
+- **Aislamiento.** La base solo se declara en Preview. Production se queda sin variables: ni `DATABASE_URL` ni la clave HMAC. No hay conexión alguna con los contenedores DEV o TEST locales, que se quedan como están.
+- **Integración automática con Vercel.** No se usa en 11.4. Si más adelante se conecta, hay que comprobar en el panel de Neon qué rama y qué variables recibe cada entorno: la integración puede inyectar en más de un entorno y una rama de GitHub no obtiene una base aislada por el mero hecho de ser Preview.
+- **Suspensión.** El compute se suspende a los cinco minutos de inactividad. La primera petición tras la pausa paga el arranque; una comprobación manual puede tardar unos segundos y no es un error.
+- **Agrupador.** Neon usa PgBouncer en modo transacción: `PREPARE`/`EXECUTE` a nivel SQL no están soportados, y las sentencias preparadas de protocolo sí desde PgBouncer 1.22. El proyecto envía sentencias sin nombre, así que no depende de ninguna de las dos cosas. El estado de sesión no está garantizado entre transacciones; la medición de 11.3 mostró que un `SET` persiste en el backend agrupado, de modo que solo `SET LOCAL` y los bloqueos `_xact_` son seguros.
+
+### 16.6 Variables de Preview y migración controlada
+
+Variables, solo en el entorno **Preview** y marcadas como *Sensitive*:
+
+| Variable | Valor | Cómo se obtiene |
+| --- | --- | --- |
+| `DATABASE_URL` | Cadena **agrupada** de Neon con `sslmode=require` | Panel de Neon; nunca se copia al chat ni al repositorio |
+| `AUTH_RATE_LIMIT_HMAC_KEY` | **64 caracteres hexadecimales en minúscula** (32 bytes) | `node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('hex'))"`, ejecutado una vez y guardado en el gestor de secretos del propietario |
+
+No se reutiliza ningún secreto local, no se declara ninguna `NEXT_PUBLIC_*` y no se copia `.env`. Los cambios de variables solo afectan a despliegues nuevos: hay que volver a desplegar después de guardarlas.
+
+Migración de la base de Preview, en este orden y con la cadena **directa**:
+
+1. **Identidad.** Comparar host, puerto y base con el panel y confirmar con `select current_database(), current_user, version();`.
+2. **Base vacía.** `select count(*) from pg_tables where schemaname not in ('pg_catalog','information_schema');` debe devolver `0`.
+3. **Autorización.** Que exista una autorización registrada del propietario para migrar esa base concreta, con fecha y responsable; si no la hay, detenerse.
+4. **Conexión directa con TLS.** Exportar la cadena directa en la sesión (`$env:DATABASE_URL = "<cadena-directa>"`), nunca en un archivo del repositorio.
+5. **Aplicar** `npm run db:migrate:dev`. El script imprime el destino antes de ejecutar y rechaza nombres de prueba.
+6. **Verificar** que `drizzle.__drizzle_migrations` tiene **17** filas y que la última es `0016_habitual_reservation_provenance`, y que la huella del catálogo coincide con `1714744711cd…`, la misma que producen el ensayo de staging y `pooler:check`.
+7. **No migrar desde el build ni desde una función**: el build no ejecuta migraciones ([apartado 10](#10-migraciones-y-datos-iniciales)) y ninguna ruta debe hacerlo.
+
+### 16.7 Bloqueo actual y autorizaciones que faltan
+
+Comprobado en la máquina del proyecto el 24 de noviembre de 2026:
+
+- `vercel` no está instalado, no existe `~/.vercel/auth.json` ni `%LOCALAPPDATA%\com.vercel.cli`, y no hay `VERCEL_TOKEN` en el entorno.
+- No hay `NEON_API_KEY` ni credenciales de ningún proveedor PostgreSQL, y no existe `.vercel/` en el repositorio.
+- El remoto sigue siendo `https://github.com/Beto-Ales/fullstack-nextjs.git` y `origin/master` no se ha tocado.
+
+Por eso 11.4 termina aquí: **no se crea ninguna cuenta, ni proyecto, ni base, ni variable, ni despliegue**. Lo que falta es una acción del propietario, en este orden:
+
+1. Crear la cuenta personal de **Vercel Hobby** vinculada a GitHub y autenticar la CLI (`npx vercel@latest login`) o trabajar desde el panel.
+2. En el equipo personal, fijar **All Deployments** con Vercel Authentication como protección predeterminada.
+3. Crear el proyecto de **Neon Free**, su base de Preview en región europea y sus dos cadenas, y **autorizar por escrito** la migración de esa base concreta (fecha, responsable y nombre de la base).
+4. **Autorizar expresamente** el único `push` permitido: `git push -u origin preview/vercel-11-4`.
+5. Autorizar la creación del primer despliegue de inicialización, que Vercel clasificará como Production, después de comprobar la protección.
+6. Facilitar la cadena agrupada y la clave HMAC por el canal que elija, nunca en el chat ni en el repositorio, para declararlas solo en Preview.
+
+Mientras falte cualquiera de los puntos 1 a 5, el estado es **bloqueado**, no completado.
+
+### 16.8 Humo del agrupador alojado y validación del Preview
+
+Cuando exista la base de Preview y esté migrada, el humo pendiente (read-only, todo dentro de transacciones que se revierten) debe comprobar, contra el endpoint `-pooler` real:
+
+| Comprobación | Consulta o acción | Resultado esperado |
+| --- | --- | --- |
+| TLS efectivo | `select ssl from pg_stat_ssl where pid = pg_backend_pid();` | `t` tanto por la cadena directa como por la agrupada |
+| Journal | `select count(*) from drizzle.__drizzle_migrations;` y la última fila | 17 y `0016_habitual_reservation_provenance` |
+| Catálogo | Huella por la conexión directa y por la agrupada | Idéntica entre ambas, y `1714744711cd…` |
+| Bloqueo de transacción | `pg_advisory_xact_lock(903000042)` en una conexión y `pg_try_advisory_xact_lock` en otra | `false` mientras la primera no confirma; `true` después |
+| Bloqueo de fila | `select … for update nowait` sobre la misma fila desde dos conexiones | `55P03` en la segunda |
+| `SET LOCAL` | `set local statement_timeout = '250ms'` y `pg_sleep(1)` | `57014`; en la transacción siguiente `statement_timeout` vuelve a su valor |
+| Sentencias sin nombre | 20–100 ejecuciones parametrizadas | Sin error de sentencia preparada |
+| Liberación | `select count(*) from pg_stat_activity where state = 'idle in transaction';` tras cerrar los clientes | 0 |
+| Estado de sesión | Revisión de que ninguna consulta depende de `SET` de sesión ni de bloqueos sin `_xact_` | Ya se cumple en el código |
+
+Si el endpoint de Neon se comporta distinto del ensayo local, **no se cambia la capa de persistencia**: se informa y se decide con evidencia. No se ejecutan pruebas de carga.
+
+Validación del Preview, una vez desplegado y protegido: que el despliegue corresponda al commit esperado; Node.js 24.x y región europea en los detalles del despliegue; `/login` visible; `/admin`, `/student` y `/normativa` sin sesión redirigen a `/login`; cookie `__Host-artwork_session` con sesión válida; SUPER_ADMIN y STUDENT ficticios funcionan; los registros no muestran cadenas, claves ni contraseñas; ninguna variable apunta a DEV, TEST ni a `127.0.0.1`; y la protección sigue activa en la URL usada. Las credenciales de demostración no se publican y no se habilitan tareas periódicas.
 
 ## Documentación relacionada
 
@@ -321,6 +454,6 @@ Ningún elemento de esta lista se ha resuelto en este incremento: es un inventar
 
 ## Fuentes consultadas
 
-- Vercel: almacenamiento y Marketplace, límites de funciones, versiones de Node.js, variables de entorno, protección de despliegues y rollback (documentación oficial consultada el 24 de noviembre de 2026).
+- Vercel: *Environments* (el primer despliegue de un proyecto nuevo siempre es de Production y compila con variables de Production; los proyectos nuevos arrancan con Standard Protection y Vercel Authentication), *Deployment Protection* (Vercel Authentication con All Deployments no requiere complemento; Password Protection no existe en Hobby; proteger solo Production exige Enterprise), *Limits* (100 despliegues al día, una compilación concurrente, 200 proyectos), almacenamiento y Marketplace, versiones de Node.js, variables de entorno y rollback. Consultada el 24 de noviembre de 2026.
+- Neon: *Plans* (Free: 100 CU-horas, 1 GB por proyecto y 20 GB por cuenta, 10 ramas, suspensión a los 5 minutos; actualizada el 18 de noviembre de 2026) y *Connection pooling* (PgBouncer en modo transacción, `PREPARE`/`EXECUTE` a nivel SQL no soportado y sentencias de protocolo desde 1.22, métricas del pool). Consultada el 24 de noviembre de 2026.
 - Supabase: *Connecting to your database* y limitaciones del agrupador en modo transacción.
-- Neon: *Connection pooling* y diferencias entre el endpoint agrupado y el directo.
