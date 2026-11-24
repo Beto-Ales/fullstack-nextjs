@@ -1,4 +1,11 @@
+import type { Metadata } from "next";
+
 import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "Art Workshop Copenhagen",
+  description: "Gestión de clases, reservas y alumnos del taller.",
+};
 
 export default function RootLayout({
   children,
